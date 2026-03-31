@@ -1,0 +1,11 @@
+# Ignore large data files (PDFs, Excel, ZIP, CSV)
+**/*.pdf
+**/*.PDF
+**/*.xlsx
+**/*.xls
+**/*.csv
+**/*.zip
+**/*.gz
+
+# Keep directory structure
+!**/.gitkeep
