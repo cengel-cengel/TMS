@@ -1,0 +1,16 @@
+# Raw data directories (PDFs, Excel, ZIP) — too large for git
+Fischerwerke/
+Herma/
+
+# Large data files anywhere in the repo
+**/*.pdf
+**/*.PDF
+**/*.xlsx
+**/*.xls
+**/*.xlsb
+**/*.xlsm
+**/*.zip
+**/*.gz
+
+# Keep directory structure
+!**/.gitkeep
