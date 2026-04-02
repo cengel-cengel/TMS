@@ -20,6 +20,15 @@ top20_meta = d['top20_meta']
 with open(OUT / 'top20_abw_samples.pkl', 'rb') as f:
     samples_df = pickle.load(f)
 
+try:
+    with open(OUT / 'top20_abw_route_outliers.pkl', 'rb') as f:
+        route_outliers = pickle.load(f)
+    has_route_outliers = (len(route_outliers) > 0 and
+                          '_kunden_nr' in route_outliers.columns)
+except FileNotFoundError:
+    route_outliers = pd.DataFrame()
+    has_route_outliers = False
+
 wb = load_workbook(str(XLSX))
 
 # ── Styles ────────────────────────────────────────────────────────────────────
@@ -28,10 +37,12 @@ BLUE_FILL   = PatternFill('solid', fgColor='1F4E79')
 LBLUE_FILL  = PatternFill('solid', fgColor='2E75B6')
 PRE_FILL    = PatternFill('solid', fgColor='D6E4F0')
 POST_FILL   = PatternFill('solid', fgColor='E2EFDA')
-GREY_FILL   = PatternFill('solid', fgColor='BFBFBF')
-RED_FILL    = PatternFill('solid', fgColor='FF0000')
-ORANGE_FILL = PatternFill('solid', fgColor='FFC000')
-YELLOW_FILL = PatternFill('solid', fgColor='FFFF00')
+GREY_FILL      = PatternFill('solid', fgColor='BFBFBF')
+RED_FILL       = PatternFill('solid', fgColor='FF0000')
+ORANGE_FILL    = PatternFill('solid', fgColor='FFC000')
+YELLOW_FILL    = PatternFill('solid', fgColor='FFFF00')
+DARK_RED_FILL  = PatternFill('solid', fgColor='7B2C2C')
+LIGHT_RED_FILL = PatternFill('solid', fgColor='FFD9D9')
 
 def hfont(bold=False, size=11, color='000000'):
     return Font(name='Calibri', bold=bold, size=size, color=color)
@@ -248,6 +259,128 @@ for _, meta_row in top20_meta.iterrows():
                         else:
                             c.number_format = '#,##0.00'
         row += 2  # gap before next section
+
+    # ── Section D: Ausreißer-Analyse nach Relation ─────────────────────────
+    # For every route (Versender PLZ → Empfänger PLZ) that has POST shipments
+    # deviating more than 7 % from the PRE baseline, show:
+    #   • one Dinas (PRE) reference shipment for that route
+    #   • up to 5 AX (POST) outliers sorted by |Δ%| descending
+    if has_route_outliers:
+        cust_outs = route_outliers[route_outliers['_kunden_nr'] == knr]
+        if len(cust_outs) > 0:
+            routes_with_outliers = (cust_outs[cust_outs['_row_type'] == 'POST_OUTLIER']
+                                    ['_route'].dropna().unique())
+
+            if len(routes_with_outliers) > 0:
+                # Extended column list: all display cols + deviation column
+                OUTLIER_SHOW_COLS = SHOW_COLS + ['_deviation_pct']
+                OUTLIER_HDRS = {**{c: c for c in SHOW_COLS},
+                                '_deviation_pct': 'Δ% PRE-Basis'}
+                d_ncols = len(OUTLIER_SHOW_COLS)
+                d_end   = get_column_letter(d_ncols)
+
+                # Set column width for the new deviation column
+                set_width(ws, d_ncols, 12)
+
+                row += 1
+                ws.merge_cells(f'A{row}:{d_end}{row}')
+                c = ws.cell(row, 1,
+                    'D — Ausreißer-Analyse nach Relation: '
+                    'Dinas (PRE) Referenz  →  AX (POST) Ausreißer  |  Schwellenwert: |Δ| > 7 %')
+                c.font  = hfont(bold=True, size=11, color='FFFFFF')
+                c.fill  = DARK_RED_FILL
+                c.alignment = Alignment(horizontal='left', vertical='center')
+                ws.row_dimensions[row].height = 20
+
+                for route in routes_with_outliers:
+                    r_data   = cust_outs[cust_outs['_route'] == route]
+                    pre_rows = r_data[r_data['_row_type'] == 'PRE_REF']
+                    pst_rows = r_data[r_data['_row_type'] == 'POST_OUTLIER']
+                    if len(pst_rows) == 0:
+                        continue
+
+                    pre_avg_v = float(r_data['_pre_avg'].iloc[0])
+
+                    # Route sub-header
+                    row += 1
+                    ws.merge_cells(f'A{row}:{d_end}{row}')
+                    c = ws.cell(row, 1,
+                        f'Relation: {route}   |   '
+                        f'Ø PRE-Basis (Dinas): {pre_avg_v:,.2f} €   |   '
+                        f'{len(pst_rows)} Ausreißer  >7%')
+                    c.font  = hfont(bold=True)
+                    c.fill  = LIGHT_RED_FILL
+                    c.alignment = Alignment(horizontal='left', vertical='center')
+                    ws.row_dimensions[row].height = 18
+
+                    # Column headers
+                    row += 1
+                    for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
+                        c = ws.cell(row, ci, OUTLIER_HDRS.get(col_name, col_name))
+                        c.font  = hfont(bold=True)
+                        c.fill  = PRE_FILL
+                        c.border = thin()
+                        c.alignment = Alignment(horizontal='center', wrap_text=True)
+                    ws.row_dimensions[row].height = 28
+
+                    # PRE reference row (Dinas baseline)
+                    for _, srow in pre_rows.iterrows():
+                        row += 1
+                        for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
+                            if col_name == '_deviation_pct':
+                                val = 'PRE Basis'
+                            else:
+                                val = srow.get(col_name, '')
+                                if not isinstance(val, str) and pd.isna(val):
+                                    val = ''
+                                if hasattr(val, 'date'):
+                                    val = str(val.date())
+                            c = ws.cell(row, ci, val)
+                            c.fill  = PRE_FILL
+                            c.border = thin()
+                            c.alignment = Alignment(horizontal='center')
+                            if col_name in NUM_COLS and isinstance(val, (int, float)):
+                                c.number_format = ('0.00"%"' if col_name == 'DB II%'
+                                                   else '#,##0.00')
+
+                    # POST outlier rows (AX, sorted by |Δ%| desc)
+                    for _, srow in pst_rows.iterrows():
+                        row += 1
+                        dev = srow.get('_deviation_pct', np.nan)
+                        try:
+                            dev_f = float(dev)
+                            is_num = True
+                        except (TypeError, ValueError):
+                            dev_f  = np.nan
+                            is_num = False
+
+                        if is_num and not np.isnan(dev_f):
+                            if   abs(dev_f) >= 40: row_fill = RED_FILL
+                            elif abs(dev_f) >= 20: row_fill = ORANGE_FILL
+                            else:                  row_fill = YELLOW_FILL
+                        else:
+                            row_fill = POST_FILL
+
+                        for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
+                            if col_name == '_deviation_pct':
+                                val = round(dev_f, 2) if (is_num and not np.isnan(dev_f)) else ''
+                            else:
+                                val = srow.get(col_name, '')
+                                if not isinstance(val, str) and pd.isna(val):
+                                    val = ''
+                                if hasattr(val, 'date'):
+                                    val = str(val.date())
+                            c = ws.cell(row, ci, val)
+                            c.fill  = row_fill
+                            c.border = thin()
+                            c.alignment = Alignment(horizontal='center')
+                            if col_name == '_deviation_pct' and isinstance(val, (int, float)):
+                                c.number_format = '0.00"%"'
+                            elif col_name in NUM_COLS and isinstance(val, (int, float)):
+                                c.number_format = ('0.00"%"' if col_name == 'DB II%'
+                                                   else '#,##0.00')
+
+                    row += 1  # gap between routes
 
 print(f"Added {len(top20_meta)} customer sheets")
 wb.save(str(XLSX))
