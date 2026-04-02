@@ -16,6 +16,8 @@ with open(OUT / 'top20_abw_stats.pkl', 'rb') as f:
     d = pickle.load(f)
 stats      = d['stats']
 top20_meta = d['top20_meta']
+# basis_map: knr → (basis_col, corr) — added by s1 when billing-basis logic is active
+basis_map  = d.get('basis_map', {})
 
 with open(OUT / 'top20_abw_samples.pkl', 'rb') as f:
     samples_df = pickle.load(f)
@@ -260,11 +262,11 @@ for _, meta_row in top20_meta.iterrows():
                             c.number_format = '#,##0.00'
         row += 2  # gap before next section
 
-    # ── Section D: Ausreißer-Analyse nach Relation ─────────────────────────
-    # For every route (Versender PLZ → Empfänger PLZ) that has POST shipments
-    # deviating more than 7 % from the PRE baseline, show:
-    #   • one Dinas (PRE) reference shipment for that route
-    #   • up to 5 AX (POST) outliers sorted by |Δ%| descending
+    # ── Section D: Ausreißer-Analyse nach Relation (Abrechnungsbasis-aware) ───
+    # Shows Dinas (PRE) reference + AX (POST) outliers per route.
+    # Deviation is computed as €/billing-unit (PPU), so size differences
+    # (e.g. more pallets) are correctly neutralised.
+    # PRE reference is matched by similar billing-dimension value, not raw Erlöse.
     if has_route_outliers:
         cust_outs = route_outliers[route_outliers['_kunden_nr'] == knr]
         if len(cust_outs) > 0:
@@ -272,25 +274,37 @@ for _, meta_row in top20_meta.iterrows():
                                     ['_route'].dropna().unique())
 
             if len(routes_with_outliers) > 0:
-                # Extended column list: all display cols + deviation column
-                OUTLIER_SHOW_COLS = SHOW_COLS + ['_deviation_pct']
+                # Billing basis for this customer
+                basis_entry   = basis_map.get(knr, ('Lademeter', None))
+                abr_basis_col = basis_entry[0] if isinstance(basis_entry, tuple) else basis_entry
+                UNIT_LABELS   = {'Lademeter': 'LDM', 'Stellplätze': 'Stpl',
+                                 'Tonnage (eff.)': 't', 'Volumen': 'm³', 'Colli': 'Col'}
+                unit_lbl = UNIT_LABELS.get(abr_basis_col, abr_basis_col)
+
+                # Extended display: existing cols + PPU + deviation-on-PPU
+                OUTLIER_SHOW_COLS = SHOW_COLS + ['_ppu', '_deviation_pct']
                 OUTLIER_HDRS = {**{c: c for c in SHOW_COLS},
-                                '_deviation_pct': 'Δ% PRE-Basis'}
+                                '_ppu':          f'€/{unit_lbl}',
+                                '_deviation_pct': f'Δ% €/{unit_lbl}'}
                 d_ncols = len(OUTLIER_SHOW_COLS)
                 d_end   = get_column_letter(d_ncols)
 
-                # Set column width for the new deviation column
-                set_width(ws, d_ncols, 12)
+                set_width(ws, d_ncols - 1, 10)   # _ppu column
+                set_width(ws, d_ncols,     12)    # _deviation_pct column
 
                 row += 1
                 ws.merge_cells(f'A{row}:{d_end}{row}')
                 c = ws.cell(row, 1,
-                    'D — Ausreißer-Analyse nach Relation: '
-                    'Dinas (PRE) Referenz  →  AX (POST) Ausreißer  |  Schwellenwert: |Δ| > 7 %')
+                    f'D — Ausreißer-Analyse nach Relation: '
+                    f'Dinas (PRE) Referenz  →  AX (POST) Ausreißer  |  '
+                    f'Abrechnungsbasis: {abr_basis_col}  |  '
+                    f'Schwellenwert: |Δ €/{unit_lbl}| > 7 %')
                 c.font  = hfont(bold=True, size=11, color='FFFFFF')
                 c.fill  = DARK_RED_FILL
                 c.alignment = Alignment(horizontal='left', vertical='center')
                 ws.row_dimensions[row].height = 20
+
+                BASIS_HIGHLIGHT = PatternFill('solid', fgColor='FFE4B5')  # moccasin
 
                 for route in routes_with_outliers:
                     r_data   = cust_outs[cust_outs['_route'] == route]
@@ -299,36 +313,55 @@ for _, meta_row in top20_meta.iterrows():
                     if len(pst_rows) == 0:
                         continue
 
-                    pre_avg_v = float(r_data['_pre_avg'].iloc[0])
+                    ppu_pre_v    = float(r_data['_ppu_pre_route'].iloc[0])
+                    # Use the actual basis applied on this route (may differ from customer
+                    # default when the fallback dimension was used)
+                    route_basis  = str(r_data['_abr_basis'].iloc[0])
+                    route_unit   = UNIT_LABELS.get(route_basis, route_basis)
+                    # Column headers adapt per route to reflect the actual basis used
+                    route_hdrs   = {**{c: c for c in SHOW_COLS},
+                                    '_ppu':          f'€/{route_unit}',
+                                    '_deviation_pct': f'Δ% €/{route_unit}'}
 
-                    # Route sub-header
+                    # Route sub-header — shows PPU baseline and the actual basis used
                     row += 1
                     ws.merge_cells(f'A{row}:{d_end}{row}')
+                    fallback_note = (f'  [Fallback: {route_basis}]'
+                                     if route_basis != abr_basis_col else '')
                     c = ws.cell(row, 1,
                         f'Relation: {route}   |   '
-                        f'Ø PRE-Basis (Dinas): {pre_avg_v:,.2f} €   |   '
-                        f'{len(pst_rows)} Ausreißer  >7%')
+                        f'Ø PRE-Basis (Dinas): {ppu_pre_v:,.2f} €/{route_unit}{fallback_note}   |   '
+                        f'{len(pst_rows)} Ausreißer  >7%  €/{route_unit}')
                     c.font  = hfont(bold=True)
                     c.fill  = LIGHT_RED_FILL
                     c.alignment = Alignment(horizontal='left', vertical='center')
                     ws.row_dimensions[row].height = 18
 
-                    # Column headers
+                    # Column headers — highlight the actual billing-basis column
                     row += 1
                     for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
-                        c = ws.cell(row, ci, OUTLIER_HDRS.get(col_name, col_name))
-                        c.font  = hfont(bold=True)
-                        c.fill  = PRE_FILL
+                        lbl = route_hdrs.get(col_name, col_name)
+                        c = ws.cell(row, ci, lbl)
+                        c.font   = hfont(bold=True)
+                        c.fill   = BASIS_HIGHLIGHT if col_name == route_basis else PRE_FILL
                         c.border = thin()
                         c.alignment = Alignment(horizontal='center', wrap_text=True)
                     ws.row_dimensions[row].height = 28
 
-                    # PRE reference row (Dinas baseline)
-                    for _, srow in pre_rows.iterrows():
-                        row += 1
-                        for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
-                            if col_name == '_deviation_pct':
-                                val = 'PRE Basis'
+                    def _cells(srow, xrow_fill, xshow_cols, ppu_override=None):
+                        """Write one shipment row; returns nothing (uses enclosing `row` via caller)."""
+                        for ci, col_name in enumerate(xshow_cols, 1):
+                            if col_name == '_ppu':
+                                if ppu_override is not None:
+                                    val = round(float(ppu_override), 2)
+                                else:
+                                    raw = srow.get('_ppu', np.nan)
+                                    try:    val = round(float(raw), 2)
+                                    except: val = ''
+                            elif col_name == '_deviation_pct':
+                                raw = srow.get('_deviation_pct', np.nan)
+                                try:    val = round(float(raw), 2)
+                                except: val = ''
                             else:
                                 val = srow.get(col_name, '')
                                 if not isinstance(val, str) and pd.isna(val):
@@ -336,49 +369,39 @@ for _, meta_row in top20_meta.iterrows():
                                 if hasattr(val, 'date'):
                                     val = str(val.date())
                             c = ws.cell(row, ci, val)
-                            c.fill  = PRE_FILL
+                            c.fill  = xrow_fill
                             c.border = thin()
                             c.alignment = Alignment(horizontal='center')
-                            if col_name in NUM_COLS and isinstance(val, (int, float)):
+                            if col_name == '_ppu' and isinstance(val, (int, float)):
+                                c.number_format = '#,##0.00'
+                            elif col_name == '_deviation_pct' and isinstance(val, (int, float)):
+                                c.number_format = '0.00"%"'
+                            elif col_name in NUM_COLS and isinstance(val, (int, float)):
                                 c.number_format = ('0.00"%"' if col_name == 'DB II%'
                                                    else '#,##0.00')
 
-                    # POST outlier rows (AX, sorted by |Δ%| desc)
-                    for _, srow in pst_rows.iterrows():
+                    # PRE reference row — size-matched to typical POST outlier
+                    for _, srow in pre_rows.iterrows():
                         row += 1
+                        _cells(srow, PRE_FILL, OUTLIER_SHOW_COLS, ppu_override=ppu_pre_v)
+
+                    # POST outlier rows (AX), colour-coded by |Δ% €/unit|
+                    for _, srow in pst_rows.iterrows():
                         dev = srow.get('_deviation_pct', np.nan)
                         try:
-                            dev_f = float(dev)
-                            is_num = True
+                            dev_f  = float(dev)
+                            is_num = not np.isnan(dev_f)
                         except (TypeError, ValueError):
-                            dev_f  = np.nan
-                            is_num = False
+                            dev_f, is_num = np.nan, False
 
-                        if is_num and not np.isnan(dev_f):
+                        if is_num:
                             if   abs(dev_f) >= 40: row_fill = RED_FILL
                             elif abs(dev_f) >= 20: row_fill = ORANGE_FILL
                             else:                  row_fill = YELLOW_FILL
                         else:
                             row_fill = POST_FILL
-
-                        for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
-                            if col_name == '_deviation_pct':
-                                val = round(dev_f, 2) if (is_num and not np.isnan(dev_f)) else ''
-                            else:
-                                val = srow.get(col_name, '')
-                                if not isinstance(val, str) and pd.isna(val):
-                                    val = ''
-                                if hasattr(val, 'date'):
-                                    val = str(val.date())
-                            c = ws.cell(row, ci, val)
-                            c.fill  = row_fill
-                            c.border = thin()
-                            c.alignment = Alignment(horizontal='center')
-                            if col_name == '_deviation_pct' and isinstance(val, (int, float)):
-                                c.number_format = '0.00"%"'
-                            elif col_name in NUM_COLS and isinstance(val, (int, float)):
-                                c.number_format = ('0.00"%"' if col_name == 'DB II%'
-                                                   else '#,##0.00')
+                        row += 1
+                        _cells(srow, row_fill, OUTLIER_SHOW_COLS)
 
                     row += 1  # gap between routes
 
