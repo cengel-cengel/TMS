@@ -14,3 +14,7 @@ Herma/
 
 # Keep directory structure
 !**/.gitkeep
+
+# Allow audit report outputs
+!output/audit_bericht_*.xlsx
+!output/herma_gb_konditions_analyse.xlsx
