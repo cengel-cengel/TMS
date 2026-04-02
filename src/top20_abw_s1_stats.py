@@ -126,19 +126,18 @@ for knr in top20_nrs:
 samples_df = pd.concat(samples, ignore_index=True)
 print(f"Samples: {len(samples_df)} rows")
 
-# ── Abrechnungsbasis per customer (inferred via correlation with Erlöse) ───────
-# Priority order: correlations determine the best billing dimension per customer.
-# Fallback chain if too few valid rows: Lademeter → Tonnage (eff.) → Volumen → Colli
+# ── Abrechnungsbasis per customer (min. Korrelation 0.90 erforderlich) ────────
+# Für jeden Kunden: bilateralste Dimension wählen.  Erreicht keine Dimension
+# r ≥ 0.90, wird keine PPU-Analyse durchgeführt (basis_col = None).
+# Kein Fallback auf schwächere Dimensionen – Qualität > Abdeckung.
+MIN_CORR = 0.90
 BILLING_COLS = [c for c in ['Stellplätze', 'Lademeter', 'Tonnage (eff.)', 'Volumen', 'Colli']
                 if c in df20.columns]
-BILLING_FALLBACK = [c for c in ['Lademeter', 'Tonnage (eff.)', 'Volumen', 'Colli']
-                    if c in df20.columns]
 
 def infer_abrechnungsbasis(cust_df):
     """
-    Return (best_col, corr) by finding the billing dimension most correlated
-    with Erlöse.  Requires >= 10 rows with billing_col > 0.
-    Falls back through BILLING_FALLBACK if no dimension qualifies.
+    Return (best_col, corr).  best_col is None if no dimension reaches MIN_CORR.
+    Correlation computed only on rows where billing column > 0 (>= 10 rows required).
     """
     best_col, best_corr = None, -1.0
     for col in BILLING_COLS:
@@ -149,28 +148,28 @@ def infer_abrechnungsbasis(cust_df):
         corr = sub[col].corr(sub['Erloese'])
         if corr > best_corr:
             best_corr, best_col = corr, col
-    if best_col is None:
-        best_col = BILLING_FALLBACK[0] if BILLING_FALLBACK else 'Lademeter'
-        best_corr = np.nan
+    if best_corr < MIN_CORR:
+        return None, best_corr   # unterhalb Schwelle → keine PPU-Analyse
     return best_col, best_corr
 
-basis_map = {}   # knr → (basis_col, corr)
+basis_map = {}   # knr → (basis_col_or_None, corr)
 for knr in top20_nrs:
     cust = df20[df20['Kunden Nr BK'] == knr]
     col, corr = infer_abrechnungsbasis(cust)
-    basis_map[knr] = (col, round(float(corr), 3) if not np.isnan(corr) else None)
+    basis_map[knr] = (col, round(float(corr), 3) if (corr is not None and not np.isnan(corr)) else corr)
 
-print("\nAbrechnungsbasis per customer:")
+print(f"\nAbrechnungsbasis per customer (Schwelle: r ≥ {MIN_CORR}):")
 for knr, (col, corr) in basis_map.items():
     name = top20_meta.loc[top20_meta['kunden_nr'] == knr, 'kunden_name'].values
     name = name[0][:35] if len(name) else str(knr)
-    print(f"  {name:35s} → {col:18s}  (corr={corr})")
+    status = f"→ {col:18s}  (corr={corr})" if col else f"→ [übersprungen]         (best corr={corr})"
+    print(f"  {name:35s} {status}")
 
-# ── Route-level outlier analysis (|Δ €/unit| > 7 %, top-5 per Relation) ──────
-# Key improvement over naive Erlöse comparison:
-#   Deviation is computed as price-per-unit (PPU = Erlöse / billing_dim), so a
-#   POST shipment with more pallets/LDM than the PRE baseline is correctly handled.
-#   PRE reference is matched by similar billing-dimension size, not just raw Erlöse.
+# ── Route-Risiko-Analyse: Top-5 Relationen je Kunde mit höchstem Ertragsrisiko ─
+# Nur Unterfakturierung (POST-Rate < PRE-Rate) wird ausgewertet.
+# VA-Trennung wird bewusst NICHT vorgenommen: SA/Export/Charter war in Dinas
+# nicht zuverlässig unterschieden, weshalb alle Sendungen einer Relation zusammen
+# verglichen werden.
 if all(c in df20.columns for c in ['Versender PLZ', 'Empfänger PLZ']):
     df20 = df20.copy()
     df20['route_key'] = np.where(
@@ -184,86 +183,99 @@ if all(c in df20.columns for c in ['Versender PLZ', 'Empfänger PLZ']):
 
     for knr in top20_nrs:
         basis_col, _ = basis_map[knr]
-        cust = df20[df20['Kunden Nr BK'] == knr]
-        pre  = cust[cust['periode'] == 'PRE'].dropna(subset=['route_key'])
-        post = cust[cust['periode'] == 'POST'].dropna(subset=['route_key'])
+        if basis_col is None:
+            continue   # Korrelation zu schwach – keine PPU-Analyse möglich
+
+        cust  = df20[df20['Kunden Nr BK'] == knr]
+        pre   = cust[cust['periode'] == 'PRE'].dropna(subset=['route_key'])
+        post  = cust[cust['periode'] == 'POST'].dropna(subset=['route_key'])
 
         if len(pre) == 0 or len(post) == 0:
             continue
 
         shared_routes = set(pre['route_key'].unique()) & set(post['route_key'].unique())
-
-        # Fallback order for per-route dimension: customer basis first, then others
-        route_fallback = [basis_col] + [c for c in BILLING_FALLBACK if c != basis_col]
+        route_candidates = {}   # route → (pre_ref_df, outs_df, total_loss, ppu_pre_median)
 
         for route in shared_routes:
-            pre_all  = pre[pre['route_key'] == route].copy()
-            post_all = post[post['route_key'] == route].copy()
+            pre_r  = pre[pre['route_key']   == route].copy()
+            post_r = post[post['route_key'] == route].copy()
 
-            # Try billing dimensions in priority order until we have ≥ 3 PRE rows
-            pre_r = post_r = used_col = None
-            for try_col in route_fallback:
-                if try_col not in pre_all.columns:
-                    continue
-                _pre  = pre_all[pre_all[try_col].notna()  & (pre_all[try_col]  > 0)].copy()
-                _post = post_all[post_all[try_col].notna() & (post_all[try_col] > 0)].copy()
-                if len(_pre) >= 3 and len(_post) >= 1:
-                    pre_r, post_r, used_col = _pre, _post, try_col
-                    break
-            if pre_r is None:
+            # Nur Zeilen mit gültigem Abrechnungswert (> 0)
+            pre_r  = pre_r[pre_r[basis_col].notna()   & (pre_r[basis_col]   > 0)]
+            post_r = post_r[post_r[basis_col].notna() & (post_r[basis_col] > 0)]
+            if len(pre_r) < 3 or len(post_r) == 0:
                 continue
 
-            pre_r['_ppu']  = pre_r['Erloese']  / pre_r[used_col]
-            ppu_pre_median = pre_r['_ppu'].median()
+            pre_r  = pre_r.copy()
+            post_r = post_r.copy()
+            pre_r['_ppu']   = pre_r['Erloese']  / pre_r[basis_col]
+            ppu_pre_median  = pre_r['_ppu'].median()
             if pd.isna(ppu_pre_median) or ppu_pre_median == 0:
                 continue
 
-            post_r['_ppu'] = post_r['Erloese'] / post_r[used_col]
+            post_r['_ppu']         = post_r['Erloese'] / post_r[basis_col]
             post_r['_deviation_pct'] = (post_r['_ppu'] - ppu_pre_median) / abs(ppu_pre_median) * 100
 
-            # Filter: |Δ €/unit| > 7 %
-            outs = post_r[post_r['_deviation_pct'].abs() > 7.0].copy()
+            # Nur Unterfakturierung: POST < PRE um mehr als 7 %
+            outs = post_r[post_r['_deviation_pct'] < -7.0].copy()
             if len(outs) == 0:
                 continue
 
-            # Top 5 by |Δ%| descending
-            outs = (outs
-                    .assign(_abs=outs['_deviation_pct'].abs())
-                    .sort_values('_abs', ascending=False)
-                    .drop(columns=['_abs'])
-                    .head(5))
-            outs['_row_type']      = 'POST_OUTLIER'
-            outs['_ppu_pre_route'] = ppu_pre_median
-            outs['_abr_basis']     = used_col
-            outs['_abr_wert']      = outs[used_col]
-            outs['_kunden_nr']     = knr
-            outs['_route']         = route
-            keep  = [c for c in SAMPLE_COLS if c in outs.columns]
-            extra = ['_ppu','_deviation_pct','_row_type','_ppu_pre_route',
-                     '_abr_basis','_abr_wert','_kunden_nr','_route']
-            outs = outs[keep + extra]
+            # Erwarteter Verlust je Sendung: (PRE-Rate − POST-Rate) × Einheiten
+            outs['_expected_loss'] = (ppu_pre_median - outs['_ppu']) * outs[basis_col]
+            total_route_loss = outs['_expected_loss'].sum()
 
-            # ── PRE reference: size-matched to typical POST outlier ───────────
-            target_abr = outs[used_col].median()
+            # PRE-Referenz: größenbasiert (ähnliche Einheitenmenge wie typischer POST-Ausreißer)
+            target_abr = outs[basis_col].median()
             pre_s = pre_r[[c for c in SAMPLE_COLS if c in pre_r.columns]].copy()
-            pre_s['_dist'] = (pre_s[used_col] - target_abr).abs()
+            pre_s['_dist'] = (pre_s[basis_col] - target_abr).abs()
             pre_ref = pre_s.sort_values('_dist').head(1).drop(columns=['_dist']).copy()
-            pre_ref['_ppu']          = pre_ref['Erloese'] / pre_ref[used_col]
-            pre_ref['_row_type']     = 'PRE_REF'
-            pre_ref['_ppu_pre_route']= ppu_pre_median
-            pre_ref['_abr_basis']    = used_col
-            pre_ref['_abr_wert']     = pre_ref[used_col]
-            pre_ref['_deviation_pct']= np.nan
-            pre_ref['_kunden_nr']    = knr
-            pre_ref['_route']        = route
+            pre_ref['_ppu']            = pre_ref['Erloese'] / pre_ref[basis_col]
+            pre_ref['_expected_loss']  = 0.0
+            pre_ref['_row_type']       = 'PRE_REF'
+            pre_ref['_ppu_pre_route']  = ppu_pre_median
+            pre_ref['_abr_basis']      = basis_col
+            pre_ref['_abr_wert']       = pre_ref[basis_col]
+            pre_ref['_deviation_pct']  = np.nan
+            pre_ref['_kunden_nr']      = knr
+            pre_ref['_route']          = route
+            pre_ref['_total_route_loss'] = total_route_loss
 
-            outlier_parts.append(pd.concat([pre_ref, outs], ignore_index=True))
+            outs['_row_type']          = 'POST_OUTLIER'
+            outs['_ppu_pre_route']     = ppu_pre_median
+            outs['_abr_basis']         = basis_col
+            outs['_abr_wert']          = outs[basis_col]
+            outs['_kunden_nr']         = knr
+            outs['_route']             = route
+            outs['_total_route_loss']  = total_route_loss
+            keep  = [c for c in SAMPLE_COLS if c in outs.columns]
+            extra = ['_ppu','_deviation_pct','_expected_loss','_row_type',
+                     '_ppu_pre_route','_abr_basis','_abr_wert',
+                     '_kunden_nr','_route','_total_route_loss']
+            outs  = outs[keep + extra]
+
+            route_candidates[route] = (pre_ref, outs, total_route_loss, ppu_pre_median)
+
+        if not route_candidates:
+            continue
+
+        # Top-5 Relationen nach erwartetem Gesamtverlust (absteigend)
+        top5_routes = sorted(route_candidates,
+                             key=lambda r: route_candidates[r][2],
+                             reverse=True)[:5]
+
+        for route in top5_routes:
+            pre_ref, outs, total_loss, _ = route_candidates[route]
+            outs_top5 = outs.sort_values('_expected_loss', ascending=False).head(5)
+            outlier_parts.append(pd.concat([pre_ref, outs_top5], ignore_index=True))
 
     route_outliers = (pd.concat(outlier_parts, ignore_index=True)
                       if outlier_parts else pd.DataFrame())
-    print(f"\nRoute outliers: {len(route_outliers)} rows across {len(outlier_parts)} relations")
+    n_cust = route_outliers['_kunden_nr'].nunique() if len(route_outliers) else 0
+    print(f"\nRoute-Risiko-Analyse: {len(route_outliers)} Zeilen, "
+          f"{len(outlier_parts)} Relationen, {n_cust} Kunden")
 else:
-    print("[WARN] 'Versender PLZ' / 'Empfänger PLZ' nicht in df20 — Route-Ausreißer übersprungen")
+    print("[WARN] 'Versender PLZ' / 'Empfänger PLZ' nicht in df20 — Route-Analyse übersprungen")
     route_outliers = pd.DataFrame()
 
 with open(OUT / 'top20_abw_route_outliers.pkl', 'wb') as f:
@@ -278,4 +290,4 @@ with open(OUT / 'top20_abw_stats.pkl', 'wb') as f:
 with open(OUT / 'top20_abw_samples.pkl', 'wb') as f:
     pickle.dump(samples_df, f)
 
-print("Done. Saved top20_abw_stats.pkl, top20_abw_samples.pkl and top20_abw_route_outliers.pkl")
+print("Done. Saved top20_abw_stats.pkl, top20_abw_samples.pkl und top20_abw_route_outliers.pkl")

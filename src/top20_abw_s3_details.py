@@ -262,94 +262,92 @@ for _, meta_row in top20_meta.iterrows():
                             c.number_format = '#,##0.00'
         row += 2  # gap before next section
 
-    # ── Section D: Ausreißer-Analyse nach Relation (Abrechnungsbasis-aware) ───
-    # Shows Dinas (PRE) reference + AX (POST) outliers per route.
-    # Deviation is computed as €/billing-unit (PPU), so size differences
-    # (e.g. more pallets) are correctly neutralised.
-    # PRE reference is matched by similar billing-dimension value, not raw Erlöse.
+    # ── Section D: Top-5 Relationen mit höchstem Ertragsrisiko (Unterfakturierung) ──
+    # Zeigt nur Kunden mit Abrechnungsbasis-Korrelation ≥ 0.90.
+    # Rangfolge nach erwartetem Gesamtverlust je Relation.
+    # SA/Export/Charter nicht getrennt – VA-Zuordnung in Dinas war nicht zuverlässig.
     if has_route_outliers:
         cust_outs = route_outliers[route_outliers['_kunden_nr'] == knr]
         if len(cust_outs) > 0:
-            routes_with_outliers = (cust_outs[cust_outs['_row_type'] == 'POST_OUTLIER']
-                                    ['_route'].dropna().unique())
+            UNIT_LABELS = {'Lademeter': 'LDM', 'Stellplätze': 'Stpl',
+                           'Tonnage (eff.)': 't', 'Volumen': 'm³', 'Colli': 'Col'}
+            # Basis aus dem ersten Datensatz lesen (einheitlich je Kunde nach Schwelle)
+            basis_entry   = basis_map.get(knr, (None, None))
+            abr_basis_col = basis_entry[0] if isinstance(basis_entry, tuple) else basis_entry
+            if abr_basis_col is None:
+                abr_basis_col = str(cust_outs['_abr_basis'].iloc[0])
+            unit_lbl = UNIT_LABELS.get(abr_basis_col, abr_basis_col)
 
-            if len(routes_with_outliers) > 0:
-                # Billing basis for this customer
-                basis_entry   = basis_map.get(knr, ('Lademeter', None))
-                abr_basis_col = basis_entry[0] if isinstance(basis_entry, tuple) else basis_entry
-                UNIT_LABELS   = {'Lademeter': 'LDM', 'Stellplätze': 'Stpl',
-                                 'Tonnage (eff.)': 't', 'Volumen': 'm³', 'Colli': 'Col'}
-                unit_lbl = UNIT_LABELS.get(abr_basis_col, abr_basis_col)
+            # Spalten: normale Anzeigespalten + €/Einheit + Δ% + Erw. Verlust
+            OUTLIER_SHOW_COLS = SHOW_COLS + ['_ppu', '_deviation_pct', '_expected_loss']
+            d_ncols = len(OUTLIER_SHOW_COLS)
+            d_end   = get_column_letter(d_ncols)
 
-                # Extended display: existing cols + PPU + deviation-on-PPU
-                OUTLIER_SHOW_COLS = SHOW_COLS + ['_ppu', '_deviation_pct']
-                OUTLIER_HDRS = {**{c: c for c in SHOW_COLS},
-                                '_ppu':          f'€/{unit_lbl}',
-                                '_deviation_pct': f'Δ% €/{unit_lbl}'}
-                d_ncols = len(OUTLIER_SHOW_COLS)
-                d_end   = get_column_letter(d_ncols)
+            set_width(ws, d_ncols - 2, 10)   # _ppu
+            set_width(ws, d_ncols - 1, 12)   # _deviation_pct
+            set_width(ws, d_ncols,     14)    # _expected_loss
 
-                set_width(ws, d_ncols - 1, 10)   # _ppu column
-                set_width(ws, d_ncols,     12)    # _deviation_pct column
+            # Relationen nach Gesamtverlust sortieren (wie in s1 berechnet)
+            post_only = cust_outs[cust_outs['_row_type'] == 'POST_OUTLIER']
+            route_order = (post_only
+                           .drop_duplicates('_route')
+                           .sort_values('_total_route_loss', ascending=False)
+                           ['_route'].tolist())
 
+            if route_order:
                 row += 1
                 ws.merge_cells(f'A{row}:{d_end}{row}')
                 c = ws.cell(row, 1,
-                    f'D — Ausreißer-Analyse nach Relation: '
-                    f'Dinas (PRE) Referenz  →  AX (POST) Ausreißer  |  '
-                    f'Abrechnungsbasis: {abr_basis_col}  |  '
-                    f'Schwellenwert: |Δ €/{unit_lbl}| > 7 %')
+                    f'D — Top-5 Relationen · Höchstes Ertragsrisiko (Unterfakturierung)  |  '
+                    f'Basis: {abr_basis_col} (r ≥ 0.90)  |  '
+                    f'Schwelle: −7 %  €/{unit_lbl}  |  '
+                    f'Rang nach Erw. Verlust (Σ Δ€)')
                 c.font  = hfont(bold=True, size=11, color='FFFFFF')
                 c.fill  = DARK_RED_FILL
                 c.alignment = Alignment(horizontal='left', vertical='center')
                 ws.row_dimensions[row].height = 20
 
-                BASIS_HIGHLIGHT = PatternFill('solid', fgColor='FFE4B5')  # moccasin
+                BASIS_HIGHLIGHT = PatternFill('solid', fgColor='FFE4B5')
 
-                for route in routes_with_outliers:
+                for rank, route in enumerate(route_order, 1):
                     r_data   = cust_outs[cust_outs['_route'] == route]
                     pre_rows = r_data[r_data['_row_type'] == 'PRE_REF']
                     pst_rows = r_data[r_data['_row_type'] == 'POST_OUTLIER']
                     if len(pst_rows) == 0:
                         continue
 
-                    ppu_pre_v    = float(r_data['_ppu_pre_route'].iloc[0])
-                    # Use the actual basis applied on this route (may differ from customer
-                    # default when the fallback dimension was used)
-                    route_basis  = str(r_data['_abr_basis'].iloc[0])
-                    route_unit   = UNIT_LABELS.get(route_basis, route_basis)
-                    # Column headers adapt per route to reflect the actual basis used
-                    route_hdrs   = {**{c: c for c in SHOW_COLS},
-                                    '_ppu':          f'€/{route_unit}',
-                                    '_deviation_pct': f'Δ% €/{route_unit}'}
+                    ppu_pre_v   = float(r_data['_ppu_pre_route'].iloc[0])
+                    total_loss  = float(r_data['_total_route_loss'].iloc[0])
+                    n_post_all  = len(pst_rows)
 
-                    # Route sub-header — shows PPU baseline and the actual basis used
+                    # Route-Unterüberschrift mit Gesamtverlust und Rang
                     row += 1
                     ws.merge_cells(f'A{row}:{d_end}{row}')
-                    fallback_note = (f'  [Fallback: {route_basis}]'
-                                     if route_basis != abr_basis_col else '')
                     c = ws.cell(row, 1,
-                        f'Relation: {route}   |   '
-                        f'Ø PRE-Basis (Dinas): {ppu_pre_v:,.2f} €/{route_unit}{fallback_note}   |   '
-                        f'{len(pst_rows)} Ausreißer  >7%  €/{route_unit}')
+                        f'#{rank}  Relation: {route}  |  '
+                        f'Erw. Gesamtverlust: {total_loss:,.0f} €  |  '
+                        f'Dinas-Basis: {ppu_pre_v:,.2f} €/{unit_lbl}  |  '
+                        f'{n_post_all} unterfakturierte Sendungen (Top 5 gezeigt)')
                     c.font  = hfont(bold=True)
                     c.fill  = LIGHT_RED_FILL
                     c.alignment = Alignment(horizontal='left', vertical='center')
                     ws.row_dimensions[row].height = 18
 
-                    # Column headers — highlight the actual billing-basis column
+                    # Spaltenköpfe
                     row += 1
+                    hdrs = {**{c: c for c in SHOW_COLS},
+                            '_ppu':           f'€/{unit_lbl}',
+                            '_deviation_pct': f'Δ% €/{unit_lbl}',
+                            '_expected_loss': 'Erw. Verlust €'}
                     for ci, col_name in enumerate(OUTLIER_SHOW_COLS, 1):
-                        lbl = route_hdrs.get(col_name, col_name)
-                        c = ws.cell(row, ci, lbl)
+                        c = ws.cell(row, ci, hdrs.get(col_name, col_name))
                         c.font   = hfont(bold=True)
-                        c.fill   = BASIS_HIGHLIGHT if col_name == route_basis else PRE_FILL
+                        c.fill   = BASIS_HIGHLIGHT if col_name == abr_basis_col else PRE_FILL
                         c.border = thin()
                         c.alignment = Alignment(horizontal='center', wrap_text=True)
                     ws.row_dimensions[row].height = 28
 
                     def _cells(srow, xrow_fill, xshow_cols, ppu_override=None):
-                        """Write one shipment row; returns nothing (uses enclosing `row` via caller)."""
                         for ci, col_name in enumerate(xshow_cols, 1):
                             if col_name == '_ppu':
                                 if ppu_override is not None:
@@ -362,6 +360,10 @@ for _, meta_row in top20_meta.iterrows():
                                 raw = srow.get('_deviation_pct', np.nan)
                                 try:    val = round(float(raw), 2)
                                 except: val = ''
+                            elif col_name == '_expected_loss':
+                                raw = srow.get('_expected_loss', np.nan)
+                                try:    val = round(float(raw), 2)
+                                except: val = ''
                             else:
                                 val = srow.get(col_name, '')
                                 if not isinstance(val, str) and pd.isna(val):
@@ -372,7 +374,7 @@ for _, meta_row in top20_meta.iterrows():
                             c.fill  = xrow_fill
                             c.border = thin()
                             c.alignment = Alignment(horizontal='center')
-                            if col_name == '_ppu' and isinstance(val, (int, float)):
+                            if col_name in ('_ppu', '_expected_loss') and isinstance(val, (int, float)):
                                 c.number_format = '#,##0.00'
                             elif col_name == '_deviation_pct' and isinstance(val, (int, float)):
                                 c.number_format = '0.00"%"'
@@ -380,12 +382,12 @@ for _, meta_row in top20_meta.iterrows():
                                 c.number_format = ('0.00"%"' if col_name == 'DB II%'
                                                    else '#,##0.00')
 
-                    # PRE reference row — size-matched to typical POST outlier
+                    # PRE-Referenz (Dinas-Basis, größenbasiert)
                     for _, srow in pre_rows.iterrows():
                         row += 1
                         _cells(srow, PRE_FILL, OUTLIER_SHOW_COLS, ppu_override=ppu_pre_v)
 
-                    # POST outlier rows (AX), colour-coded by |Δ% €/unit|
+                    # POST-Ausreißer, nach Verlust absteigend sortiert (bereits in s1)
                     for _, srow in pst_rows.iterrows():
                         dev = srow.get('_deviation_pct', np.nan)
                         try:
@@ -403,7 +405,7 @@ for _, meta_row in top20_meta.iterrows():
                         row += 1
                         _cells(srow, row_fill, OUTLIER_SHOW_COLS)
 
-                    row += 1  # gap between routes
+                    row += 1  # Abstand zwischen Relationen
 
 print(f"Added {len(top20_meta)} customer sheets")
 wb.save(str(XLSX))
