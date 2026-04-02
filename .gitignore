@@ -18,3 +18,4 @@ Herma/
 # Allow audit report outputs
 !output/audit_bericht_*.xlsx
 !output/herma_gb_konditions_analyse.xlsx
+!output/top20_audit_*.xlsx
