@@ -1,3 +1,8 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
 # Raw data directories (PDFs, Excel, ZIP) — too large for git
 Fischerwerke/
 Herma/
