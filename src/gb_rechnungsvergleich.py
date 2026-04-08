@@ -1,23 +1,17 @@
 """
-gb_rechnungsvergleich.py
-========================
-Groz-Beckert: PDF-basierter Vergleich DINAS- vs. AX-Rechnungen.
+rechnungsvergleich.py  (Dateiname: gb_rechnungsvergleich.py)
+=============================================================
+Multi-Kunden PDF-Vergleich DINAS vs. AX/CARGOsuite.
 
-Basis:
-  DINAS-Rechnungen (PRE) → PyMuPDF-Extraktion aus ZIP (936 GB-Rechnungen).
-  AX-Rechnungen (POST)   → pdfplumber-Extraktion aus ZIP (129 Rechnungen).
-  Fallback               → BI-Report via Auftragsnummer, wenn PDF keine Positionsdaten.
+Kunden aus ZIP:  Groz Beckert, Bitzer, CHT, EBM, GEZE, Helu, Hornschuch
+Kunden aus FS:   Herma, Fischerwerke  (Ordner data/<slug>/rechnungen_*)
 
-Vergleich:
-  Pro Relation (Versender-PLZ → Empfänger-PLZ+Land) UND
-  Abrechnungsgewicht (auf 100 kg aufgerundet, identisch in PRE und POST):
-  Gegenüberstellung Erlöse + Erlöse je 100 kg.
-  Bei mehreren Sendungen mit gleichen Parametern: max. 5 Beispiele je Seite.
-
-Amendment: max. MAX_EXAMPLES Sendungen pro Parametergruppe auflisten.
+Pro Kunde wird eine Excel-Datei erzeugt:
+    output/<slug>/rechnungsvergleich.xlsx
 
 Usage:
     python src/gb_rechnungsvergleich.py
+    python src/gb_rechnungsvergleich.py bitzer cht   # nur bestimmte Kunden
 """
 
 import math
@@ -41,13 +35,55 @@ warnings.filterwarnings("ignore")
 # ── Pfade ──────────────────────────────────────────────────────────────────────
 BASE        = Path("/home/user/TMS")
 ZIP_PATH    = BASE / "data/Noerpel.AI.zip"
-BI_PATH     = BASE / "data/bi_report/Tagesbericht.Einzeldaten.alle.VKA.5.xlsx"
-BI_PKL_PATH = BASE / "output/bi_top20_data.pkl"   # fast fallback if available
 BI_ZIP_NAME = "Noerpel AI/Tagesbericht Einzeldaten alle VKA.xlsx"  # inside ZIP
 BESONDERHEITEN_PATH = BASE / "data/Besonderheiten_bei_der_Kundenabrechnung.xlsx"
-OUTPUT_PATH = BASE / "output/gb_rechnungsvergleich.xlsx"
+OUTPUT_DIR  = BASE / "output"
 
 MIGRATION_DATE = pd.Timestamp("2025-09-26")
+
+# ── Kunden-Konfiguration ───────────────────────────────────────────────────────
+# zip_dinas / zip_ax : Ordnerpräfix innerhalb der ZIP-Datei
+# fs_dinas  / fs_ax  : Ordner im Dateisystem  (Herma, Fischerwerke)
+# bi_filter          : Regex gegen "Kunden Name" im BI-Report
+CUSTOMERS = [
+    dict(name="Groz Beckert", slug="groz_beckert",
+         zip_dinas="Noerpel AI/Groz Beckert/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/Groz Beckert/Rechnungen/Rechnungen AX",
+         bi_filter=r"[Gg]roz|[Bb]eckert",
+         name_check=r"GROZ-BECKERT\s+(?:KG|EU|PORTUGUESA|EUROPE)"),
+    dict(name="Bitzer", slug="bitzer",
+         zip_dinas="Noerpel AI/Bitzer/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/Bitzer/Rechnungen/Rechnungen AX",
+         bi_filter=r"[Bb]itzer"),
+    dict(name="CHT", slug="cht",
+         zip_dinas="Noerpel AI/CHT/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/CHT/Rechnungen/Rechnungen AX",
+         bi_filter=r"CHT|Cht"),
+    dict(name="EBM", slug="ebm",
+         zip_dinas="Noerpel AI/EBM/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/EBM/Rechnungen/Rechnungen AX",
+         bi_filter=r"[Ee][Bb][Mm]"),
+    dict(name="GEZE", slug="geze",
+         zip_dinas="Noerpel AI/GEZE/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/GEZE/Rechnungen/Rechnungen AX",
+         bi_filter=r"[Gg][Ee][Zz][Ee]"),
+    dict(name="Helu", slug="helu",
+         zip_dinas="Noerpel AI/Helu/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/Helu/Rechnungen/Rechnungen AX",
+         bi_filter=r"[Hh]elu"),
+    dict(name="Hornschuch", slug="hornschuch",
+         zip_dinas="Noerpel AI/Hornschuch/Rechnungen/Rechnungen DINAS",
+         zip_ax="Noerpel AI/Hornschuch/Rechnungen/Rechnungen AX",
+         bi_filter=r"[Hh]ornschuch"),
+    dict(name="Herma", slug="herma",
+         fs_dinas=BASE / "data/herma/rechnungen_dinas",
+         fs_ax=BASE / "data/herma/rechnungen_cargosuite",
+         bi_filter=r"[Hh]erma"),
+    dict(name="Fischerwerke", slug="fischerwerke",
+         fs_dinas=BASE / "data/fischerwerke/rechnungen_dinas",
+         fs_ax=BASE / "data/fischerwerke/rechnungen_cargosuite",
+         bi_filter=r"[Ff]ischer"),
+]
 MAX_EXAMPLES   = 5   # max. Sendungen pro Parametergruppe
 
 # ── Fahrzeugkennzeichen → ISO-2 ─────────────────────────────────────────────────
@@ -414,14 +450,15 @@ def _extract_simple_dinas_block(text: str, rechnungsnr: str, rechnungsdatum: str
     )
 
 
-def load_dinas_from_zip(zip_path: Path) -> pd.DataFrame:
-    """Alle Groz-Beckert DINAS-Rechnungen aus ZIP extrahieren."""
-    print("[DINAS] Lade Rechnungen aus ZIP …")
+def _load_dinas_from_zip(zip_path: Path, zip_folder: str, name_check: str | None = None) -> pd.DataFrame:
+    """DINAS-Rechnungen aus ZIP-Unterordner extrahieren.
+    name_check: optionales Regex – Rechnungen ohne Treffer werden übersprungen.
+    """
     records = []
     with zipfile.ZipFile(zip_path) as z:
         pdfs = sorted([
             f for f in z.namelist()
-            if "Groz" in f and "DINAS" in f and f.lower().endswith(".pdf")
+            if f.startswith(zip_folder) and f.lower().endswith(".pdf")
         ])
         print(f"  {len(pdfs)} DINAS-PDFs gefunden")
         ok = skip = 0
@@ -432,16 +469,35 @@ def load_dinas_from_zip(zip_path: Path) -> pd.DataFrame:
                 doc  = fitz.open(stream=data, filetype="pdf")
                 text = "\n".join(page.get_text() for page in doc)
                 doc.close()
-                # Nur Rechnungen an Groz-Beckert
-                if not re.search(r'GROZ-BECKERT\s+(?:KG|EU|PORTUGUESA|EUROPE)', text, re.I):
+                if name_check and not re.search(name_check, text, re.I):
                     skip += 1
                     continue
                 recs = parse_dinas_pdf_text(text, fname)
                 records.extend(recs)
                 ok += 1
-            except Exception as e:
+            except Exception:
                 skip += 1
+    print(f"  Verarbeitet: {ok} Rechnungen, {skip} übersprungen")
+    print(f"  Extrahierte Sendungen: {len(records)}")
+    return pd.DataFrame(records) if records else pd.DataFrame()
 
+
+def _load_dinas_from_fs(folder: Path) -> pd.DataFrame:
+    """DINAS-Rechnungen aus Dateisystem-Ordner extrahieren."""
+    records = []
+    pdfs = sorted(folder.glob("*.pdf"))
+    print(f"  {len(pdfs)} DINAS-PDFs gefunden")
+    ok = skip = 0
+    for pdf_path in pdfs:
+        try:
+            doc  = fitz.open(str(pdf_path))
+            text = "\n".join(page.get_text() for page in doc)
+            doc.close()
+            recs = parse_dinas_pdf_text(text, pdf_path.name)
+            records.extend(recs)
+            ok += 1
+        except Exception:
+            skip += 1
     print(f"  Verarbeitet: {ok} Rechnungen, {skip} übersprungen")
     print(f"  Extrahierte Sendungen: {len(records)}")
     return pd.DataFrame(records) if records else pd.DataFrame()
@@ -552,14 +608,14 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
     )
 
 
-def load_ax_from_zip(zip_path: Path) -> pd.DataFrame:
-    """Alle Groz-Beckert AX-Rechnungen aus ZIP extrahieren."""
-    print("[AX] Lade Rechnungen aus ZIP …")
+def _load_ax_from_zip(zip_path: Path, zip_folder: str) -> pd.DataFrame:
+    """AX-Rechnungen aus ZIP-Unterordner extrahieren."""
+    import io
     records = []
     with zipfile.ZipFile(zip_path) as z:
         pdfs = sorted([
             f for f in z.namelist()
-            if "Groz" in f and "Rechnungen AX" in f and f.lower().endswith(".pdf")
+            if f.startswith(zip_folder) and f.lower().endswith(".pdf")
         ])
         print(f"  {len(pdfs)} AX-PDFs gefunden")
         ok = skip = 0
@@ -567,7 +623,6 @@ def load_ax_from_zip(zip_path: Path) -> pd.DataFrame:
             fname = ppath.split("/")[-1]
             data  = z.read(ppath)
             try:
-                import io
                 with pdfplumber.open(io.BytesIO(data)) as pdf:
                     text = "\n".join(p.extract_text() or "" for p in pdf.pages)
                 rec = parse_ax_pdf_text(text, fname)
@@ -578,9 +633,50 @@ def load_ax_from_zip(zip_path: Path) -> pd.DataFrame:
                     skip += 1
             except Exception:
                 skip += 1
-
     print(f"  Verarbeitet: {ok} Rechnungen, {skip} übersprungen")
     return pd.DataFrame(records) if records else pd.DataFrame()
+
+
+def _load_ax_from_fs(folder: Path) -> pd.DataFrame:
+    """AX/CARGOsuite-Rechnungen aus Dateisystem-Ordner extrahieren."""
+    records = []
+    pdfs = sorted(folder.glob("*.pdf"))
+    print(f"  {len(pdfs)} AX-PDFs gefunden")
+    ok = skip = 0
+    for pdf_path in pdfs:
+        try:
+            with pdfplumber.open(str(pdf_path)) as pdf:
+                text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            rec = parse_ax_pdf_text(text, pdf_path.name)
+            if rec:
+                records.append(rec)
+                ok += 1
+            else:
+                skip += 1
+        except Exception:
+            skip += 1
+    print(f"  Verarbeitet: {ok} Rechnungen, {skip} übersprungen")
+    return pd.DataFrame(records) if records else pd.DataFrame()
+
+
+def load_invoices_for_customer(customer: dict, zip_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Lädt DINAS- und AX-Rechnungen für einen Kunden (ZIP oder FS)."""
+    if "zip_dinas" in customer:
+        print(f"[DINAS] {customer['name']} aus ZIP …")
+        dinas_df = _load_dinas_from_zip(zip_path, customer["zip_dinas"],
+                                        customer.get("name_check"))
+    else:
+        print(f"[DINAS] {customer['name']} aus Ordner …")
+        dinas_df = _load_dinas_from_fs(customer["fs_dinas"])
+
+    if "zip_ax" in customer:
+        print(f"[AX]    {customer['name']} aus ZIP …")
+        ax_df = _load_ax_from_zip(zip_path, customer["zip_ax"])
+    else:
+        print(f"[AX]    {customer['name']} aus Ordner …")
+        ax_df = _load_ax_from_fs(customer["fs_ax"])
+
+    return dinas_df, ax_df
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1124,43 +1220,32 @@ def write_besonderheiten(ws, path: Path):
 # F  MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main():
+def run_customer(customer: dict, bi_raw: pd.DataFrame, zip_path: Path) -> None:
+    """Komplette Pipeline für einen Kunden: laden → normalisieren → Excel."""
+    name = customer["name"]
+    slug = customer["slug"]
+    output_path = OUTPUT_DIR / slug / "rechnungsvergleich.xlsx"
+
     print("=" * 65)
-    print("  Groz-Beckert Rechnungsvergleich  DINAS ↔ AX")
+    print(f"  {name}  –  DINAS ↔ AX")
     print("=" * 65)
 
     # ── 1. PDFs laden ────────────────────────────────────────────────────────
-    if not ZIP_PATH.exists():
-        print(f"[FEHLER] ZIP nicht gefunden: {ZIP_PATH}")
-        return
-
-    dinas_df = load_dinas_from_zip(ZIP_PATH)
-    ax_df    = load_ax_from_zip(ZIP_PATH)
+    dinas_df, ax_df = load_invoices_for_customer(customer, zip_path)
 
     if dinas_df.empty and ax_df.empty:
-        print("[FEHLER] Keine Rechnungen geladen.")
+        print(f"  [{name}] Keine Rechnungen – übersprungen.\n")
         return
 
-    # ── 2. BI-Fallback: bevorzugt die 16 MB-Datei im ZIP (nur relevante Kunden) ──
+    # ── 2. BI-Fallback filtern ───────────────────────────────────────────────
     bi_df = pd.DataFrame()
-    try:
-        import io as _io
-        print("[BI] Lade Fallback aus ZIP …")
-        with zipfile.ZipFile(ZIP_PATH) as _z:
-            _data = _z.read(BI_ZIP_NAME)
-        _raw = pd.read_excel(
-            _io.BytesIO(_data),
-            dtype={"Auftragsnummer": str, "Rechnungsnummer": str,
-                   "Kunden Nr BK": str, "Versender PLZ": str, "Empfänger PLZ": str},
+    if not bi_raw.empty and customer.get("bi_filter"):
+        mask = bi_raw["Kunden Name"].astype(str).str.contains(
+            customer["bi_filter"], case=False, na=False
         )
-        _mask = _raw["Kunden Name"].astype(str).str.contains(
-            r"Groz|Beckert", case=False, na=False
-        )
-        bi_df = _raw[_mask].copy()
-        bi_df["Auftragsnummer"] = bi_df["Auftragsnummer"].astype(str).str.strip()
-        print(f"  Groz-Beckert im BI-Report: {len(bi_df):,} Zeilen")
-    except Exception as e:
-        print(f"[WARN] BI-Fallback nicht geladen: {e}")
+        bi_df = bi_raw[mask].copy()
+        if not bi_df.empty:
+            print(f"  {name} im BI-Report: {len(bi_df):,} Zeilen")
 
     # ── 3. Anreichern & normalisieren ────────────────────────────────────────
     if not dinas_df.empty and not bi_df.empty:
@@ -1172,7 +1257,7 @@ def main():
     all_df = normalize_invoices(all_df)
 
     if all_df.empty:
-        print("[FEHLER] Nach Normalisierung keine Daten.")
+        print(f"  [{name}] Nach Normalisierung keine Daten – übersprungen.\n")
         return
 
     n_pre  = (all_df["periode"] == "PRE").sum()
@@ -1187,47 +1272,81 @@ def main():
     print(f"  Vergleichsgruppen: {len(groups):,}   davon Unterfakturierung: {n_unter:,}")
 
     # ── 5. Excel schreiben ───────────────────────────────────────────────────
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
-    wb.remove(wb.active)   # Default-Sheet entfernen
+    wb.remove(wb.active)
 
-    # Blatt 1: Zusammenfassung
     ws_sum = wb.create_sheet("Zusammenfassung")
     write_summary(ws_sum, all_df, groups)
 
-    # Blatt 2: Übersicht Relationen (eine Zeile pro Gruppe)
     ws_ue = wb.create_sheet("Übersicht_Relationen")
     write_uebersicht(ws_ue, groups)
 
-    # Blatt 3: Paarvergleich Sendungen (Kern-Ausgabe)
     ws_paar = wb.create_sheet("Paarvergleich_Sendungen")
     write_paarvergleich(ws_paar, groups)
 
-    # Blatt 4: DINAS-Einzelrechnungen (PRE)
     if not all_df[all_df["periode"] == "PRE"].empty:
         ws_din = wb.create_sheet("DINAS_Einzelrechnungen")
         write_all_invoices(ws_din, all_df[all_df["periode"] == "PRE"].copy(),
                            "DINAS_Einzelrechnungen", C_DINAS)
 
-    # Blatt 5: AX-Einzelrechnungen (POST, ab Migration)
     if not all_df[all_df["periode"] == "POST"].empty:
         ws_ax = wb.create_sheet("AX_Einzelrechnungen")
         write_all_invoices(ws_ax, all_df[all_df["periode"] == "POST"].copy(),
                            "AX_Einzelrechnungen", C_AX)
 
-    # Blatt 6: AX historisch (vor Migration, nur zur Referenz)
     ax_hist = all_df[all_df["periode"] == "AX_HIST"]
     if not ax_hist.empty:
         ws_axh = wb.create_sheet("AX_historisch")
         write_all_invoices(ws_axh, ax_hist.copy(), "AX_historisch", "E8F5E9")
 
-    # Blatt 6: Kundenbesonderheiten (Referenz)
     if BESONDERHEITEN_PATH.exists():
         ws_beson = wb.create_sheet("Kundenbesonderheiten")
         write_besonderheiten(ws_beson, BESONDERHEITEN_PATH)
 
-    wb.save(OUTPUT_PATH)
-    print(f"\n  Gespeichert: {OUTPUT_PATH}")
+    wb.save(output_path)
+    print(f"\n  Gespeichert: {output_path}\n")
+
+
+def main():
+    import sys
+    # Optional: bestimmte Kunden per Kommandozeile angeben (slug oder name)
+    filter_slugs = {a.lower() for a in sys.argv[1:]}
+
+    customers = CUSTOMERS
+    if filter_slugs:
+        customers = [c for c in CUSTOMERS
+                     if c["slug"] in filter_slugs or c["name"].lower() in filter_slugs]
+        if not customers:
+            print(f"Keine Kunden gefunden für: {filter_slugs}")
+            return
+
+    # BI-Report einmalig laden
+    bi_raw = pd.DataFrame()
+    if ZIP_PATH.exists():
+        try:
+            import io as _io
+            print("[BI] Lade BI-Report aus ZIP …")
+            with zipfile.ZipFile(ZIP_PATH) as _z:
+                _data = _z.read(BI_ZIP_NAME)
+            bi_raw = pd.read_excel(
+                _io.BytesIO(_data),
+                dtype={"Auftragsnummer": str, "Rechnungsnummer": str,
+                       "Kunden Nr BK": str, "Versender PLZ": str, "Empfänger PLZ": str},
+            )
+            bi_raw["Auftragsnummer"] = bi_raw["Auftragsnummer"].astype(str).str.strip()
+            print(f"  {len(bi_raw):,} Zeilen geladen\n")
+        except Exception as e:
+            print(f"[WARN] BI-Report nicht geladen: {e}\n")
+
+    for customer in customers:
+        try:
+            run_customer(customer, bi_raw, ZIP_PATH)
+        except Exception as e:
+            print(f"[FEHLER] {customer['name']}: {e}\n")
+
+    print("=" * 65)
+    print("  Alle Kunden verarbeitet.")
     print("=" * 65)
 
 
