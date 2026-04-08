@@ -129,32 +129,45 @@ def _empf_plz_land(text_fragment: str) -> tuple[str, str]:
     return "", "DE"
 
 
-def _extract_plz_pair(block: str) -> tuple[str, str, str, str]:
+def _extract_plz_pair(block: str) -> tuple[str, str, str, str, str, str]:
     """
-    Extrahiert (sender_plz, sender_land, empf_plz, empf_land) aus Sendungsblock.
+    Extrahiert (sender_name, sender_plz, sender_land, empf_name, empf_plz, empf_land).
 
-    DINAS-Format nach den Namenszeilen:
-      [Abs.: SENDER_NAME  Empf.: RECEIVER_NAME]   oder zwei separate Zeilen
-      [optional: X,XXX cbm / Ldm = N k / = / N k]
+    DINAS-Format:
+      Abs.: SENDER_NAME  Empf.: RECEIVER_NAME   (gleiche Zeile)
+      oder:
+      Abs.: SENDER_NAME
+      Empf.: RECEIVER_NAME
       SENDER_PLZ  SENDER_CITY          ← erste PLZ-Zeile = Absender
       RECEIVER_PLZ  RECEIVER_CITY      ← zweite PLZ-Zeile = Empfänger
-
-    PLZ-Erkennung am Zeilenanfang:
-      • 5-stellige Deutsche PLZ: '72458 ALBSTADT'
-      • Auslands-PLZ mit Prefix: 'P-4409 VILA NOVA', 'B-8540 DEERLIJK'
     """
     abs_pos = re.search(r'Abs\.\s*:', block)
     if not abs_pos:
-        return "72458", "DE", "", "DE"
+        return "", "72458", "DE", "", "", "DE"
 
-    tail = block[abs_pos.end():]
-    # Skip rest of Abs. line
-    nl = tail.find('\n')
-    tail = tail[nl + 1:] if nl >= 0 else tail
-    # Skip Empf. line if on separate line
-    if re.match(r'\s*Empf\.\s*:', tail):
-        nl = tail.find('\n')
-        tail = tail[nl + 1:] if nl >= 0 else tail
+    abs_line_start = abs_pos.end()
+    nl = block.find('\n', abs_line_start)
+    abs_line = block[abs_line_start: nl if nl >= 0 else len(block)]
+
+    # Sender-Name: von Abs.: bis Empf.: (gleiche Zeile) oder bis Zeilenende
+    empf_in_line = re.search(r'Empf\.\s*:', abs_line)
+    if empf_in_line:
+        sender_name = abs_line[:empf_in_line.start()].strip()
+        empf_name   = abs_line[empf_in_line.end():].strip()
+        tail_start  = nl + 1 if nl >= 0 else len(block)
+    else:
+        sender_name = abs_line.strip()
+        tail_start  = nl + 1 if nl >= 0 else len(block)
+        tail_head   = block[tail_start:]
+        empf_pos    = re.match(r'\s*Empf\.\s*:', tail_head)
+        if empf_pos:
+            empf_line_end = tail_head.find('\n')
+            empf_name = tail_head[empf_pos.end(): empf_line_end if empf_line_end >= 0 else len(tail_head)].strip()
+            tail_start += (empf_line_end + 1) if empf_line_end >= 0 else len(tail_head)
+        else:
+            empf_name = ""
+
+    tail = block[tail_start:]
 
     plz_lines = []
     for line in tail.split('\n'):
@@ -163,24 +176,21 @@ def _extract_plz_pair(block: str) -> tuple[str, str, str, str]:
             continue
         if s.startswith('Ref.') or s.startswith('REF.'):
             break
-        # German 5-digit PLZ
         if re.match(r'^\d{5}\s+[A-ZÄÖÜ]', s):
             plz_lines.append(s)
-        # Foreign PLZ with country prefix (P-, B-, E-, F-, A-, I-, CH-, CZ-, GB-, etc.)
-        # UK postcodes start with letters: GB-OX9, GB-OL1 etc.
         elif re.match(r'^[A-Z]{1,3}-[0-9A-Z]', s):
             plz_lines.append(s)
         if len(plz_lines) >= 2:
             break
 
     if not plz_lines:
-        return "72458", "DE", "", "DE"
+        return sender_name, "72458", "DE", empf_name, "", "DE"
     sender_plz, sender_land = _empf_plz_land(plz_lines[0])
     if len(plz_lines) >= 2:
         empf_plz, empf_land = _empf_plz_land(plz_lines[1])
     else:
         empf_plz, empf_land = "", "DE"
-    return sender_plz, sender_land, empf_plz, empf_land
+    return sender_name, sender_plz, sender_land, empf_name, empf_plz, empf_land
 
 
 def parse_dinas_pdf_text(text: str, pdf_name: str) -> list[dict]:
@@ -256,9 +266,8 @@ def _parse_dinas_block(block: str, rechnungsnr: str, rechnungsdatum: str,
     if auftragsnr and len(str(auftragsnr)) == 16:
         return None
 
-    # Absender (Abs.) und Empfänger (Empf.) PLZ + Land
-    # Reihenfolge: erste PLZ-Zeile nach den Namen = Absender, zweite = Empfänger
-    sender_plz, sender_land, empf_plz, empf_land = _extract_plz_pair(block)
+    # Absender (Abs.) und Empfänger (Empf.) Namen + PLZ + Land
+    sender_name, sender_plz, sender_land, empf_name, empf_plz, empf_land = _extract_plz_pair(block)
 
     # Abrechnungsgewicht + Lademeter
     # Format: "5,000 Ldm = 6250 k" oder "5,000 Ldm =11250 k" (kein Leerzeichen vor Zahl)
@@ -325,8 +334,10 @@ def _parse_dinas_block(block: str, rechnungsnr: str, rechnungsdatum: str,
         leistungsdatum = leistungsdatum,
         sendungsnr     = sendungsnr,
         auftragsnr     = auftragsnr,
+        sender_name    = sender_name,
         sender_plz     = sender_plz,
         sender_land    = sender_land,
+        empf_name      = empf_name,
         empf_plz       = empf_plz,
         empf_land      = empf_land,
         gewicht_kg     = bweight,
@@ -383,8 +394,10 @@ def _extract_simple_dinas_block(text: str, rechnungsnr: str, rechnungsdatum: str
         leistungsdatum = leistungsdatum,
         sendungsnr     = sendungsnr,
         auftragsnr     = auftragsnr,
+        sender_name    = "",
         sender_plz     = "72458",
         sender_land    = "DE",
+        empf_name      = "",
         empf_plz       = empf_plz,
         empf_land      = empf_land,
         gewicht_kg     = 0.0,   # unbekannt
@@ -469,14 +482,20 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
     stellplaetze = _parse_german_num(route_m.group(2)) if route_m else None
     lademeter    = _parse_german_num(route_m.group(3)) if route_m else None
 
-    # von/nach: "von: DE-72458 Albstadt Nach: PT-4409 Vila Nova de Gaia"
-    von_m = re.search(r'von:\s*([A-Z]{2})-(\S+)\s', text)
+    # von/nach: "Von: DE-72458 Albstadt Nach: PT-4409 Vila Nova de Gaia"
+    von_m = re.search(r'[Vv]on:\s*([A-Z]{2})-(\S+)\s', text)
     nach_m = re.search(r'[Nn]ach:\s*([A-Z]{2})-(\S+)\s', text)
 
     sender_land = von_m.group(1)  if von_m  else "DE"
     sender_plz  = von_m.group(2)  if von_m  else "72458"
     empf_land   = nach_m.group(1) if nach_m else ""
     empf_plz    = nach_m.group(2) if nach_m else ""
+
+    # Versender/Empfänger Namen: "Versender: Name, Strasse, DE-72458 Stadt"
+    vs_m = re.search(r'Versender:\s*(.+?)(?:,\s*[A-Z]{2}-[\d\w]|\n|$)', text)
+    em_m = re.search(r'Empf[äa]nger:\s*(.+?)(?:,\s*[A-Z]{2}-[\d\w]|\n|$)', text)
+    sender_name = vs_m.group(1).strip().rstrip(',') if vs_m else ""
+    empf_name   = em_m.group(1).strip().rstrip(',') if em_m else ""
 
     if not gewicht or gewicht <= 0:
         return None
@@ -503,8 +522,8 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
     else:
         netto = fracht + maut + diesel + verzoll
 
-    # Nebenkosten = alles außer Fracht (inkl. Verzollung)
-    nebenkost = netto - fracht
+    # Nebenkosten = alles außer den explizit aufgeführten Positionen
+    nebenkost = netto - fracht - maut - diesel - verzoll
 
     return dict(
         system         = "AX",
@@ -513,8 +532,10 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
         leistungsdatum = leistungsdatum,
         sendungsnr     = auftragsnr or belegnr,
         auftragsnr     = auftragsnr,
+        sender_name    = sender_name,
         sender_plz     = sender_plz.split("-")[0] if "-" in sender_plz else sender_plz,
         sender_land    = sender_land,
+        empf_name      = empf_name,
         empf_plz       = empf_plz.split("-")[0] if "-" in empf_plz else empf_plz,
         empf_land      = empf_land,
         gewicht_kg     = gewicht,
@@ -938,7 +959,7 @@ def write_paarvergleich(ws, groups):
 
     # Spaltenköpfe
     hdr1 = ["System", "Rechnungsnr.", "Auftragsnr.", "Leistungsdatum",
-             "Sender PLZ", "Empf. PLZ", "Empf. Land",
+             "Absender", "Sender PLZ", "Empfänger", "Empf. PLZ", "Empf. Land",
              "Gewicht kg", "Abr.-Gew. kg", "LDM", "Stellplätze",
              "Fracht €", "Maut €", "Diesel €", "Verzollung €", "Neben €",
              "Erlöse gesamt €", "Fracht €/100kg", "PDF-Datei"]
@@ -980,7 +1001,9 @@ def write_paarvergleich(ws, groups):
                     ex.get("rechnungsnr", ""),
                     ex.get("auftragsnr", ""),
                     ld_str,
+                    ex.get("sender_name", ""),
                     ex.get("sender_plz", ""),
+                    ex.get("empf_name", ""),
                     ex.get("empf_plz", ""),
                     ex.get("empf_land", ""),
                     round(ex.get("gewicht_kg", 0) or 0, 2),
@@ -1028,15 +1051,16 @@ def write_paarvergleich(ws, groups):
 def write_all_invoices(ws, df, title, bg):
     ws.title = title
     cols = ["rechnungsnr","rechnungsdatum","leistungsdatum","sendungsnr","auftragsnr",
-            "sender_plz","sender_land","empf_plz","empf_land",
+            "sender_name","sender_plz","sender_land","empf_name","empf_plz","empf_land",
             "gewicht_kg","billing_weight_kg","lademeter","stellplaetze",
             "fracht_eur","maut_eur","diesel_eur","verzoll_eur","neben_eur","erloes_eur",
             "erloes_je_100kg","route_key","pdf_name"]
     labels = {
         "rechnungsnr": "Rechnungsnr.", "rechnungsdatum": "Rechng.-Datum",
         "leistungsdatum": "Leistungsdatum", "sendungsnr": "Sendungsnr.",
-        "auftragsnr": "Auftragsnr.", "sender_plz": "Sender PLZ",
-        "sender_land": "Sender Land", "empf_plz": "Empf. PLZ",
+        "auftragsnr": "Auftragsnr.",
+        "sender_name": "Absender", "sender_plz": "Sender PLZ",
+        "sender_land": "Sender Land", "empf_name": "Empfänger", "empf_plz": "Empf. PLZ",
         "empf_land": "Empf. Land", "gewicht_kg": "Gew. kg",
         "billing_weight_kg": "Abr.-Gew. kg", "lademeter": "LDM",
         "stellplaetze": "Stellplätze",
