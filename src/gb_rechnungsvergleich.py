@@ -641,8 +641,20 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df = df[~df["is_storno"].fillna(False)].copy()
     df = df[df["gewicht_kg"] > 0].copy()
 
-    # PRE / POST
-    df["periode"] = np.where(df["leistungsdatum"] < MIGRATION_DATE, "PRE", "POST")
+    # PRE / POST / AX_HIST
+    # Systembasierte Zuweisung:
+    #   DINAS-Rechnungen → immer PRE (Altsystem)
+    #   AX-Rechnungen ab Migrationsdatum → POST (Neusystem)
+    #   AX-Rechnungen vor Migrationsdatum → AX_HIST (historisch, kein Vergleich)
+    def _assign_periode(row):
+        if row["system"] == "DINAS":
+            return "PRE"
+        elif row["leistungsdatum"] >= MIGRATION_DATE:
+            return "POST"
+        else:
+            return "AX_HIST"   # alte AX-Rechnungen vor Migration
+
+    df["periode"] = df.apply(_assign_periode, axis=1)
 
     # PLZ normalisieren (5 Zeichen, führende Nullen)
     df["sender_plz"] = df["sender_plz"].astype(str).str.strip().str.replace(r"[^\w]", "", regex=True).str[:5]
@@ -937,7 +949,7 @@ def write_paarvergleich(ws, groups):
         ws.row_dimensions[ri].height = 18
         ri += 1
 
-        def write_examples(examples, system, bg_base):
+        def write_examples(examples, system_label, bg_base):
             nonlocal ri
             for ex in examples[:MAX_EXAMPLES]:
                 ld = ex.get("leistungsdatum")
@@ -945,6 +957,8 @@ def write_paarvergleich(ws, groups):
                 rate = ex.get("erloes_je_100kg")
                 stp = ex.get("stellplaetze")
                 ldm = ex.get("lademeter")
+                # Use actual system name from data (AX or DINAS), fallback to label
+                system = ex.get("system") or system_label
                 vals = [
                     system,
                     ex.get("rechnungsnr", ""),
@@ -971,16 +985,16 @@ def write_paarvergleich(ws, groups):
                     cell.border = _border()
                 ri += 1
 
-        write_examples(g["examples_pre"],  "DINAS (PRE)", C_DINAS)
+        write_examples(g["examples_pre"],  "DINAS", C_DINAS)
         # Trennzeile mit Statistik
-        sep = ws.cell(ri, 1, f"  ∅ Dinas: {g['avg_erloes_pre']:.2f} €  |  Median €/100kg: {g['median_100kg_pre']:.4f}")
+        sep = ws.cell(ri, 1, f"  ∅ Dinas: {g['avg_erloes_pre']:.2f} €  |  Median Fracht €/100kg: {g['median_100kg_pre']:.4f}")
         sep.fill = PatternFill("solid", fgColor="DDEEFF")
         sep.font = Font(italic=True, name="Calibri", size=8)
         ws.merge_cells(f"A{ri}:{get_column_letter(len(hdr1))}{ri}")
         ri += 1
 
-        write_examples(g["examples_post"], "AX (POST)", C_AX)
-        sep2 = ws.cell(ri, 1, f"  ∅ AX:    {g['avg_erloes_post']:.2f} €  |  Median €/100kg: {g['median_100kg_post']:.4f}  |  Abw.: {g['abw_pct']:+.2f}%")
+        write_examples(g["examples_post"], "AX", C_AX)
+        sep2 = ws.cell(ri, 1, f"  ∅ AX:    {g['avg_erloes_post']:.2f} €  |  Median Fracht €/100kg: {g['median_100kg_post']:.4f}  |  Abw.: {g['abw_pct']:+.2f}%")
         sep2.fill = PatternFill("solid", fgColor="FFE8CC")
         sep2.font = Font(italic=True, name="Calibri", size=8)
         ws.merge_cells(f"A{ri}:{get_column_letter(len(hdr1))}{ri}")
@@ -1122,7 +1136,9 @@ def main():
 
     n_pre  = (all_df["periode"] == "PRE").sum()
     n_post = (all_df["periode"] == "POST").sum()
-    print(f"\n  Normalisiert: {len(all_df):,} Sendungen   PRE={n_pre:,}  POST={n_post:,}")
+    n_hist = (all_df["periode"] == "AX_HIST").sum()
+    print(f"\n  Normalisiert: {len(all_df):,} Sendungen   "
+          f"DINAS PRE={n_pre:,}  AX POST={n_post:,}  AX historisch (excl.)={n_hist:,}")
 
     # ── 4. Vergleichsgruppen bilden ──────────────────────────────────────────
     groups = build_comparison_groups(all_df)
@@ -1146,17 +1162,23 @@ def main():
     ws_paar = wb.create_sheet("Paarvergleich_Sendungen")
     write_paarvergleich(ws_paar, groups)
 
-    # Blatt 4: Alle DINAS-Einzelrechnungen
-    if not all_df[all_df["system"] == "DINAS"].empty:
+    # Blatt 4: DINAS-Einzelrechnungen (PRE)
+    if not all_df[all_df["periode"] == "PRE"].empty:
         ws_din = wb.create_sheet("DINAS_Einzelrechnungen")
-        write_all_invoices(ws_din, all_df[all_df["system"] == "DINAS"].copy(),
+        write_all_invoices(ws_din, all_df[all_df["periode"] == "PRE"].copy(),
                            "DINAS_Einzelrechnungen", C_DINAS)
 
-    # Blatt 5: Alle AX-Einzelrechnungen
-    if not all_df[all_df["system"] == "AX"].empty:
+    # Blatt 5: AX-Einzelrechnungen (POST, ab Migration)
+    if not all_df[all_df["periode"] == "POST"].empty:
         ws_ax = wb.create_sheet("AX_Einzelrechnungen")
-        write_all_invoices(ws_ax, all_df[all_df["system"] == "AX"].copy(),
+        write_all_invoices(ws_ax, all_df[all_df["periode"] == "POST"].copy(),
                            "AX_Einzelrechnungen", C_AX)
+
+    # Blatt 6: AX historisch (vor Migration, nur zur Referenz)
+    ax_hist = all_df[all_df["periode"] == "AX_HIST"]
+    if not ax_hist.empty:
+        ws_axh = wb.create_sheet("AX_historisch")
+        write_all_invoices(ws_axh, ax_hist.copy(), "AX_historisch", "E8F5E9")
 
     # Blatt 6: Kundenbesonderheiten (Referenz)
     if BESONDERHEITEN_PATH.exists():
