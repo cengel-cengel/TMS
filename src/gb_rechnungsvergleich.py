@@ -112,7 +112,7 @@ def _parse_dinas_date(s: str) -> str | None:
 
 def _empf_plz_land(text_fragment: str) -> tuple[str, str]:
     """
-    Empfänger-PLZ und Land aus Textfragment extrahieren.
+    PLZ und Land aus Textfragment extrahieren.
     Erwartet z.B. 'B-8760 MEULEBEKE' oder '72458 ALBSTADT'.
     Gibt (plz_str, iso_land) zurück.
     """
@@ -129,12 +129,72 @@ def _empf_plz_land(text_fragment: str) -> tuple[str, str]:
     return "", "DE"
 
 
+def _extract_plz_pair(block: str) -> tuple[str, str, str, str]:
+    """
+    Extrahiert (sender_plz, sender_land, empf_plz, empf_land) aus Sendungsblock.
+
+    DINAS-Format nach den Namenszeilen:
+      [Abs.: SENDER_NAME  Empf.: RECEIVER_NAME]   oder zwei separate Zeilen
+      [optional: X,XXX cbm / Ldm = N k / = / N k]
+      SENDER_PLZ  SENDER_CITY          ← erste PLZ-Zeile = Absender
+      RECEIVER_PLZ  RECEIVER_CITY      ← zweite PLZ-Zeile = Empfänger
+
+    PLZ-Erkennung am Zeilenanfang:
+      • 5-stellige Deutsche PLZ: '72458 ALBSTADT'
+      • Auslands-PLZ mit Prefix: 'P-4409 VILA NOVA', 'B-8540 DEERLIJK'
+    """
+    abs_pos = re.search(r'Abs\.\s*:', block)
+    if not abs_pos:
+        return "72458", "DE", "", "DE"
+
+    tail = block[abs_pos.end():]
+    # Skip rest of Abs. line
+    nl = tail.find('\n')
+    tail = tail[nl + 1:] if nl >= 0 else tail
+    # Skip Empf. line if on separate line
+    if re.match(r'\s*Empf\.\s*:', tail):
+        nl = tail.find('\n')
+        tail = tail[nl + 1:] if nl >= 0 else tail
+
+    plz_lines = []
+    for line in tail.split('\n'):
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith('Ref.') or s.startswith('REF.'):
+            break
+        # German 5-digit PLZ
+        if re.match(r'^\d{5}\s+[A-ZÄÖÜ]', s):
+            plz_lines.append(s)
+        # Foreign PLZ with country prefix (P-, B-, E-, F-, A-, I-, CH-, CZ-, GB-, etc.)
+        # UK postcodes start with letters: GB-OX9, GB-OL1 etc.
+        elif re.match(r'^[A-Z]{1,3}-[0-9A-Z]', s):
+            plz_lines.append(s)
+        if len(plz_lines) >= 2:
+            break
+
+    if not plz_lines:
+        return "72458", "DE", "", "DE"
+    sender_plz, sender_land = _empf_plz_land(plz_lines[0])
+    if len(plz_lines) >= 2:
+        empf_plz, empf_land = _empf_plz_land(plz_lines[1])
+    else:
+        empf_plz, empf_land = "", "DE"
+    return sender_plz, sender_land, empf_plz, empf_land
+
+
 def parse_dinas_pdf_text(text: str, pdf_name: str) -> list[dict]:
     """
     DINAS-Rechnungstext (PyMuPDF) → Liste von Sendungs-Dicts.
     Jede Sendung enthält alle für den Vergleich relevanten Felder.
     """
     records = []
+
+    # ── AX-Rechnung im DINAS-Ordner? ──────────────────────────────────────────
+    # AX-Format hat "/ STP /" im Route-String oder 16-stellige Auftrags-Nr.
+    if (re.search(r'/\s*[\d.,]+\s*STP\s*/', text)
+            or re.search(r'Auftrags-Nr\.:\s*\d{16}', text)):
+        return []   # AX-Rechnung – wird von load_ax_from_zip verarbeitet
 
     # ── Rechnungskopf ──────────────────────────────────────────────────────────
     rn_m = re.search(r'Rechnung-Nr\.:\s*(\d+)', text)
@@ -185,49 +245,49 @@ def _parse_dinas_block(block: str, rechnungsnr: str, rechnungsdatum: str,
 
     # Auftragsnummer aus Ref.-Zeile
     ref_m = re.search(r'Ref\.\s*:.*?/(\d{12,})', block)
-    auftragsnr = ref_m.group(1) if ref_m else None
-
-    # Absender PLZ (DE, 5-stellig)
-    abs_m = re.search(r'Abs\.\s*:.*?\n.*?(\d{5})\s+\S', block, re.S)
-    sender_plz = abs_m.group(1) if abs_m else "72458"
-    sender_land = "DE"
-
-    # Empfänger PLZ + Land
-    empf_m = re.search(
-        r'Empf\.\s*:.*?\n.*?\n([A-Z]{1,3}-[0-9A-Z][0-9A-Z \-]*|\d{4,5})\s+\S',
-        block, re.S
-    )
-    if empf_m:
-        empf_plz, empf_land = _empf_plz_land(empf_m.group(1))
+    if not ref_m:
+        # Einige Refs ohne /: "Ref.: 4121068818"
+        ref_m2 = re.search(r'Ref\.\s*:\s*(\d{12,})', block)
+        auftragsnr = ref_m2.group(1) if ref_m2 else None
     else:
-        # Suche direkt nach Länderpräfix-PLZ-Muster
-        lp_m = re.search(r'\b([A-Z]{1,3})-([0-9][0-9A-Z \-]{2,8})\b', block)
-        if lp_m:
-            empf_plz, empf_land = _empf_plz_land(lp_m.group(0))
-        else:
-            empf_plz, empf_land = "", "DE"
+        auftragsnr = ref_m.group(1)
 
-    # Abrechnungsgewicht: "= 134 kg" oder "2,00 ldm = 3000 kg" oder "134 kg"
+    # AX-Rechnungen im DINAS-Ordner: 16-stellige Auftragsnummer → überspringen
+    if auftragsnr and len(str(auftragsnr)) == 16:
+        return None
+
+    # Absender (Abs.) und Empfänger (Empf.) PLZ + Land
+    # Reihenfolge: erste PLZ-Zeile nach den Namen = Absender, zweite = Empfänger
+    sender_plz, sender_land, empf_plz, empf_land = _extract_plz_pair(block)
+
+    # Abrechnungsgewicht + Lademeter
+    # Format: "5,000 Ldm = 6250 k" oder "5,000 Ldm =11250 k" (kein Leerzeichen vor Zahl)
+    # oder "2,00 ldm = 3000 kg"
     lademeter = None
+    stellplaetze = None
     bweight   = None
 
-    ldm_m = re.search(r'([\d.,]+)\s*ldm\s*=\s*([\d.,]+)\s*k(?:k|)g', block, re.I)
+    ldm_m = re.search(r'([\d.,]+)\s*[Ll]dm\s*=\s*([\d.,]+)\s*[Kk]', block)
     if ldm_m:
         lademeter = _parse_german_num(ldm_m.group(1))
         bweight   = _parse_german_num(ldm_m.group(2))
     else:
-        cbm_m = re.search(r'([\d.,]+)\s*cbm\s*=\s*([\d.,]+)\s*k(?:k|)g', block, re.I)
+        cbm_m = re.search(r'([\d.,]+)\s*cbm\s*=\s*([\d.,]+)\s*[Kk]', block, re.I)
         if cbm_m:
             bweight = _parse_german_num(cbm_m.group(2))
         else:
-            bw_m = re.search(r'=\s*([\d.,]+)\s*k(?:k|)g\b', block, re.I)
+            bw_m = re.search(r'=\s*([\d.,]+)\s*[Kk]g\b', block, re.I)
             if bw_m:
                 bweight = _parse_german_num(bw_m.group(1))
             else:
-                # Einfaches Gewicht: "134 kg"
-                kg_m = re.search(r'\b([\d.,]+)\s*k(?:k|)g\b', block, re.I)
+                kg_m = re.search(r'\b([\d.,]+)\s*[Kk]g\b', block, re.I)
                 if kg_m:
                     bweight = _parse_german_num(kg_m.group(1))
+
+    # Stellplätze: nicht explizit in DINAS – aus LDM schätzbar (1 STP ≈ 0,4 LDM)
+    # Nur setzen wenn LDM bekannt
+    if lademeter and lademeter > 0:
+        stellplaetze = round(lademeter / 0.4, 1)
 
     if not bweight or bweight <= 0:
         return None
@@ -271,6 +331,7 @@ def _parse_dinas_block(block: str, rechnungsnr: str, rechnungsdatum: str,
         empf_land      = empf_land,
         gewicht_kg     = bweight,
         lademeter      = lademeter,
+        stellplaetze   = stellplaetze,
         fracht_eur     = fracht,
         maut_eur       = maut,
         diesel_eur     = diesel,
@@ -401,8 +462,9 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
         r'\d{2}\.\d{2}\.\d{4}\s*/\s*([\d.,]+)\s*kg\s*/\s*([\d.,]+)\s*STP\s*/\s*([\d.,]+)\s*LDM',
         text
     )
-    gewicht  = _parse_german_num(route_m.group(1)) if route_m else None
-    lademeter = _parse_german_num(route_m.group(3)) if route_m else None
+    gewicht      = _parse_german_num(route_m.group(1)) if route_m else None
+    stellplaetze = _parse_german_num(route_m.group(2)) if route_m else None
+    lademeter    = _parse_german_num(route_m.group(3)) if route_m else None
 
     # von/nach: "von: DE-72458 Albstadt Nach: PT-4409 Vila Nova de Gaia"
     von_m = re.search(r'von:\s*([A-Z]{2})-(\S+)\s', text)
@@ -446,6 +508,7 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
         empf_land      = empf_land,
         gewicht_kg     = gewicht,
         lademeter      = lademeter,
+        stellplaetze   = stellplaetze,
         fracht_eur     = fracht,
         maut_eur       = maut,
         diesel_eur     = diesel,
@@ -587,23 +650,20 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df["sender_land"]= df["sender_land"].astype(str).str.strip().str.upper()
     df["empf_land"]  = df["empf_land"].astype(str).str.strip().str.upper()
 
-    # Abrechnungsgewicht auf 100 kg aufrunden
+    # Abrechnungsgewicht auf 100 kg aufrunden (für Gruppierung)
     df["billing_weight_kg"] = df["gewicht_kg"].apply(
         lambda t: int(math.ceil(t / 100) * 100) if t > 0 else 0
     )
-    df["billing_100kg"] = df["billing_weight_kg"] / 100
 
-    # €/100 kg (auf Basis billing_weight_kg)
+    # Frachterlös je 100 kg = Fracht-EUR / frachtpflichtiges Gewicht * 100
+    # (frachtpflichtiges Gewicht = gewicht_kg direkt aus Rechnung, ohne Rundung)
     df["erloes_je_100kg"] = np.where(
-        df["billing_100kg"] > 0,
-        df["erloes_eur"] / df["billing_100kg"],
+        df["gewicht_kg"] > 0,
+        df["fracht_eur"] / df["gewicht_kg"] * 100,
         np.nan
     )
-    df["fracht_je_100kg"] = np.where(
-        df["billing_100kg"] > 0,
-        df["fracht_eur"] / df["billing_100kg"],
-        np.nan
-    )
+    # Alias (gleiche Berechnung, für Rückwärtskompatibilität der Spaltenbezeichnung)
+    df["fracht_je_100kg"] = df["erloes_je_100kg"]
 
     # Relation-Key
     df["route_key"] = (
@@ -851,9 +911,9 @@ def write_paarvergleich(ws, groups):
     # Spaltenköpfe
     hdr1 = ["System", "Rechnungsnr.", "Auftragsnr.", "Leistungsdatum",
              "Sender PLZ", "Empf. PLZ", "Empf. Land",
-             "Gewicht kg", "100kg-Gew.", "LDM",
+             "Gewicht kg", "Abr.-Gew. kg", "LDM", "Stellplätze",
              "Fracht €", "Maut €", "Diesel €", "Neben €",
-             "Erlöse gesamt €", "€ / 100 kg", "PDF-Datei"]
+             "Erlöse gesamt €", "Fracht €/100kg", "PDF-Datei"]
 
     for ci, h in enumerate(hdr1, 1):
         _hdr(ws.cell(1, ci, h), bg=C_TITLE, sz=9)
@@ -883,6 +943,8 @@ def write_paarvergleich(ws, groups):
                 ld = ex.get("leistungsdatum")
                 ld_str = ld.strftime("%d.%m.%Y") if hasattr(ld, "strftime") else str(ld or "")[:10]
                 rate = ex.get("erloes_je_100kg")
+                stp = ex.get("stellplaetze")
+                ldm = ex.get("lademeter")
                 vals = [
                     system,
                     ex.get("rechnungsnr", ""),
@@ -891,9 +953,10 @@ def write_paarvergleich(ws, groups):
                     ex.get("sender_plz", ""),
                     ex.get("empf_plz", ""),
                     ex.get("empf_land", ""),
-                    ex.get("gewicht_kg", ""),
+                    round(ex.get("gewicht_kg", 0) or 0, 2),
                     ex.get("billing_weight_kg", ""),
-                    ex.get("lademeter", "") or "",
+                    round(ldm, 2) if ldm and not (isinstance(ldm, float) and math.isnan(ldm)) else "",
+                    round(stp, 2) if stp and not (isinstance(stp, float) and math.isnan(stp)) else "",
                     round(ex.get("fracht_eur", 0) or 0, 2),
                     round(ex.get("maut_eur",   0) or 0, 2),
                     round(ex.get("diesel_eur", 0) or 0, 2),
@@ -935,9 +998,9 @@ def write_all_invoices(ws, df, title, bg):
     ws.title = title
     cols = ["rechnungsnr","rechnungsdatum","leistungsdatum","sendungsnr","auftragsnr",
             "sender_plz","sender_land","empf_plz","empf_land",
-            "gewicht_kg","billing_weight_kg","lademeter",
+            "gewicht_kg","billing_weight_kg","lademeter","stellplaetze",
             "fracht_eur","maut_eur","diesel_eur","neben_eur","erloes_eur",
-            "erloes_je_100kg","fracht_je_100kg","route_key","pdf_name"]
+            "erloes_je_100kg","route_key","pdf_name"]
     labels = {
         "rechnungsnr": "Rechnungsnr.", "rechnungsdatum": "Rechng.-Datum",
         "leistungsdatum": "Leistungsdatum", "sendungsnr": "Sendungsnr.",
@@ -945,11 +1008,11 @@ def write_all_invoices(ws, df, title, bg):
         "sender_land": "Sender Land", "empf_plz": "Empf. PLZ",
         "empf_land": "Empf. Land", "gewicht_kg": "Gew. kg",
         "billing_weight_kg": "Abr.-Gew. kg", "lademeter": "LDM",
+        "stellplaetze": "Stellplätze",
         "fracht_eur": "Fracht €", "maut_eur": "Maut €",
         "diesel_eur": "Diesel €", "neben_eur": "Neben €",
         "erloes_eur": "Erlöse gesamt €",
-        "erloes_je_100kg": "€/100kg (Erlöse)",
-        "fracht_je_100kg": "€/100kg (Fracht)",
+        "erloes_je_100kg": "Fracht €/100kg",
         "route_key": "Relation", "pdf_name": "PDF-Datei",
     }
     existing = [c for c in cols if c in df.columns]
