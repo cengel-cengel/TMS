@@ -9,3 +9,6 @@
 
 # Keep directory structure
 !**/.gitkeep
+
+# Allow specific reference files
+!Besonderheiten_bei_der_Kundenabrechnung.xlsx
