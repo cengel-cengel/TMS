@@ -335,6 +335,7 @@ def _parse_dinas_block(block: str, rechnungsnr: str, rechnungsdatum: str,
         fracht_eur     = fracht,
         maut_eur       = maut,
         diesel_eur     = diesel,
+        verzoll_eur    = 0.0,
         neben_eur      = nebenkost,
         erloes_eur     = erloes_total,
         is_storno      = (sign == -1),
@@ -388,9 +389,11 @@ def _extract_simple_dinas_block(text: str, rechnungsnr: str, rechnungsdatum: str
         empf_land      = empf_land,
         gewicht_kg     = 0.0,   # unbekannt
         lademeter      = None,
+        stellplaetze   = None,
         fracht_eur     = fracht,
         maut_eur       = 0.0,
         diesel_eur     = 0.0,
+        verzoll_eur    = 0.0,
         neben_eur      = erloes - fracht,
         erloes_eur     = erloes,
         is_storno      = (sign == -1),
@@ -478,22 +481,30 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
     if not gewicht or gewicht <= 0:
         return None
 
-    # Positionen
-    fracht_m  = re.search(r'Fracht\s+M3\s+([-\d.,]+)EUR', text)
-    maut_m    = re.search(r'Maut\s+(?:Deutschland\s+)?M3\s+([-\d.,]+)EUR', text)
-    diesel_m  = re.search(r'Diesel(?:zuschlag)?\s+M3\s+([-\d.,]+)EUR', text)
+    # Positionen – "M\d+" steht für die Kostenstelle (z.B. M3, M92 etc.)
+    _MX = r'M\d+'   # Kostenstellenmuster
+    fracht_m  = re.search(rf'Fracht\s+{_MX}\s+([-\d.,]+)EUR', text)
+    maut_m    = re.search(rf'Maut\s+(?:\S+\s+)?{_MX}\s+([-\d.,]+)EUR', text)
+    diesel_m  = re.search(rf'Diesel(?:zuschlag)?\s+{_MX}\s+([-\d.,]+)EUR', text)
+    verzoll_m = re.search(rf'Verzollung\s+{_MX}\s+([-\d.,]+)EUR', text)
     gesamt_m  = re.search(r'Gesamtbetrag\s+([-\d.,]+)EUR', text)
 
-    fracht  = sign * (_parse_german_num(fracht_m.group(1))  or 0) if fracht_m  else 0.0
-    maut    = sign * (_parse_german_num(maut_m.group(1))    or 0) if maut_m    else 0.0
-    diesel  = sign * (_parse_german_num(diesel_m.group(1))  or 0) if diesel_m  else 0.0
-    gesamt  = sign * (_parse_german_num(gesamt_m.group(1))  or 0) if gesamt_m  else None
+    fracht  = sign * (_parse_german_num(fracht_m.group(1))   or 0) if fracht_m  else 0.0
+    maut    = sign * (_parse_german_num(maut_m.group(1))     or 0) if maut_m    else 0.0
+    diesel  = sign * (_parse_german_num(diesel_m.group(1))   or 0) if diesel_m  else 0.0
+    verzoll = sign * (_parse_german_num(verzoll_m.group(1))  or 0) if verzoll_m else 0.0
 
-    # Nettobetrag (ohne MwSt)
-    netto_m = re.search(r'Zwischensumme\s+M3\s+[-\d.,]+\s+([-\d.,]+)EUR', text)
-    netto   = sign * (_parse_german_num(netto_m.group(1)) or 0) if netto_m else fracht + maut + diesel
+    # Nettobetrag aus Nettobetrag-Zeile (= Zwischensumme ohne MwSt)
+    netto_m = re.search(rf'Zwischensumme\s+{_MX}\s+[-\d.,]+\s+([-\d.,]+)EUR', text)
+    if netto_m:
+        netto = sign * (_parse_german_num(netto_m.group(1)) or 0)
+    elif gesamt_m:
+        netto = sign * (_parse_german_num(gesamt_m.group(1)) or 0)
+    else:
+        netto = fracht + maut + diesel + verzoll
 
-    nebenkost = netto - fracht - maut - diesel
+    # Nebenkosten = alles außer Fracht (inkl. Verzollung)
+    nebenkost = netto - fracht
 
     return dict(
         system         = "AX",
@@ -512,6 +523,7 @@ def parse_ax_pdf_text(text: str, pdf_name: str) -> dict | None:
         fracht_eur     = fracht,
         maut_eur       = maut,
         diesel_eur     = diesel,
+        verzoll_eur    = verzoll,
         neben_eur      = nebenkost,
         erloes_eur     = netto,
         is_storno      = (sign == -1),
@@ -636,6 +648,10 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df["erloes_eur"]  = pd.to_numeric(df["erloes_eur"],  errors="coerce").fillna(0)
     df["fracht_eur"]  = pd.to_numeric(df["fracht_eur"],  errors="coerce").fillna(0)
     df["leistungsdatum"] = pd.to_datetime(df["leistungsdatum"], errors="coerce")
+
+    # Rechnungen vor 01.01.2025 ignorieren
+    MIN_DATE = pd.Timestamp("2025-01-01")
+    df = df[df["leistungsdatum"] >= MIN_DATE].copy()
 
     # Storni + Nullgewicht ausschließen
     df = df[~df["is_storno"].fillna(False)].copy()
@@ -924,7 +940,7 @@ def write_paarvergleich(ws, groups):
     hdr1 = ["System", "Rechnungsnr.", "Auftragsnr.", "Leistungsdatum",
              "Sender PLZ", "Empf. PLZ", "Empf. Land",
              "Gewicht kg", "Abr.-Gew. kg", "LDM", "Stellplätze",
-             "Fracht €", "Maut €", "Diesel €", "Neben €",
+             "Fracht €", "Maut €", "Diesel €", "Verzollung €", "Neben €",
              "Erlöse gesamt €", "Fracht €/100kg", "PDF-Datei"]
 
     for ci, h in enumerate(hdr1, 1):
@@ -973,8 +989,9 @@ def write_paarvergleich(ws, groups):
                     round(stp, 2) if stp and not (isinstance(stp, float) and math.isnan(stp)) else "",
                     round(ex.get("fracht_eur", 0) or 0, 2),
                     round(ex.get("maut_eur",   0) or 0, 2),
-                    round(ex.get("diesel_eur", 0) or 0, 2),
-                    round(ex.get("neben_eur",  0) or 0, 2),
+                    round(ex.get("diesel_eur",  0) or 0, 2),
+                    round(ex.get("verzoll_eur", 0) or 0, 2),
+                    round(ex.get("neben_eur",   0) or 0, 2),
                     round(ex.get("erloes_eur", 0) or 0, 2),
                     round(rate, 4) if rate and not (isinstance(rate, float) and math.isnan(rate)) else "",
                     ex.get("pdf_name", ""),
@@ -1013,7 +1030,7 @@ def write_all_invoices(ws, df, title, bg):
     cols = ["rechnungsnr","rechnungsdatum","leistungsdatum","sendungsnr","auftragsnr",
             "sender_plz","sender_land","empf_plz","empf_land",
             "gewicht_kg","billing_weight_kg","lademeter","stellplaetze",
-            "fracht_eur","maut_eur","diesel_eur","neben_eur","erloes_eur",
+            "fracht_eur","maut_eur","diesel_eur","verzoll_eur","neben_eur","erloes_eur",
             "erloes_je_100kg","route_key","pdf_name"]
     labels = {
         "rechnungsnr": "Rechnungsnr.", "rechnungsdatum": "Rechng.-Datum",
@@ -1024,7 +1041,7 @@ def write_all_invoices(ws, df, title, bg):
         "billing_weight_kg": "Abr.-Gew. kg", "lademeter": "LDM",
         "stellplaetze": "Stellplätze",
         "fracht_eur": "Fracht €", "maut_eur": "Maut €",
-        "diesel_eur": "Diesel €", "neben_eur": "Neben €",
+        "diesel_eur": "Diesel €", "verzoll_eur": "Verzollung €", "neben_eur": "Neben €",
         "erloes_eur": "Erlöse gesamt €",
         "erloes_je_100kg": "Fracht €/100kg",
         "route_key": "Relation", "pdf_name": "PDF-Datei",
