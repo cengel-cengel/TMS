@@ -86,6 +86,34 @@ CUSTOMERS = [
 ]
 MAX_EXAMPLES   = 5   # max. Sendungen pro Parametergruppe
 
+# ── DLV-Tarifintervalle ────────────────────────────────────────────────────────
+# General Cargo: Gewichtsbreakpoints aus dem DLV-Tarif (in kg)
+KG_BREAKS = [30, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 700, 800,
+             900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900,
+             2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000]
+# LTL-FTL: Lademeterbreakpoints (12,0 LDM = Voll-LKW-Grenze, 13,6 = FTL)
+LDM_BREAKS = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5,
+              7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 13.6]
+
+
+def _tariff_interval(kg: float, ldm) -> str:
+    """Tarifintervall für eine Sendung.
+
+    LDM-basiert (LTL/FTL) wenn lademeter verfügbar, sonst KG-basiert.
+    Gibt lesbares Label zurück, z.B. 'KG ≤ 500' oder 'LDM ≤ 3.0'.
+    """
+    if ldm and not (isinstance(ldm, float) and math.isnan(ldm)) and ldm > 0:
+        for b in LDM_BREAKS:
+            if ldm <= b + 0.001:   # +0.001 für Fließkomma-Toleranz
+                return f"LDM ≤ {b:.1f}"
+        return f"LDM > {LDM_BREAKS[-1]:.1f}"
+    if kg and kg > 0:
+        for b in KG_BREAKS:
+            if kg <= b:
+                return f"KG ≤ {b}"
+        return f"KG > {KG_BREAKS[-1]}"
+    return "unbekannt"
+
 # ── Fahrzeugkennzeichen → ISO-2 ─────────────────────────────────────────────────
 VEHICLE_TO_ISO = {
     "A": "AT", "B": "BE", "BG": "BG", "BY": "BY", "CH": "CH",
@@ -817,6 +845,11 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
         + df["empf_plz"].str[:2] + "|" + df["empf_land"]
     )
 
+    # DLV-Tarifintervall: LDM-basiert wenn Lademeter vorhanden, sonst KG-basiert
+    df["tariff_interval"] = df.apply(
+        lambda r: _tariff_interval(r["gewicht_kg"], r.get("lademeter")), axis=1
+    )
+
     return df
 
 
@@ -826,37 +859,29 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_comparison_groups(df: pd.DataFrame) -> list[dict]:
     """
-    Pro Relation (route_key) mit mind. 1 PRE + 1 POST Sendung:
-    Statistiken und bis zu MAX_EXAMPLES Beispielsendungen je Seite.
+    Pro (Relation, DLV-Tarifintervall) mit mind. 1 PRE + 1 POST Sendung.
 
-    Vergleich auf Basis Median-€/100kg (Erlöse), da DINAS-Rechnungen
-    oft konsolidierte Sendungen mit höherem Gesamtgewicht haben als
-    einzelne AX-Sendungen → exaktes Gewichts-Matching meist nicht möglich.
+    Gruppenebene: route_key × tariff_interval — stellt sicher, dass nur
+    Sendungen gleicher Tarifklasse (KG-Intervall oder LDM-Intervall) verglichen
+    werden, wie in den DLV-Tarifen definiert.
 
-    Innerhalb der Relation werden Sendungen nach Gewichtsklassen gruppiert
-    (bis 500 / bis 1000 / bis 2000 / bis 3000 / bis 5000 / bis 10000 / >10000 kg)
-    um die Darstellung übersichtlich zu halten.
+    Beispielsendungen: je Interval aus PRE min. 1 (neueste), aus POST max. 5
+    mit ähnlichem Gewicht/LDM/STP.
     """
-    WEIGHT_BANDS = [500, 1000, 2000, 3000, 5000, 10000, float("inf")]
-    BAND_LABELS  = [
-        "bis 500 kg", "501–1.000 kg", "1.001–2.000 kg",
-        "2.001–3.000 kg", "3.001–5.000 kg", "5.001–10.000 kg", "über 10.000 kg"
-    ]
-
-    def weight_band(kg):
-        for i, limit in enumerate(WEIGHT_BANDS):
-            if kg <= limit:
-                return BAND_LABELS[i]
-        return BAND_LABELS[-1]
-
     groups = []
     pre_df  = df[df["periode"] == "PRE"]
     post_df = df[df["periode"] == "POST"]
 
-    common_routes = set(pre_df["route_key"]) & set(post_df["route_key"])
-    for route in sorted(common_routes):
-        p = pre_df[pre_df["route_key"]  == route].copy()
-        q = post_df[post_df["route_key"] == route].copy()
+    # Gemeinsame Kombinationen (route, interval)
+    pre_keys  = set(zip(pre_df["route_key"],  pre_df["tariff_interval"]))
+    post_keys = set(zip(post_df["route_key"], post_df["tariff_interval"]))
+    common_keys = pre_keys & post_keys
+
+    for route, interval in sorted(common_keys):
+        p = pre_df[(pre_df["route_key"]  == route) &
+                   (pre_df["tariff_interval"]  == interval)].copy()
+        q = post_df[(post_df["route_key"] == route) &
+                    (post_df["tariff_interval"] == interval)].copy()
 
         pre_rate  = p["erloes_je_100kg"].median()
         post_rate = q["erloes_je_100kg"].median()
@@ -866,25 +891,32 @@ def build_comparison_groups(df: pd.DataFrame) -> list[dict]:
 
         abw = (post_rate - pre_rate) / abs(pre_rate) * 100
 
-        # Beispielsendungen: bis zu MAX_EXAMPLES je Gewichtsklasse je Seite (PRE / POST)
-        # Sortiert: jeweils neueste Sendungen zuerst
-        def pick_examples(sub):
-            sub = sub.sort_values("leistungsdatum", ascending=False)
-            sub["_band"] = sub["billing_weight_kg"].apply(weight_band)
-            rows = []
-            seen_bands: dict[str, int] = {}
-            for _, r in sub.iterrows():
-                b = r["_band"]
-                if seen_bands.get(b, 0) < MAX_EXAMPLES:
-                    rows.append(r.to_dict())
-                    seen_bands[b] = seen_bands.get(b, 0) + 1
-                if len(rows) >= MAX_EXAMPLES * 3:   # hard cap
-                    break
-            return rows
+        # PRE-Beispiele: mind. 1 pro Intervall (neueste zuerst)
+        pre_examples = (p.sort_values("leistungsdatum", ascending=False)
+                         .head(MAX_EXAMPLES)
+                         .to_dict("records"))
+
+        # POST-Beispiele: bis zu MAX_EXAMPLES mit ähnlichstem Gewicht/LDM
+        # Sortierung: nach Ähnlichkeit zum PRE-Median-Gewicht, dann Datum
+        if not p.empty and not q.empty:
+            ref_kg = p["gewicht_kg"].median()
+            ref_ldm = p["lademeter"].dropna()
+            ref_ldm = ref_ldm.median() if not ref_ldm.empty else None
+            q = q.copy()
+            if ref_ldm:
+                q["_sim"] = (q["lademeter"].fillna(ref_ldm) - ref_ldm).abs()
+            else:
+                q["_sim"] = (q["gewicht_kg"] - ref_kg).abs()
+            post_examples = (q.sort_values(["_sim", "leistungsdatum"],
+                                           ascending=[True, False])
+                              .head(MAX_EXAMPLES)
+                              .to_dict("records"))
+        else:
+            post_examples = q.head(MAX_EXAMPLES).to_dict("records")
 
         groups.append(dict(
             route_key         = route,
-            billing_weight_kg = None,   # route-level (no exact weight matching)
+            tariff_interval   = interval,
             empf_land         = p["empf_land"].iloc[0],
             empf_plz_sample   = p["empf_plz"].iloc[0],
             # PRE stats
@@ -907,8 +939,8 @@ def build_comparison_groups(df: pd.DataFrame) -> list[dict]:
             abw_pct           = abw,
             unterfakt         = abw < -5.0,
             # Beispielsendungen
-            examples_pre      = pick_examples(p),
-            examples_post     = pick_examples(q),
+            examples_pre      = pre_examples,
+            examples_post     = post_examples,
         ))
 
     # Sortierung: Unterfakturierung zuerst, dann nach |Abweichung|
@@ -1008,7 +1040,7 @@ def write_summary(ws, df, groups):
 def write_uebersicht(ws, groups):
     ws.title = "Übersicht_Relationen"
     cols = [
-        ("Relation", 30), ("Land", 7),
+        ("Relation", 30), ("Tarifintervall", 14), ("Land", 7),
         ("Gew.-Bereich Dinas (kg)", 18), ("Gew.-Bereich AX (kg)", 18),
         ("n Dinas", 8), ("Σ Erlöse Dinas €", 14), ("Ø Erlöse Dinas €", 13),
         ("Median €/100kg Dinas", 16), ("Ø Fracht Dinas €", 13),
@@ -1030,7 +1062,7 @@ def write_uebersicht(ws, groups):
         pre_range  = f"{g['min_weight_pre']:,} – {g['max_weight_pre']:,}"
         post_range = f"{g['min_weight_post']:,} – {g['max_weight_post']:,}"
         vals = [
-            g["route_key"], g["empf_land"],
+            g["route_key"], g.get("tariff_interval", ""), g["empf_land"],
             pre_range, post_range,
             g["n_pre"],
             round(g["sum_erloes_pre"], 2), round(g["avg_erloes_pre"], 2),
@@ -1043,7 +1075,7 @@ def write_uebersicht(ws, groups):
         ]
         for ci, v in enumerate(vals, 1):
             cell = ws.cell(ri, ci, v)
-            _dat(cell, bg if ci in (15, 16) else ("F5F5F5" if ri % 2 == 0 else "FFFFFF"))
+            _dat(cell, bg if ci in (16, 17) else ("F5F5F5" if ri % 2 == 0 else "FFFFFF"))
             cell.border = _border()
 
 
@@ -1067,7 +1099,8 @@ def write_paarvergleich(ws, groups):
     ri = 2
     for g in groups:
         # Gruppenüberschrift
-        label = (f"RELATION: {g['route_key']}  |  "
+        interval = g.get("tariff_interval", "")
+        label = (f"RELATION: {g['route_key']}  |  Intervall: {interval}  |  "
                  f"Abw.: {g['abw_pct']:+.1f}%  |  "
                  f"Dinas (n={g['n_pre']}, {g['min_weight_pre']:,}–{g['max_weight_pre']:,} kg)"
                  f" Median: {g['median_100kg_pre']:.3f} €/100kg  |  "
@@ -1150,7 +1183,7 @@ def write_all_invoices(ws, df, title, bg):
             "sender_name","sender_plz","sender_land","empf_name","empf_plz","empf_land",
             "gewicht_kg","billing_weight_kg","lademeter","stellplaetze",
             "fracht_eur","maut_eur","diesel_eur","verzoll_eur","neben_eur","erloes_eur",
-            "erloes_je_100kg","route_key","pdf_name"]
+            "erloes_je_100kg","tariff_interval","route_key","pdf_name"]
     labels = {
         "rechnungsnr": "Rechnungsnr.", "rechnungsdatum": "Rechng.-Datum",
         "leistungsdatum": "Leistungsdatum", "sendungsnr": "Sendungsnr.",
@@ -1164,7 +1197,7 @@ def write_all_invoices(ws, df, title, bg):
         "diesel_eur": "Diesel €", "verzoll_eur": "Verzollung €", "neben_eur": "Neben €",
         "erloes_eur": "Erlöse gesamt €",
         "erloes_je_100kg": "Fracht €/100kg",
-        "route_key": "Relation", "pdf_name": "PDF-Datei",
+        "tariff_interval": "Tarifintervall", "route_key": "Relation", "pdf_name": "PDF-Datei",
     }
     existing = [c for c in cols if c in df.columns]
     for ci, c in enumerate(existing, 1):
