@@ -25,4 +25,5 @@ Herma/
 !output/herma_gb_konditions_analyse.xlsx
 !output/top20_audit_*.xlsx
 !output/gb_rechnungsvergleich.xlsx
+!output/*/rechnungsvergleich.xlsx
 !data/Besonderheiten_bei_der_Kundenabrechnung.xlsx
