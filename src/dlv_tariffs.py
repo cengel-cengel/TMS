@@ -280,3 +280,51 @@ def load_fischerwerke():
 LOADERS['409480'] = load_fischerwerke
 
 LOADERS['423650'] = load_herma
+
+def lookup_tariff_price(row):
+    """Berechnet Soll-Frachtpreis für eine Sendung. Dispatch nach Kunden Nr BK."""
+    knr = str(int(row['Kunden Nr BK'])) if pd.notna(row['Kunden Nr BK']) else ''
+    tariff = get_tariff(knr)
+
+    default = pd.Series({
+        'soll_fracht': np.nan,
+        'pricing_basis': 'unbekannt',
+        'weight_band_matched': '',
+        'zone_matched': '',
+        'min_price_tariff': np.nan
+    })
+
+    if tariff.empty or knr not in LOADERS:
+        return default
+
+    try:
+        if knr == '423650':
+            return _lookup_herma(row, tariff)
+        elif knr == '406035':
+            return _lookup_geze(row, tariff)
+        elif knr == '410844':
+            return _lookup_ebm(row, tariff)
+        elif knr == '486073':
+            return _lookup_cht(row, tariff)
+        elif knr == '409480':
+            return _lookup_fischer(row, tariff)
+        else:
+            return default
+    except Exception as e:
+        return default
+
+# Placeholder-Lookups — werden in den nächsten Prompts implementiert
+def _lookup_herma(row, tariff):
+    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung', 'weight_band_matched': '', 'zone_matched': row.get('Empfänger Land',''), 'min_price_tariff': np.nan})
+
+def _lookup_geze(row, tariff):
+    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+def _lookup_ebm(row, tariff):
+    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stellplatz', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+def _lookup_cht(row, tariff):
+    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+def _lookup_fischer(row, tariff):
+    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stellplatz', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
