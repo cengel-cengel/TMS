@@ -869,6 +869,10 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df["price_effect"]     = (df["price_per_kg_new"] - df["price_per_kg_old"]) * df["weight_new"]
     df["min_price_effect"] = (df["effective_price_new"] - df["tariff_price_new"]) - (df["effective_price_old"] - df["tariff_price_old"])
 
+    # --- Schritt 4: Bracket-Effekt (additive, optional) ---
+    df["bracket_change"] = df["bracket_old"] != df["bracket_new"] if "bracket_old" in df.columns else False
+    df["bracket_effect"] = ((df["price_bracket_new"] - df["price_bracket_old"]) * df["weight_old"]) if "price_bracket_old" in df.columns else 0.0
+
     return df
 
 
