@@ -873,6 +873,9 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df["bracket_change"] = df["bracket_old"] != df["bracket_new"] if "bracket_old" in df.columns else False
     df["bracket_effect"] = ((df["price_bracket_new"] - df["price_bracket_old"]) * df["weight_old"]) if "price_bracket_old" in df.columns else 0.0
 
+    # --- Schritt 5: Residual (additive) ---
+    df["residual"] = df["delta_effective"] - df["volume_effect"] - df["price_effect"] - df["min_price_effect"] - df["bracket_effect"]
+
     return df
 
 
