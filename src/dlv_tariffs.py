@@ -315,7 +315,47 @@ def lookup_tariff_price(row):
 
 # Placeholder-Lookups — werden in den nächsten Prompts implementiert
 def _lookup_herma(row, tariff):
-    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung', 'weight_band_matched': '', 'zone_matched': row.get('Empfänger Land',''), 'min_price_tariff': np.nan})
+    """HERMA: Preis pro Sendung. Abrechnungsgewicht = max(Tonnage, LDM*1500, Vol*300).
+    Lookup: Empfänger Land → country, dann PLZ → Zone (je Land unterschiedlich), dann Gewichtsband."""
+
+    country = str(row.get('Empfänger Land', '')).strip()
+    plz = str(row.get('Empfänger PLZ', '')).strip()
+    gewicht = row.get('herma_gewicht', row.get('Tonnage (eff.)', 0))
+    if pd.isna(gewicht) or gewicht <= 0:
+        gewicht = row.get('Tonnage (eff.)', 0)
+
+    # Filter auf Land
+    t = tariff[tariff['country'] == country]
+    if t.empty:
+        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung', 'weight_band_matched': '', 'zone_matched': country, 'min_price_tariff': np.nan})
+
+    # Gewichtsband parsen: "bis 50 kg" → 50, "bis 100 kg" → 100
+    t = t.copy()
+    t['weight_limit'] = t['weight_band_raw'].str.extract(r'(\d+)').astype(float)
+    t = t.dropna(subset=['weight_limit', 'price'])
+    t = t[t['price'].apply(lambda x: pd.notna(x) and isinstance(x, (int, float)))]
+
+    if t.empty:
+        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung', 'weight_band_matched': '', 'zone_matched': country, 'min_price_tariff': np.nan})
+
+    # Passendes Gewichtsband: kleinstes weight_limit >= gewicht
+    passend = t[t['weight_limit'] >= gewicht]
+    if passend.empty:
+        # Über höchstem Band → nehme höchstes
+        match = t.loc[t['weight_limit'].idxmax()]
+    else:
+        match = passend.loc[passend['weight_limit'].idxmin()]
+
+    price = float(match['price']) if pd.notna(match['price']) else np.nan
+    band = str(match['weight_band_raw'])
+
+    return pd.Series({
+        'soll_fracht': price,
+        'pricing_basis': 'EUR/Sendung',
+        'weight_band_matched': band,
+        'zone_matched': country,
+        'min_price_tariff': np.nan
+    })
 
 def _lookup_geze(row, tariff):
     return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
