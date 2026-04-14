@@ -222,4 +222,61 @@ def load_cht():
 
 LOADERS['486073'] = load_cht
 
+def load_fischerwerke():
+    """Lädt Fischerwerke Tarifdaten (KNR 409480). Abrechnungsbasis: EUR/Stellplatz, pro Sendung.
+    Eine Datei pro Route unter Fischerwerke/DLVs & Tarife/2026/.
+    Sheets: Tarifblatt DE-72->XX-YYYY. Spalten: Stellplätze 1-N, Preis pro Sendung."""
+
+    base = Path('/home/user/TMS/Fischerwerke/DLVs & Tarife/2026')
+    if not base.is_dir():
+        for p in Path('/home/user/TMS').rglob('Fischerwerke'):
+            tarif_dir = p / 'DLVs & Tarife' / '2026'
+            if tarif_dir.is_dir():
+                base = tarif_dir
+                break
+        else:
+            # Alternativ: direkt nach Tarifblatt-Dateien suchen
+            for p in Path('/home/user/TMS').rglob('*Fischerwerke*2026*'):
+                if p.is_dir():
+                    base = p
+                    break
+            else:
+                print("Fischerwerke Verzeichnis nicht gefunden")
+                return pd.DataFrame()
+
+    print(f"Fischerwerke Verzeichnis: {base}")
+    all_rows = []
+
+    for f in sorted(base.glob('*.xlsx')):
+        try:
+            raw = pd.read_excel(f, sheet_name=0)
+
+            # Route aus Dateiname extrahieren (z.B. "nach IT-35127 Padua_2026")
+            route = f.stem  # Dateiname ohne Extension
+
+            # Stellplatz-Spalten identifizieren (numerische Spalten)
+            stellplatz_cols = [c for c in raw.columns if str(c).strip().isdigit() or 'Stellpl' in str(c) or 'platz' in str(c).lower()]
+
+            if not stellplatz_cols:
+                # Versuch: alle numerischen Spalten nach den ersten ID-Spalten
+                id_cols = raw.columns[:2].tolist()
+                stellplatz_cols = raw.columns[2:].tolist()
+            else:
+                id_cols = [c for c in raw.columns if c not in stellplatz_cols]
+
+            melted = raw.melt(id_vars=id_cols, value_vars=stellplatz_cols, var_name='stellplaetze_raw', value_name='price')
+            melted['route'] = route
+            melted['pricing_basis'] = 'EUR/Stellplatz'
+            melted['knr'] = '409480'
+            all_rows.append(melted)
+            print(f"  {f.name}: {len(melted)} Zeilen")
+        except Exception as e:
+            print(f"  {f.name}: Fehler - {e}")
+
+    result = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
+    print(f"Fischerwerke gesamt: {len(result)} Tarifzeilen")
+    return result
+
+LOADERS['409480'] = load_fischerwerke
+
 LOADERS['423650'] = load_herma
