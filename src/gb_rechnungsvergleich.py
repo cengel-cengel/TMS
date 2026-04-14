@@ -1445,6 +1445,27 @@ def main():
         except Exception as e:
             print(f"[WARN] BI-Report nicht geladen: {e}\n")
 
+    if not bi_raw.empty:
+        # Datenbereinigung
+        bi_raw['Empfänger PLZ'] = bi_raw['Empfänger PLZ'].str.strip()
+        bi_raw['Versender PLZ'] = bi_raw['Versender PLZ'].str.strip()
+        bi_raw['Empfänger Land'] = bi_raw['Empfänger Land'].str.strip()
+        bi_raw['Kunden Nr BK'] = pd.to_numeric(bi_raw['Kunden Nr BK'], errors='coerce').astype('Int64').astype(str)
+
+        # Stellplätze ableiten wo fehlend
+        bi_raw['Stellplätze_calc'] = np.where(
+            bi_raw['Stellplätze'].isna() | (bi_raw['Stellplätze'] == 0),
+            np.ceil(bi_raw['Lademeter'] / 0.4),
+            bi_raw['Stellplätze']
+        )
+
+        # HERMA Abrechnungsgewicht: max(Tonnage, LDM*1500, Vol*300)
+        bi_raw['herma_gewicht'] = pd.concat([
+            bi_raw['Tonnage (eff.)'],
+            bi_raw['Lademeter'].mul(1500),
+            bi_raw['Volumen'].mul(300),
+        ], axis=1).max(axis=1)
+
     for customer in customers:
         try:
             run_customer(customer, bi_raw, ZIP_PATH)
