@@ -863,6 +863,12 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df["min_price_active_old"] = df["effective_price_old"] > df["tariff_price_old"]
     df["min_price_active_new"] = df["effective_price_new"] > df["tariff_price_new"]
 
+    # --- Schritt 3: PVM-Zerlegung (additive) ---
+    df["delta_effective"]  = df["effective_price_new"] - df["effective_price_old"]
+    df["volume_effect"]    = (df["weight_new"] - df["weight_old"]) * df["price_per_kg_old"]
+    df["price_effect"]     = (df["price_per_kg_new"] - df["price_per_kg_old"]) * df["weight_new"]
+    df["min_price_effect"] = (df["effective_price_new"] - df["tariff_price_new"]) - (df["effective_price_old"] - df["tariff_price_old"])
+
     return df
 
 
