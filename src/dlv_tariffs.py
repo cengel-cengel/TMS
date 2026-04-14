@@ -152,12 +152,13 @@ def load_ebm():
 LOADERS['410844'] = load_ebm
 
 def load_cht():
-    """Lädt CHT Tarifdaten (KNR 486073). Abrechnungsbasis: EUR/100kg, pro Sendung.
-    6 separate Länderdateien unter CHT/2026/. Zonenmapping liegt am Ende der Sheets."""
+    """Lädt CHT Tarifdaten (KNR 486073). EUR/100kg.
+    Struktur: Spalte 0 = 'bis'/'Minimum'/'Komplett', Spalte 1 = Gewichtsgrenze,
+    Spalten 2-N = Preise pro Zone, letzte Spalte = Einheit.
+    Zonenmapping folgt weiter unten (Zeilen mit 'Zone X')."""
 
     base = Path('/home/user/TMS/CHT/2026')
     if not base.is_dir():
-        # Fallback: rglob-Suche
         for p in Path('/home/user/TMS').rglob('CHT'):
             if (p / '2026').is_dir():
                 base = p / '2026'
@@ -169,29 +170,53 @@ def load_cht():
     print(f"CHT Verzeichnis: {base}")
     all_rows = []
 
-    for f in sorted(base.glob('*.xlsx')):
+    for f in sorted(base.glob('*CHT_Export*.xlsx')):
         try:
-            # Erstes Sheet lesen
-            raw = pd.read_excel(f, sheet_name=0)
-            raw.columns = raw.columns.str.strip()
+            raw = pd.read_excel(f, sheet_name=0, header=None)
 
-            weight_cols = [c for c in raw.columns if any(kw in str(c).lower() for kw in ['kg', 'bis'])]
-            id_cols = [c for c in raw.columns if c not in weight_cols]
+            # Tarifzeilen: Spalte 0 enthält 'bis'
+            tarif_mask = raw[0].astype(str).str.lower().str.contains('bis', na=False)
+            tarif_rows = raw[tarif_mask].copy()
 
-            if not weight_cols:
-                print(f"  {f.name}: keine Gewichtsspalten, übersprungen")
+            if tarif_rows.empty:
+                print(f"  {f.name}: keine 'bis'-Zeilen gefunden")
                 continue
 
-            melted = raw.melt(id_vars=id_cols, value_vars=weight_cols, var_name='weight_band_raw', value_name='price_per_100kg')
-            melted['source_file'] = f.name
-            melted['pricing_basis'] = 'EUR/100kg'
-            melted['knr'] = '486073'
-            all_rows.append(melted)
-            print(f"  {f.name}: {len(melted)} Zeilen")
+            # Minimum-Zeile finden
+            min_mask = raw[0].astype(str).str.lower().str.contains('minimum', na=False)
+            min_row = raw[min_mask].iloc[0] if min_mask.any() else None
+
+            # Zonenspalten = Spalten 2 bis vorletzte (letzte = Einheit)
+            n_cols = raw.shape[1]
+            zone_cols = list(range(2, n_cols - 1))
+
+            # Zonenmapping: Zeilen mit 'Zone' in Spalte 0
+            zone_mask = raw[0].astype(str).str.lower().str.contains('zone', na=False)
+            zone_names = raw[zone_mask][0].tolist() if zone_mask.any() else [f'Zone_{i}' for i in zone_cols]
+
+            for _, row in tarif_rows.iterrows():
+                weight_to = row[1]
+                for i, zcol in enumerate(zone_cols):
+                    price = row[zcol]
+                    zone_name = zone_names[i] if i < len(zone_names) else f'Zone_{i}'
+                    min_price = min_row[zcol] if min_row is not None else np.nan
+
+                    all_rows.append({
+                        'weight_band_raw': f'bis {weight_to} kg',
+                        'weight_to': weight_to,
+                        'zone': zone_name,
+                        'price_per_100kg': price,
+                        'min_price': min_price,
+                        'source_file': f.name,
+                        'pricing_basis': 'EUR/100kg',
+                        'knr': '486073'
+                    })
+
+            print(f"  {f.name}: {len(tarif_rows)} Gewichtsstufen x {len(zone_cols)} Zonen")
         except Exception as e:
             print(f"  {f.name}: Fehler - {e}")
 
-    result = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     print(f"CHT gesamt: {len(result)} Tarifzeilen")
     return result
 
