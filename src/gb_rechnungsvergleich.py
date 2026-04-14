@@ -850,6 +850,10 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: _tariff_interval(r["gewicht_kg"], r.get("lademeter")), axis=1
     )
 
+    # --- Schritt 1: Tarifpreise (additive, Voraussetzung: price_per_kg/weight-Spalten) ---
+    df["tariff_price_old"] = df["price_per_kg_old"] * df["weight_old"] if "price_per_kg_old" in df.columns and "weight_old" in df.columns else np.nan
+    df["tariff_price_new"] = df["price_per_kg_new"] * df["weight_new"] if "price_per_kg_new" in df.columns and "weight_new" in df.columns else np.nan
+
     return df
 
 
