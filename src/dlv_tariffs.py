@@ -94,4 +94,61 @@ def load_geze():
 
 LOADERS['406035'] = load_geze
 
+def load_ebm():
+    """Lädt EBM-Papst Tarifdaten (KNR 410844). Abrechnungsbasis: EUR/Stellplatz (LDM-basiert).
+    Sheets: Tariffs_DE_EU (Fracht), Toll_DE_EU (Maut), Surcharges (Zuschläge).
+    Struktur: Pick-up Location, To EU-Location, Leadtime, dann 1-10 Palletspaces.
+    Row 7 enthält LDM-Werte (0.4, 0.8, 1.2, ...). Preise ab Row 9."""
+
+    filepath = Path('/home/user/TMS/EBM-Papst, Mulfingen/20260227_ebm-papst Mulfingen GmbH  Co. KG 74673 Hollenbach_Export Europa.xlsx')
+    if not filepath.exists():
+        # Fallback: rglob-Suche
+        for p in Path('/home/user/TMS').rglob('*ebm-papst*Export*Europa*'):
+            if p.suffix == '.xlsx':
+                filepath = p
+                break
+        else:
+            print("EBM-Papst Tarifdatei nicht gefunden")
+            return pd.DataFrame()
+
+    print(f"EBM-Papst Tarifdatei: {filepath}")
+
+    # Tariffs Sheet lesen - Header ist nicht in Row 0
+    raw = pd.read_excel(filepath, sheet_name='Tariffs_DE_EU', header=None)
+    print(f"  Tariffs_DE_EU: {raw.shape[0]} rows x {raw.shape[1]} cols")
+    print(f"  Row 7 (LDM-Header): {raw.iloc[7].tolist()[:8]}")
+    print(f"  Row 9 (erste Preiszeile): {raw.iloc[9].tolist()[:8]}")
+
+    # Toll Sheet
+    toll = pd.read_excel(filepath, sheet_name='Toll_DE_EU', header=None)
+    print(f"  Toll_DE_EU: {toll.shape[0]} rows x {toll.shape[1]} cols")
+
+    # Surcharges Sheet
+    surcharges = pd.read_excel(filepath, sheet_name='Surcharges')
+    print(f"  Surcharges: {surcharges.shape[0]} rows, Spalten: {surcharges.columns.tolist()}")
+
+    # Parse Tariffs: iloc[7] = Header mit LDM-Werten, ab iloc[9] = Preisdaten (iloc[8] = 'per shipment')
+    ldm_header = raw.iloc[7]  # 0-indexed: row 8 (Pick up Location, To EU-Location, Leadtime, 0.4, 0.8, ...)
+    col_names = raw.iloc[7] if raw.iloc[7].notna().any() else ldm_header
+
+    tariff_data = raw.iloc[9:].copy()  # ab row 10 (row 9 = 'per shipment')
+    tariff_data.columns = range(len(tariff_data.columns))
+
+    # Erste 3 Spalten = Pick-up, To, Leadtime; Rest = Stellplatz-Preise
+    id_cols = [0, 1, 2]
+    price_cols = [c for c in tariff_data.columns if c not in id_cols]
+
+    melted = tariff_data.melt(id_vars=id_cols, value_vars=price_cols, var_name='stellplatz_col', value_name='price')
+    melted.rename(columns={0: 'pickup', 1: 'destination', 2: 'leadtime'}, inplace=True)
+    melted['pricing_basis'] = 'EUR/Stellplatz'
+    melted['knr'] = '410844'
+
+    # Stellplatz-Nummer aus Spaltenposition ableiten (col 3=1SP, col 4=2SP, ...)
+    melted['stellplaetze'] = melted['stellplatz_col'] - 2
+
+    print(f"EBM-Papst: {len(melted)} Tarifzeilen geladen")
+    return melted
+
+LOADERS['410844'] = load_ebm
+
 LOADERS['423650'] = load_herma
