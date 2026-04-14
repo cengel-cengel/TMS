@@ -76,12 +76,12 @@ CUSTOMERS = [
          zip_ax="Noerpel AI/Hornschuch/Rechnungen/Rechnungen AX",
          bi_filter=r"[Hh]ornschuch"),
     dict(name="Herma", slug="herma",
-         fs_dinas=BASE / "data/herma/rechnungen_dinas",
-         fs_ax=BASE / "data/herma/rechnungen_cargosuite",
+         fs_dinas=BASE / "Herma/Herma Dinas/Herma",
+         fs_ax=BASE / "Herma/Herma AX/Herma AX",
          bi_filter=r"[Hh]erma"),
     dict(name="Fischerwerke", slug="fischerwerke",
-         fs_dinas=BASE / "data/fischerwerke/rechnungen_dinas",
-         fs_ax=BASE / "data/fischerwerke/rechnungen_cargosuite",
+         fs_dinas=BASE / "Fischerwerke/DINAS Fischerwerke",
+         fs_ax=BASE / "Fischerwerke/AX Fischerwerke",
          bi_filter=r"[Ff]ischer"),
 ]
 MAX_EXAMPLES   = 5   # max. Sendungen pro Parametergruppe
@@ -513,7 +513,7 @@ def _load_dinas_from_zip(zip_path: Path, zip_folder: str, name_check: str | None
 def _load_dinas_from_fs(folder: Path) -> pd.DataFrame:
     """DINAS-Rechnungen aus Dateisystem-Ordner extrahieren."""
     records = []
-    pdfs = sorted(folder.glob("*.pdf"))
+    pdfs = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".pdf")
     print(f"  {len(pdfs)} DINAS-PDFs gefunden")
     ok = skip = 0
     for pdf_path in pdfs:
@@ -668,7 +668,7 @@ def _load_ax_from_zip(zip_path: Path, zip_folder: str) -> pd.DataFrame:
 def _load_ax_from_fs(folder: Path) -> pd.DataFrame:
     """AX/CARGOsuite-Rechnungen aus Dateisystem-Ordner extrahieren."""
     records = []
-    pdfs = sorted(folder.glob("*.pdf"))
+    pdfs = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".pdf")
     print(f"  {len(pdfs)} AX-PDFs gefunden")
     ok = skip = 0
     for pdf_path in pdfs:
@@ -850,9 +850,14 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
         lambda r: _tariff_interval(r["gewicht_kg"], r.get("lademeter")), axis=1
     )
 
-    # --- Schritt 1: Tarifpreise (additive, Voraussetzung: price_per_kg/weight-Spalten) ---
-    df["tariff_price_old"] = df["price_per_kg_old"] * df["weight_old"] if "price_per_kg_old" in df.columns and "weight_old" in df.columns else np.nan
-    df["tariff_price_new"] = df["price_per_kg_new"] * df["weight_new"] if "price_per_kg_new" in df.columns and "weight_new" in df.columns else np.nan
+    # --- PVM Vorspalten: Platzhalter falls noch nicht befüllt (additive) ---
+    for _c in ["price_per_kg_old", "price_per_kg_new", "weight_old", "weight_new"]:
+        if _c not in df.columns:
+            df[_c] = np.nan
+
+    # --- Schritt 1: Tarifpreise (additive) ---
+    df["tariff_price_old"] = df["price_per_kg_old"] * df["weight_old"]
+    df["tariff_price_new"] = df["price_per_kg_new"] * df["weight_new"]
 
     # --- Schritt 2: Effektivpreise & Mindestpreis-Flag (additive) ---
     for col in ["min_price_old", "min_price_new"]:
