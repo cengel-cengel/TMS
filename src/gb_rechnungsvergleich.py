@@ -854,6 +854,15 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     df["tariff_price_old"] = df["price_per_kg_old"] * df["weight_old"] if "price_per_kg_old" in df.columns and "weight_old" in df.columns else np.nan
     df["tariff_price_new"] = df["price_per_kg_new"] * df["weight_new"] if "price_per_kg_new" in df.columns and "weight_new" in df.columns else np.nan
 
+    # --- Schritt 2: Effektivpreise & Mindestpreis-Flag (additive) ---
+    for col in ["min_price_old", "min_price_new"]:
+        if col not in df.columns:
+            df[col] = np.nan
+    df["effective_price_old"] = df[["tariff_price_old", "min_price_old"]].max(axis=1)
+    df["effective_price_new"] = df[["tariff_price_new", "min_price_new"]].max(axis=1)
+    df["min_price_active_old"] = df["effective_price_old"] > df["tariff_price_old"]
+    df["min_price_active_new"] = df["effective_price_new"] > df["tariff_price_new"]
+
     return df
 
 
