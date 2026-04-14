@@ -876,6 +876,12 @@ def normalize_invoices(df: pd.DataFrame) -> pd.DataFrame:
     # --- Schritt 5: Residual (additive) ---
     df["residual"] = df["delta_effective"] - df["volume_effect"] - df["price_effect"] - df["min_price_effect"] - df["bracket_effect"]
 
+    # --- Schritt 6: Zusatz-Flags (additive) ---
+    df["flag_negative_price"]    = df["price_effect"]     < 0
+    df["flag_negative_volume"]   = df["volume_effect"]    < 0
+    df["flag_negative_minprice"] = df["min_price_effect"] < 0
+    df["flag_bracket_change"]    = df["bracket_change"]
+
     return df
 
 
