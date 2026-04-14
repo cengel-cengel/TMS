@@ -358,7 +358,63 @@ def _lookup_herma(row, tariff):
     })
 
 def _lookup_geze(row, tariff):
-    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+    """GEZE: EUR/100kg. Lookup: PLZ-Prefix (2-stellig) → Zone, dann Gewichtsband.
+    Preis = price_per_100kg * Tonnage / 100. Minimum beachten."""
+
+    plz = str(row.get('Empfänger PLZ', '')).strip()
+    country = str(row.get('Empfänger Land', '')).strip()
+    gewicht = row.get('Tonnage (eff.)', 0)
+    if pd.isna(gewicht) or gewicht <= 0:
+        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    # PLZ-Prefix: 2-stellig für die meisten Länder
+    plz_prefix = plz[:2] if len(plz) >= 2 else plz
+
+    # Zone finden über plz_prefix
+    t = tariff.copy()
+    t['plz_prefix_str'] = t['plz_prefix'].astype(str).str.strip()
+    zone_match = t[t['plz_prefix_str'] == plz_prefix]
+
+    if zone_match.empty:
+        # Fallback: ganzer PLZ-String
+        zone_match = t[t['plz_prefix_str'] == plz]
+
+    if zone_match.empty:
+        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': f'PLZ {plz_prefix} nicht gefunden', 'min_price_tariff': np.nan})
+
+    # Gewichtsband parsen
+    zone_match = zone_match.copy()
+    zone_match['weight_limit'] = zone_match['weight_band_raw'].str.extract(r'(\d+)').astype(float)
+    zone_match = zone_match.dropna(subset=['weight_limit', 'price_per_100kg'])
+
+    if zone_match.empty:
+        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': plz_prefix, 'min_price_tariff': np.nan})
+
+    # Passendes Band: kleinstes weight_limit >= gewicht
+    passend = zone_match[zone_match['weight_limit'] >= gewicht]
+    if passend.empty:
+        match = zone_match.loc[zone_match['weight_limit'].idxmax()]
+    else:
+        match = passend.loc[passend['weight_limit'].idxmin()]
+
+    price_100kg = float(match['price_per_100kg']) if pd.notna(match['price_per_100kg']) else np.nan
+    fracht = price_100kg * gewicht / 100 if pd.notna(price_100kg) else np.nan
+
+    # Minimum anwenden
+    min_price = float(match.get('min_price', np.nan)) if pd.notna(match.get('min_price', np.nan)) else np.nan
+    if pd.notna(min_price) and pd.notna(fracht):
+        fracht = max(fracht, min_price)
+
+    zone_name = str(match.get('zone', plz_prefix))
+    band = str(match['weight_band_raw'])
+
+    return pd.Series({
+        'soll_fracht': fracht,
+        'pricing_basis': 'EUR/100kg',
+        'weight_band_matched': band,
+        'zone_matched': zone_name,
+        'min_price_tariff': min_price
+    })
 
 def _lookup_ebm(row, tariff):
     return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stellplatz', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
