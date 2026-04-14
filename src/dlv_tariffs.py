@@ -151,4 +151,50 @@ def load_ebm():
 
 LOADERS['410844'] = load_ebm
 
+def load_cht():
+    """Lädt CHT Tarifdaten (KNR 486073). Abrechnungsbasis: EUR/100kg, pro Sendung.
+    6 separate Länderdateien unter CHT/2026/. Zonenmapping liegt am Ende der Sheets."""
+
+    base = Path('/home/user/TMS/CHT/2026')
+    if not base.is_dir():
+        # Fallback: rglob-Suche
+        for p in Path('/home/user/TMS').rglob('CHT'):
+            if (p / '2026').is_dir():
+                base = p / '2026'
+                break
+        else:
+            print("CHT Verzeichnis nicht gefunden")
+            return pd.DataFrame()
+
+    print(f"CHT Verzeichnis: {base}")
+    all_rows = []
+
+    for f in sorted(base.glob('*.xlsx')):
+        try:
+            # Erstes Sheet lesen
+            raw = pd.read_excel(f, sheet_name=0)
+            raw.columns = raw.columns.str.strip()
+
+            weight_cols = [c for c in raw.columns if any(kw in str(c).lower() for kw in ['kg', 'bis'])]
+            id_cols = [c for c in raw.columns if c not in weight_cols]
+
+            if not weight_cols:
+                print(f"  {f.name}: keine Gewichtsspalten, übersprungen")
+                continue
+
+            melted = raw.melt(id_vars=id_cols, value_vars=weight_cols, var_name='weight_band_raw', value_name='price_per_100kg')
+            melted['source_file'] = f.name
+            melted['pricing_basis'] = 'EUR/100kg'
+            melted['knr'] = '486073'
+            all_rows.append(melted)
+            print(f"  {f.name}: {len(melted)} Zeilen")
+        except Exception as e:
+            print(f"  {f.name}: Fehler - {e}")
+
+    result = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
+    print(f"CHT gesamt: {len(result)} Tarifzeilen")
+    return result
+
+LOADERS['486073'] = load_cht
+
 LOADERS['423650'] = load_herma
