@@ -1020,6 +1020,17 @@ def _pct_bg(pct):
     if pct > 5:     return C_OK
     return None
 
+def _fmt_num(v, decimals=4):
+    """NaN/None → ''; Zahl → gerundet."""
+    if v is None:
+        return ""
+    try:
+        if math.isnan(float(v)):
+            return ""
+        return round(float(v), decimals)
+    except (TypeError, ValueError):
+        return ""
+
 
 # ── Sheet 0: Zusammenfassung ──────────────────────────────────────────────────
 
@@ -1127,7 +1138,14 @@ def write_paarvergleich(ws, groups):
              "Absender", "Sender PLZ", "Empfänger", "Empf. PLZ", "Empf. Land",
              "Gewicht kg", "Abr.-Gew. kg", "LDM", "Stellplätze",
              "Fracht €", "Maut €", "Diesel €", "Verzollung €", "Neben €",
-             "Erlöse gesamt €", "Fracht €/100kg", "PDF-Datei"]
+             "Erlöse gesamt €", "Fracht €/100kg", "PDF-Datei",
+             # PVM-Spalten (additive)
+             "Tarif € alt", "Tarif € neu",
+             "Effektiv € alt", "Effektiv € neu",
+             "Mindestpr. aktiv alt", "Mindestpr. aktiv neu",
+             "Δ Effektiv", "Volumen-Effekt", "Preis-Effekt", "Mindestpr.-Effekt",
+             "Bracket-Wechsel", "Bracket-Effekt", "Residual",
+             "Flag Preis–", "Flag Volumen–", "Flag Mindestpr.–", "Flag Bracket"]
 
     for ci, h in enumerate(hdr1, 1):
         _hdr(ws.cell(1, ci, h), bg=C_TITLE, sz=9)
@@ -1184,6 +1202,24 @@ def write_paarvergleich(ws, groups):
                     round(ex.get("erloes_eur", 0) or 0, 2),
                     round(rate, 4) if rate and not (isinstance(rate, float) and math.isnan(rate)) else "",
                     ex.get("pdf_name", ""),
+                    # PVM-Spalten (additive)
+                    _fmt_num(ex.get("tariff_price_old")),
+                    _fmt_num(ex.get("tariff_price_new")),
+                    _fmt_num(ex.get("effective_price_old")),
+                    _fmt_num(ex.get("effective_price_new")),
+                    ex.get("min_price_active_old", ""),
+                    ex.get("min_price_active_new", ""),
+                    _fmt_num(ex.get("delta_effective")),
+                    _fmt_num(ex.get("volume_effect")),
+                    _fmt_num(ex.get("price_effect")),
+                    _fmt_num(ex.get("min_price_effect")),
+                    ex.get("bracket_change", ""),
+                    _fmt_num(ex.get("bracket_effect")),
+                    _fmt_num(ex.get("residual")),
+                    ex.get("flag_negative_price", ""),
+                    ex.get("flag_negative_volume", ""),
+                    ex.get("flag_negative_minprice", ""),
+                    ex.get("flag_bracket_change", ""),
                 ]
                 for ci, v in enumerate(vals, 1):
                     cell = ws.cell(ri, ci, v)
