@@ -1,8 +1,11 @@
+import re
+import math
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
 TARIFF_CACHE = {}
+CHT_ZONE_MAPS = {}  # {country_iso: {plz_prefix_int: zone_name}}
 
 def get_tariff(knr: str) -> pd.DataFrame:
     if knr in TARIFF_CACHE:
@@ -62,8 +65,11 @@ def load_herma():
     return result
 
 def load_geze():
-    """Lädt GEZE Tarifdaten (KNR 406035). Abrechnungsbasis: EUR/100kg. Sheet: Exporttarife.
-    Struktur: col A=Zone, col B=PLZ (2-st), col C=Minimum (€/Sendung), col D-I=Gewichtsstufen bis 300/500/1000/1500/2000/2500-3000 kg."""
+    """Lädt GEZE Tarifdaten (KNR 406035). EUR/100kg.
+    Sheet Exporttarife hat mehrere Länderblöcke. Jeder Block:
+    - Länderüberschrift (z.B. 'Portugal')
+    - Header-Zeile: 'ab Werk Leonberg', 'PLZ', 'Minimum', 'bis 300 kg', 'bis 500 kg', ...
+    - Datenzeilen: Zone X, PLZ-Range, Minimum-Preis, Preise/100kg"""
 
     filepath = Path('/home/user/TMS/GEZE Leonberg/2025/20250305_Geze_Export_incl. MP_ PT_GB_IT_FR_AT_ES_CH_inkl. Maut und Zusatzkosten IT-00_ERGÄNZT UM DUBLIN.xlsx')
     if not filepath.exists():
@@ -77,20 +83,58 @@ def load_geze():
             return pd.DataFrame()
 
     print(f"GEZE Tarifdatei: {filepath}")
-    raw = pd.read_excel(filepath, sheet_name='Exporttarife')
-    raw.columns = raw.columns.str.strip()
+    raw = pd.read_excel(filepath, sheet_name='Exporttarife', header=None)
 
-    # Erste 3 Spalten sind Zone, PLZ, Minimum
-    first_cols = raw.columns[:3].tolist()
-    weight_cols = raw.columns[3:].tolist()
+    all_rows = []
+    current_country = None
+    current_headers = None
 
-    melted = raw.melt(id_vars=first_cols, value_vars=weight_cols, var_name='weight_band_raw', value_name='price_per_100kg')
-    melted['pricing_basis'] = 'EUR/100kg'
-    melted['knr'] = '406035'
-    melted.rename(columns={first_cols[0]: 'zone', first_cols[1]: 'plz_prefix', first_cols[2]: 'min_price'}, inplace=True)
+    for idx, row in raw.iterrows():
+        first_cell = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
 
-    print(f"GEZE: {len(melted)} Tarifzeilen geladen")
-    return melted
+        if 'ab Werk' in first_cell or ('leonberg' in first_cell.lower() if first_cell else False):
+            prev_cell = str(raw.iloc[idx - 1, 0]).strip() if idx > 0 and pd.notna(raw.iloc[idx - 1, 0]) else current_country
+            if prev_cell and prev_cell not in ['nan', '']:
+                current_country = prev_cell
+
+            current_headers = []
+            for col_idx in range(3, len(row)):
+                val = str(row.iloc[col_idx]).strip() if pd.notna(row.iloc[col_idx]) else ''
+                if 'kg' in val.lower() or 'bis' in val.lower():
+                    current_headers.append((col_idx, val))
+            print(f"  {current_country}: Header mit {len(current_headers)} Gewichtsstufen")
+            continue
+
+        if current_headers and first_cell.lower().startswith('zone'):
+            zone = first_cell
+            plz_range = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
+            min_price = row.iloc[2] if pd.notna(row.iloc[2]) else np.nan
+            try:
+                min_price = float(min_price)
+            except (ValueError, TypeError):
+                min_price = np.nan
+
+            for col_idx, weight_band in current_headers:
+                price = row.iloc[col_idx] if col_idx < len(row) and pd.notna(row.iloc[col_idx]) else np.nan
+                try:
+                    price = float(price)
+                except (ValueError, TypeError):
+                    continue
+
+                all_rows.append({
+                    'zone': zone,
+                    'plz_prefix': plz_range,
+                    'min_price': min_price,
+                    'weight_band_raw': weight_band,
+                    'price_per_100kg': price,
+                    'country': current_country,
+                    'pricing_basis': 'EUR/100kg',
+                    'knr': '406035'
+                })
+
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+    print(f"GEZE gesamt: {len(result)} Tarifzeilen")
+    return result
 
 LOADERS['406035'] = load_geze
 
@@ -151,11 +195,56 @@ def load_ebm():
 
 LOADERS['410844'] = load_ebm
 
+def _cht_country_from_filename(name):
+    """Leitet ISO-Ländercode aus CHT-Dateiname ab."""
+    n = name.upper()
+    if 'BELGIEN' in n:   return 'BE'
+    if 'ÖSTERREICH' in n or 'OSTERREICH' in n: return 'AT'
+    if 'SPANIEN' in n:   return 'ES'
+    if 'GRIECH' in n:    return 'GR'
+    if 'ITALIEN' in n:   return 'IT'
+    if 'IT-2005' in n:   return 'IT_SPECIAL'
+    return 'UNKNOWN'
+
+def _parse_cht_zone_plz(raw, country_iso):
+    """Parst Zone→PLZ-Mapping aus dem unteren Teil des CHT-Sheets.
+    Gibt dict {plz_prefix_int: zone_name} zurück."""
+    zone_section = False
+    zone_plz = {}
+    for _, row in raw.iterrows():
+        val0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+        if 'Zoneneinteilung' in val0:
+            zone_section = True
+            continue
+        if zone_section and re.match(r'Zone\s*\d+', val0, re.I):
+            zone_name = val0.strip()
+            for col_idx in range(1, len(row)):
+                cell = str(row.iloc[col_idx]).strip() if pd.notna(row.iloc[col_idx]) else ''
+                if not cell or cell == 'nan':
+                    continue
+                # Einzelzellen können mehrere Ranges enthalten: "20 - 22", "238 + 239", "08"
+                for part in re.split(r'[,;]', cell):
+                    part = part.strip()
+                    if '+' in part:
+                        for num_s in part.split('+'):
+                            nums = re.findall(r'\d+', num_s.strip())
+                            for n in nums:
+                                zone_plz[int(n)] = zone_name
+                    elif '-' in part:
+                        nums = re.findall(r'\d+', part)
+                        if len(nums) >= 2:
+                            for plz in range(int(nums[0]), int(nums[-1]) + 1):
+                                zone_plz[plz] = zone_name
+                    else:
+                        nums = re.findall(r'\d+', part)
+                        for n in nums:
+                            zone_plz[int(n)] = zone_name
+    return zone_plz
+
 def load_cht():
-    """Lädt CHT Tarifdaten (KNR 486073). EUR/100kg.
-    Struktur: Spalte 0 = 'bis'/'Minimum'/'Komplett', Spalte 1 = Gewichtsgrenze,
-    Spalten 2-N = Preise pro Zone, letzte Spalte = Einheit.
-    Zonenmapping folgt weiter unten (Zeilen mit 'Zone X')."""
+    """Lädt CHT Tarifdaten (KNR 486073).
+    Parst Zonen-Header, Tarifzeilen (col0='bis', col1=Gewicht, col2..N=Preise, letzte=Einheit)
+    und Zone→PLZ-Mapping. Speichert PLZ-Mapping in CHT_ZONE_MAPS[country_iso]."""
 
     base = Path('/home/user/TMS/CHT/2026')
     if not base.is_dir():
@@ -171,61 +260,100 @@ def load_cht():
     all_rows = []
 
     for f in sorted(base.glob('*CHT_Export*.xlsx')):
+        country_iso = _cht_country_from_filename(f.name)
         try:
             raw = pd.read_excel(f, sheet_name=0, header=None)
 
-            # Tarifzeilen: Spalte 0 enthält 'bis'
-            tarif_mask = raw[0].astype(str).str.lower().str.contains('bis', na=False)
-            tarif_rows = raw[tarif_mask].copy()
+            # Zone-Header-Zeile finden: Zeile wo >=2 Zellen mit "Zone" beginnen
+            zone_names = []   # list of (col_idx, zone_label)
+            for idx, row in raw.iterrows():
+                candidates = [(ci, str(v).strip()) for ci, v in enumerate(row)
+                              if pd.notna(v) and re.match(r'Zone\s*\d+', str(v).strip(), re.I)]
+                if len(candidates) >= 2:
+                    zone_names = candidates
+                    break
 
-            if tarif_rows.empty:
-                print(f"  {f.name}: keine 'bis'-Zeilen gefunden")
-                continue
+            # Einheitsspalte: Spalte direkt nach letzter Zone-Spalte
+            unit_col = (max(ci for ci, _ in zone_names) + 1) if zone_names else 3
 
-            # Minimum-Zeile finden
-            min_mask = raw[0].astype(str).str.lower().str.contains('minimum', na=False)
-            min_row = raw[min_mask].iloc[0] if min_mask.any() else None
+            # Tarifzeilen parsen (nur bis "Zoneneinteilung" oder neuen Abschnittsheader)
+            file_rows = 0
+            for _, row in raw.iterrows():
+                val0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+                # Stopp bei Zoneneinteilung (kommt zwischen Haupttarif und Sonderabschnitt)
+                if 'Zoneneinteilung' in val0:
+                    break
+                if val0.lower() != 'bis':
+                    continue
+                # Gewichtsgrenze: kann "500 kg" oder 500 (float) sein
+                weight_raw = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
+                nums = re.findall(r'\d+', weight_raw.replace('.', '').replace(',', ''))
+                if not nums:
+                    continue
+                weight_to = float(nums[0])
 
-            # Zonenspalten = Spalten 2 bis vorletzte (letzte = Einheit)
-            n_cols = raw.shape[1]
-            zone_cols = list(range(2, n_cols - 1))
+                unit_val = str(row.iloc[unit_col]).strip() if unit_col < len(row) and pd.notna(row.iloc[unit_col]) else ''
+                unit = 'per Sendung' if any(k in unit_val.lower() for k in ['sendung', 'lkw']) else 'per 100 kg'
 
-            # Zonenmapping: Zeilen mit 'Zone' in Spalte 0
-            zone_mask = raw[0].astype(str).str.lower().str.contains('zone', na=False)
-            zone_names = raw[zone_mask][0].tolist() if zone_mask.any() else [f'Zone_{i}' for i in zone_cols]
-
-            for _, row in tarif_rows.iterrows():
-                weight_to = row[1]
-                for i, zcol in enumerate(zone_cols):
-                    price = row[zcol]
-                    zone_name = zone_names[i] if i < len(zone_names) else f'Zone_{i}'
-                    min_price = min_row[zcol] if min_row is not None else np.nan
-
+                if zone_names:
+                    for col_idx, zone_label in zone_names:
+                        price_cell = row.iloc[col_idx] if col_idx < len(row) else np.nan
+                        try:
+                            price = float(price_cell)
+                        except (ValueError, TypeError):
+                            continue
+                        all_rows.append({
+                            'weight_to': weight_to,
+                            'zone': zone_label,
+                            'unit': unit,
+                            'price': price,
+                            'country': country_iso,
+                            'source_file': f.name,
+                            'pricing_basis': 'EUR',
+                            'knr': '486073',
+                        })
+                        file_rows += 1
+                else:
+                    # Belgien: eine Zone, Preis in col 2
+                    try:
+                        price = float(row.iloc[2])
+                    except (ValueError, TypeError):
+                        continue
                     all_rows.append({
-                        'weight_band_raw': f'bis {weight_to} kg',
                         'weight_to': weight_to,
-                        'zone': zone_name,
-                        'price_per_100kg': price,
-                        'min_price': min_price,
+                        'zone': 'Zone 1',
+                        'unit': unit,
+                        'price': price,
+                        'country': country_iso,
                         'source_file': f.name,
-                        'pricing_basis': 'EUR/100kg',
-                        'knr': '486073'
+                        'pricing_basis': 'EUR',
+                        'knr': '486073',
                     })
+                    file_rows += 1
 
-            print(f"  {f.name}: {len(tarif_rows)} Gewichtsstufen x {len(zone_cols)} Zonen")
+            # Zone→PLZ Mapping
+            zone_plz = _parse_cht_zone_plz(raw, country_iso)
+            if zone_plz:
+                CHT_ZONE_MAPS[country_iso] = zone_plz
+                print(f"  {f.name}: {file_rows} Tarifzeilen, {len(zone_plz)} PLZ-Einträge")
+            else:
+                print(f"  {f.name}: {file_rows} Tarifzeilen (kein PLZ-Mapping)")
+
         except Exception as e:
+            import traceback
             print(f"  {f.name}: Fehler - {e}")
+            traceback.print_exc()
 
     result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
-    print(f"CHT gesamt: {len(result)} Tarifzeilen")
+    print(f"CHT gesamt: {len(result)} Tarifzeilen, Länder mit PLZ-Mapping: {list(CHT_ZONE_MAPS.keys())}")
     return result
 
 LOADERS['486073'] = load_cht
 
 def load_fischerwerke():
-    """Lädt Fischerwerke Tarifdaten (KNR 409480). Abrechnungsbasis: EUR/Stellplatz, pro Sendung.
-    Eine Datei pro Route unter Fischerwerke/DLVs & Tarife/2026/.
-    Sheets: Tarifblatt DE-72->XX-YYYY. Spalten: Stellplätze 1-N, Preis pro Sendung."""
+    """Lädt Fischerwerke Tarifdaten (KNR 409480). EUR/Sendung, pro Stellplatz.
+    Struktur: col 0 = Stellplätze (int), col 1 = Preis (float), col 2 = 'per Sendung'.
+    Destination wird aus dem Dateinamen extrahiert: 'nach XX-NNNNN'."""
 
     base = Path('/home/user/TMS/Fischerwerke/DLVs & Tarife/2026')
     if not base.is_dir():
@@ -235,45 +363,60 @@ def load_fischerwerke():
                 base = tarif_dir
                 break
         else:
-            # Alternativ: direkt nach Tarifblatt-Dateien suchen
-            for p in Path('/home/user/TMS').rglob('*Fischerwerke*2026*'):
-                if p.is_dir():
-                    base = p
-                    break
-            else:
-                print("Fischerwerke Verzeichnis nicht gefunden")
-                return pd.DataFrame()
+            print("Fischerwerke Verzeichnis nicht gefunden")
+            return pd.DataFrame()
 
     print(f"Fischerwerke Verzeichnis: {base}")
     all_rows = []
 
     for f in sorted(base.glob('*.xlsx')):
         try:
-            raw = pd.read_excel(f, sheet_name=0)
+            # Destination aus Dateiname: "nach XX-NNNNN (City)"
+            dests = []
+            for m in re.finditer(r'nach\s+([A-Z]{2})-(\S+)', f.stem, re.I):
+                land = m.group(1).upper()
+                plz_raw = re.sub(r'[^0-9A-Za-z]', '', m.group(2))  # normalize
+                dests.append((land, plz_raw))
+            if not dests:
+                # Fallback: suche nur nach Land-PLZ Muster im Dateinamen
+                for m in re.finditer(r'\b([A-Z]{2})-(\d+)', f.stem, re.I):
+                    dests.append((m.group(1).upper(), m.group(2)))
 
-            # Route aus Dateiname extrahieren (z.B. "nach IT-35127 Padua_2026")
-            route = f.stem  # Dateiname ohne Extension
-
-            # Stellplatz-Spalten identifizieren (numerische Spalten)
-            stellplatz_cols = [c for c in raw.columns if str(c).strip().isdigit() or 'Stellpl' in str(c) or 'platz' in str(c).lower()]
-
-            if not stellplatz_cols:
-                # Versuch: alle numerischen Spalten nach den ersten ID-Spalten
-                id_cols = raw.columns[:2].tolist()
-                stellplatz_cols = raw.columns[2:].tolist()
-            else:
-                id_cols = [c for c in raw.columns if c not in stellplatz_cols]
-
-            melted = raw.melt(id_vars=id_cols, value_vars=stellplatz_cols, var_name='stellplaetze_raw', value_name='price')
-            melted['route'] = route
-            melted['pricing_basis'] = 'EUR/Stellplatz'
-            melted['knr'] = '409480'
-            all_rows.append(melted)
-            print(f"  {f.name}: {len(melted)} Zeilen")
+            raw = pd.read_excel(f, sheet_name=0, header=None)
+            file_rows = 0
+            for _, row in raw.iterrows():
+                vals = row.tolist()
+                # Scan all (col_i, col_i+1) pairs for valid (Stellplätze_int, price_float)
+                seen_pairs = set()
+                for ci in range(len(vals) - 1):
+                    v0, v1 = vals[ci], vals[ci + 1]
+                    try:
+                        v0s = str(v0).strip()
+                        n_stpl = int(float(v0s))
+                        price = float(str(v1).strip())
+                        if n_stpl <= 0 or price <= 0 or n_stpl > 100:
+                            continue
+                        if (n_stpl, round(price, 4)) in seen_pairs:
+                            continue
+                        seen_pairs.add((n_stpl, round(price, 4)))
+                    except (ValueError, TypeError):
+                        continue
+                    for (dest_land, dest_plz) in dests:
+                        all_rows.append({
+                            'stellplaetze': n_stpl,
+                            'price': price,
+                            'dest_land': dest_land,
+                            'dest_plz': dest_plz,
+                            'route': f.stem,
+                            'pricing_basis': 'EUR/Sendung',
+                            'knr': '409480',
+                        })
+                        file_rows += 1
+            print(f"  {f.name}: {file_rows} Tarifzeilen, dests={dests}")
         except Exception as e:
             print(f"  {f.name}: Fehler - {e}")
 
-    result = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     print(f"Fischerwerke gesamt: {len(result)} Tarifzeilen")
     return result
 
@@ -358,69 +501,295 @@ def _lookup_herma(row, tariff):
     })
 
 def _lookup_geze(row, tariff):
-    """GEZE: EUR/100kg. Lookup: PLZ-Prefix (2-stellig) → Zone, dann Gewichtsband.
-    Preis = price_per_100kg * Tonnage / 100. Minimum beachten."""
+    """GEZE: EUR/100kg. Lookup: ISO-Land → Ländername, PLZ-Prefix → Zone (Range-Matching), Gewichtsband.
+    Billing: ceil(Tonnage / 100) * 100. Minimum beachten."""
+    import math
 
+    COUNTRY_MAP = {
+        'PT': 'Portugal', 'GB': 'Großbritanien', 'UK': 'Großbritanien',
+        'IE': 'Irland', 'IT': 'Italien', 'FR': 'Frankreich',
+        'AT': 'Österreich', 'ES': 'Spanien', 'CH': 'Schweiz',
+    }
+
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    empf_land = str(row.get('Empfänger Land', '')).strip().upper()
     plz = str(row.get('Empfänger PLZ', '')).strip()
-    country = str(row.get('Empfänger Land', '')).strip()
     gewicht = row.get('Tonnage (eff.)', 0)
+
     if pd.isna(gewicht) or gewicht <= 0:
-        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+        return _nan
 
-    # PLZ-Prefix: 2-stellig für die meisten Länder
-    plz_prefix = plz[:2] if len(plz) >= 2 else plz
+    geze_country = COUNTRY_MAP.get(empf_land)
+    if geze_country is None:
+        return _nan
 
-    # Zone finden über plz_prefix
-    t = tariff.copy()
-    t['plz_prefix_str'] = t['plz_prefix'].astype(str).str.strip()
-    zone_match = t[t['plz_prefix_str'] == plz_prefix]
+    # Frankreich: beide Blöcke ("Frankreich" und "Frankreich Zone 7")
+    if geze_country == 'Frankreich':
+        t = tariff[tariff['country'].str.startswith('Frankreich')].copy()
+    else:
+        t = tariff[tariff['country'] == geze_country].copy()
 
+    if t.empty:
+        return _nan
+
+    # PLZ: 2-stelliger numerischer Prefix
+    plz_digits = ''.join(filter(str.isdigit, plz))
+    try:
+        plz_num = int(plz_digits[:2]) if len(plz_digits) >= 2 else int(plz_digits)
+    except (ValueError, TypeError):
+        return _nan
+
+    def plz_in_range(range_str):
+        """Prüft ob plz_num in einem der Ranges liegt.
+        Unterstützt: '10-19, 26-29', 'Barcelona 08', 'Bilbao, Irun, 01, 17, 20'."""
+        import re
+        for part in str(range_str).split(','):
+            part = part.strip()
+            # Numerische Tokens aus dem Teil extrahieren
+            nums = [int(n) for n in re.findall(r'\d+', part) if n.isdigit()]
+            if not nums:
+                continue
+            if '-' in part and len(nums) >= 2:
+                # Range: erstes und letztes Num als Grenzen
+                if nums[0] <= plz_num <= nums[-1]:
+                    return True
+            else:
+                # Einzelne Nummern
+                if plz_num in nums:
+                    return True
+        return False
+
+    zone_match = t[t['plz_prefix'].apply(plz_in_range)]
     if zone_match.empty:
-        # Fallback: ganzer PLZ-String
-        zone_match = t[t['plz_prefix_str'] == plz]
+        return _nan
 
-    if zone_match.empty:
-        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': f'PLZ {plz_prefix} nicht gefunden', 'min_price_tariff': np.nan})
+    # Gewichtsband parsen: "bis 1.000 kg" → 1000 (Punkt = Tausendertrennzeichen)
+    def parse_wb(s):
+        s2 = str(s).replace('.', '').replace(',', '')
+        m = pd.Series([s2]).str.extract(r'(\d+)')[0].iloc[0]
+        return float(m) if pd.notna(m) else np.nan
 
-    # Gewichtsband parsen
     zone_match = zone_match.copy()
-    zone_match['weight_limit'] = zone_match['weight_band_raw'].str.extract(r'(\d+)').astype(float)
+    zone_match['weight_limit'] = zone_match['weight_band_raw'].apply(parse_wb)
     zone_match = zone_match.dropna(subset=['weight_limit', 'price_per_100kg'])
 
     if zone_match.empty:
-        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': plz_prefix, 'min_price_tariff': np.nan})
+        return _nan
 
-    # Passendes Band: kleinstes weight_limit >= gewicht
-    passend = zone_match[zone_match['weight_limit'] >= gewicht]
+    billing_kg = math.ceil(gewicht / 100) * 100
+
+    passend = zone_match[zone_match['weight_limit'] >= billing_kg]
     if passend.empty:
         match = zone_match.loc[zone_match['weight_limit'].idxmax()]
     else:
         match = passend.loc[passend['weight_limit'].idxmin()]
 
     price_100kg = float(match['price_per_100kg']) if pd.notna(match['price_per_100kg']) else np.nan
-    fracht = price_100kg * gewicht / 100 if pd.notna(price_100kg) else np.nan
+    fracht = price_100kg * billing_kg / 100 if pd.notna(price_100kg) else np.nan
 
-    # Minimum anwenden
-    min_price = float(match.get('min_price', np.nan)) if pd.notna(match.get('min_price', np.nan)) else np.nan
+    min_price_val = match['min_price'] if 'min_price' in match.index else np.nan
+    min_price = float(min_price_val) if pd.notna(min_price_val) else np.nan
     if pd.notna(min_price) and pd.notna(fracht):
         fracht = max(fracht, min_price)
-
-    zone_name = str(match.get('zone', plz_prefix))
-    band = str(match['weight_band_raw'])
 
     return pd.Series({
         'soll_fracht': fracht,
         'pricing_basis': 'EUR/100kg',
-        'weight_band_matched': band,
-        'zone_matched': zone_name,
+        'weight_band_matched': str(match['weight_band_raw']),
+        'zone_matched': str(match['zone']),
         'min_price_tariff': min_price
     })
 
 def _lookup_ebm(row, tariff):
-    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stellplatz', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+    """EBM-Papst: EUR/Stellplatz. LDM → n_stpl = ceil(LDM/0.4), max 10.
+    Destination matching: Empfänger Land + PLZ-Prefix gegen Tarif-Destination."""
+
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stellplatz',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    empf_land = str(row.get('Empfänger Land', '')).strip().upper()
+    empf_plz  = re.sub(r'[\s\-]', '', str(row.get('Empfänger PLZ', '')).strip()).upper()
+    ldm = row.get('Lademeter', 0)
+
+    if pd.isna(ldm) or ldm <= 0:
+        return _nan
+
+    n_stpl = max(1, math.ceil(float(ldm) / 0.4))
+    n_stpl = min(n_stpl, 10)
+
+    def _parse_dest(dest_raw):
+        """Gibt Liste von (country_iso, norm_plz) aus Destination-String zurück."""
+        pairs = []
+        for part in str(dest_raw).split('|'):
+            part = part.strip()
+            if not part or part == 'nan':
+                continue
+            # Format: "XX-YYYYY" oder "XX-YY-ZZZ" → country = erste 2 Großbuchstaben
+            m = re.match(r'^([A-Z]{2})-(.+)$', part, re.I)
+            if m:
+                cntry = m.group(1).upper()
+                plz_norm = re.sub(r'[\s\-]', '', m.group(2)).upper()
+                pairs.append((cntry, plz_norm))
+        return pairs
+
+    def _dest_matches(dest_raw):
+        for cntry, plz_norm in _parse_dest(dest_raw):
+            if cntry != empf_land:
+                continue
+            # Prefix-Match: Empfänger PLZ beginnt mit dest-PLZ oder umgekehrt
+            min_len = min(len(empf_plz), len(plz_norm))
+            if min_len >= 2 and empf_plz[:min_len] == plz_norm[:min_len]:
+                return True
+        return False
+
+    # Nur Hauptpickup (DE-74673) und gültiger Stellplatz
+    t = tariff[
+        (tariff['pickup'] == 'DE-74673') &
+        (tariff['stellplaetze'] == n_stpl)
+    ].copy()
+
+    t = t[pd.to_numeric(t['price'], errors='coerce').notna()].copy()
+    t['price_num'] = pd.to_numeric(t['price'], errors='coerce')
+
+    matches = t[t['destination'].apply(_dest_matches)]
+    if matches.empty:
+        return _nan
+
+    match = matches.iloc[0]
+    soll = float(match['price_num'])
+
+    return pd.Series({
+        'soll_fracht': soll,
+        'pricing_basis': 'EUR/Stellplatz',
+        'weight_band_matched': f'{n_stpl} Stellplätze',
+        'zone_matched': str(match['destination']).strip(),
+        'min_price_tariff': np.nan
+    })
 
 def _lookup_cht(row, tariff):
-    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+    """CHT: EUR/100kg oder EUR/Sendung je nach Gewichtsband.
+    Lookup: Land → country_iso, PLZ-Prefix → Zone (via CHT_ZONE_MAPS), Gewichtsband."""
+
+    LAND_MAP = {'IT': 'IT', 'AT': 'AT', 'BE': 'BE', 'ES': 'ES', 'GR': 'GR'}
+
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    empf_land = str(row.get('Empfänger Land', '')).strip().upper()
+    plz = str(row.get('Empfänger PLZ', '')).strip()
+    gewicht = row.get('Tonnage (eff.)', 0)
+
+    if pd.isna(gewicht) or gewicht <= 0:
+        return _nan
+
+    country_iso = LAND_MAP.get(empf_land)
+    if country_iso is None:
+        return _nan
+
+    # Zone bestimmen
+    if country_iso == 'BE':
+        zone = 'Zone 1'
+    else:
+        plz_digits = ''.join(filter(str.isdigit, plz))
+        if not plz_digits:
+            return _nan
+        try:
+            plz_num = int(plz_digits[:2])
+        except ValueError:
+            return _nan
+        zone_map = CHT_ZONE_MAPS.get(country_iso, {})
+        zone = zone_map.get(plz_num)
+        if zone is None:
+            return _nan
+
+    t = tariff[(tariff['country'] == country_iso) & (tariff['zone'] == zone)].copy()
+    if t.empty:
+        return _nan
+
+    billing_kg = math.ceil(gewicht / 100) * 100
+
+    t['weight_to_num'] = pd.to_numeric(t['weight_to'], errors='coerce')
+    t = t.dropna(subset=['weight_to_num', 'price'])
+
+    passend = t[t['weight_to_num'] >= billing_kg]
+    if passend.empty:
+        match = t.loc[t['weight_to_num'].idxmax()]
+    else:
+        match = passend.loc[passend['weight_to_num'].idxmin()]
+
+    price = float(match['price']) if pd.notna(match['price']) else np.nan
+    unit = str(match.get('unit', 'per 100 kg'))
+
+    if 'sendung' in unit.lower() or 'lkw' in unit.lower():
+        soll = price
+    else:
+        soll = price * billing_kg / 100 if pd.notna(price) else np.nan
+
+    return pd.Series({
+        'soll_fracht': soll,
+        'pricing_basis': unit,
+        'weight_band_matched': f"bis {match['weight_to_num']:.0f} kg",
+        'zone_matched': zone,
+        'min_price_tariff': np.nan
+    })
 
 def _lookup_fischer(row, tariff):
-    return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stellplatz', 'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+    """Fischerwerke: EUR/Sendung. Lookup: Empfänger Land + PLZ → Route, dann Stellplätze → Preis."""
+
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    empf_land = str(row.get('Empfänger Land', '')).strip().upper()
+    empf_plz  = re.sub(r'[\s\-]', '', str(row.get('Empfänger PLZ', '')).strip()).upper()
+    # Stellplätze: direkt aus BI, oder berechnen aus LDM
+    stpl_raw = row.get('Stellplätze_calc', row.get('Stellplätze', np.nan))
+    if pd.isna(stpl_raw) or stpl_raw <= 0:
+        ldm = row.get('Lademeter', 0)
+        stpl_raw = math.ceil(float(ldm) / 0.4) if pd.notna(ldm) and ldm > 0 else 0
+    n_stpl = max(1, int(round(float(stpl_raw))))
+
+    if not empf_land:
+        return _nan
+
+    # Route-Matching: Empfänger Land + PLZ-Prefix gegen dest_land + dest_plz
+    t = tariff[tariff['dest_land'] == empf_land].copy()
+    if t.empty:
+        return _nan
+
+    # PLZ-Prefix-Match (empf_plz beginnt mit dest_plz oder umgekehrt)
+    def _plz_match(dest_plz):
+        d = re.sub(r'[\s\-]', '', str(dest_plz)).upper()
+        min_len = min(len(empf_plz), len(d))
+        return min_len >= 3 and empf_plz[:min_len] == d[:min_len]
+
+    t_route = t[t['dest_plz'].apply(_plz_match)]
+
+    # Fallback: wenn kein PLZ-Match und nur eine Route für dieses Land → nehme die
+    if t_route.empty and t['route'].nunique() == 1:
+        t_route = t
+
+    if t_route.empty:
+        return _nan
+
+    t_stpl = t_route[t_route['stellplaetze'] == n_stpl]
+    if t_stpl.empty:
+        # Nächst-höhere Stellplatz-Stufe nehmen
+        higher = t_route[t_route['stellplaetze'] >= n_stpl]
+        if higher.empty:
+            t_stpl = t_route.loc[[t_route['stellplaetze'].idxmax()]]
+        else:
+            t_stpl = higher.loc[[higher['stellplaetze'].idxmin()]]
+
+    match = t_stpl.iloc[0]
+    soll = float(match['price'])
+    route = str(match['route'])
+
+    return pd.Series({
+        'soll_fracht': soll,
+        'pricing_basis': 'EUR/Sendung',
+        'weight_band_matched': f'{n_stpl} Stellplätze',
+        'zone_matched': route,
+        'min_price_tariff': np.nan
+    })
