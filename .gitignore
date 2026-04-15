@@ -26,5 +26,6 @@ Herma/
 !output/top20_audit_*.xlsx
 !output/gb_rechnungsvergleich.xlsx
 !output/s5_tariff_check_2026.xlsx
+!output/cluster_vergleich_5vs5.xlsx
 !output/*/rechnungsvergleich.xlsx
 !data/Besonderheiten_bei_der_Kundenabrechnung.xlsx
