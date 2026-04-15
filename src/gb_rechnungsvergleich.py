@@ -31,6 +31,8 @@ from openpyxl.utils import get_column_letter
 
 warnings.filterwarnings("ignore")
 
+from dlv_tariffs import lookup_tariff_price
+
 
 # ── Pfade ──────────────────────────────────────────────────────────────────────
 BASE        = Path("/home/user/TMS")
@@ -1465,6 +1467,30 @@ def main():
             bi_raw['Lademeter'].mul(1500),
             bi_raw['Volumen'].mul(300),
         ], axis=1).max(axis=1)
+
+        # Tarifmotor anwenden
+        tariff_result = bi_raw.apply(lookup_tariff_price, axis=1)
+        bi_raw['soll_fracht'] = tariff_result['soll_fracht']
+        bi_raw['pricing_basis'] = tariff_result['pricing_basis']
+        bi_raw['weight_band_matched'] = tariff_result['weight_band_matched']
+        bi_raw['zone_matched'] = tariff_result['zone_matched']
+        bi_raw['min_price_tariff'] = tariff_result['min_price_tariff']
+
+        # PVM-Eingangswerte befüllen basierend auf Periode
+        bi_raw['weight_old'] = np.where(bi_raw['periode']=='PRE', bi_raw['Tonnage (eff.)'], np.nan)
+        bi_raw['weight_new'] = np.where(bi_raw['periode']=='POST', bi_raw['Tonnage (eff.)'], np.nan)
+        bi_raw['min_price_old'] = np.where(bi_raw['periode']=='PRE', bi_raw['min_price_tariff'], np.nan)
+        bi_raw['min_price_new'] = np.where(bi_raw['periode']=='POST', bi_raw['min_price_tariff'], np.nan)
+
+        # price_per_kg ableiten: soll_fracht / Tonnage
+        bi_raw['price_per_kg_old'] = np.where(
+            (bi_raw['periode']=='PRE') & (bi_raw['Tonnage (eff.)'] > 0),
+            bi_raw['soll_fracht'] / bi_raw['Tonnage (eff.)'], np.nan)
+        bi_raw['price_per_kg_new'] = np.where(
+            (bi_raw['periode']=='POST') & (bi_raw['Tonnage (eff.)'] > 0),
+            bi_raw['soll_fracht'] / bi_raw['Tonnage (eff.)'], np.nan)
+
+        print(f"Tarifmotor integriert. soll_fracht befüllt: {bi_raw['soll_fracht'].notna().sum()} von {len(bi_raw)}")
 
     for customer in customers:
         try:
