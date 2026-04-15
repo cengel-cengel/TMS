@@ -17,7 +17,7 @@ Pro Cluster gezeigt:
   - Bis zu 1 AX-Zeile OHNE Abw.     (sample_typ='AX_Kontrolle')
 
 Daten:    output/bi_top20_data.pkl  +  dlv_tariffs.lookup_tariff_price
-Output:   output/cluster_vergleich_5vs5.xlsx  (ein Sheet pro Kunde)
+Output:   output/cluster_vergleich/{KNR}_{Name}_cluster_5vs5.xlsx  (pro Kunde)
 
 Usage:
     python src/cluster_vergleich_5vs5.py
@@ -38,9 +38,9 @@ warnings.filterwarnings('ignore')
 
 BASE    = Path('/home/user/TMS')
 SRC_DIR = BASE / 'src'
-OUT_DIR = BASE / 'output'
-BI_PKL  = OUT_DIR / 'bi_top20_data.pkl'
-OUT_XL  = OUT_DIR / 'cluster_vergleich_5vs5.xlsx'
+OUT_DIR    = BASE / 'output'
+OUT_DIR_CL = OUT_DIR / 'cluster_vergleich'
+BI_PKL     = OUT_DIR / 'bi_top20_data.pkl'
 
 sys.path.insert(0, str(SRC_DIR))
 from dlv_tariffs import lookup_tariff_price  # noqa: E402
@@ -62,6 +62,7 @@ N_CTRL     = 1     # max AX-Zeilen OHNE Abweichung pro Cluster (Kontrollgruppe)
 # ── Ausgabespalten ────────────────────────────────────────────────────────────
 DISPLAY_COLS = [
     'sample_typ',
+    'abweichung_typ',
     'cluster_key',
     'system',
     'Ausgangsbordero',
@@ -87,6 +88,7 @@ DISPLAY_COLS = [
 
 COL_META = {
     'sample_typ':       ('Typ',         14),
+    'abweichung_typ':   ('Abw.Typ',     16),
     'cluster_key':      ('Cluster Key', 42),
     'system':           ('System',       8),
     'Ausgangsbordero':  ('Bordero',     12),
@@ -186,20 +188,12 @@ def build_bi_raw() -> pd.DataFrame:
 # 2) Cluster-Analyse
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _has_abweichung(ist: float, soll: float) -> bool:
-    """True wenn Abweichung > Schwellwert (absolut ODER relativ)."""
-    if pd.isna(ist) or pd.isna(soll) or soll == 0:
-        return False
-    diff = abs(ist - soll)
-    pct  = diff / abs(soll) * 100
-    return diff > ABS_THRESH or pct > REL_THRESH
-
-
 def _cluster_block(pre_rows: pd.DataFrame,
                    post_rows: pd.DataFrame) -> pd.DataFrame | None:
     """
     Baut den Sample-Block für einen cluster_key.
-    Gibt None zurück wenn keine AX-Sendung mit Abweichung existiert.
+    Priorisierung: Unterfakturierung vor Überfakturierung.
+    Gibt None zurück wenn weder Unter- noch Überfakturierung vorhanden.
     """
     post = post_rows.copy()
     post['abweichung_eur'] = post['Erlöse Fracht'] - post['soll_fracht']
@@ -207,14 +201,33 @@ def _cluster_block(pre_rows: pd.DataFrame,
         post['abweichung_eur'] / post['soll_fracht'].replace(0, np.nan) * 100
     )
 
-    mask_abw = post.apply(
-        lambda r: _has_abweichung(r['Erlöse Fracht'], r['soll_fracht']), axis=1
-    )
-    ax_abw  = post[mask_abw].copy()
-    ax_ctrl = post[~mask_abw].copy()
+    unter = post[post['abweichung_eur'] < -ABS_THRESH].copy()
+    ueber = post[post['abweichung_eur'] >  ABS_THRESH].copy()
+    ok    = post[
+        (post['abweichung_eur'] >= -ABS_THRESH) &
+        (post['abweichung_eur'] <=  ABS_THRESH)
+    ].copy()
 
-    if ax_abw.empty:
-        return None  # Cluster überspringen
+    if not unter.empty:
+        # Unterfakturierung: größte negative Abweichung zuerst (kleinste Werte)
+        ax_sel = unter.sort_values('abweichung_eur', ascending=True).head(N_ABW).copy()
+        ax_sel['abweichung_typ'] = 'Unterfakturierung'
+        ctrl_pool = pd.concat([ueber, ok])
+    elif not ueber.empty:
+        # Überfakturierung: größte positive Abweichung zuerst
+        ax_sel = ueber.sort_values('abweichung_eur', ascending=False).head(N_ABW).copy()
+        ax_sel['abweichung_typ'] = 'Überfakturierung'
+        ctrl_pool = ok
+    else:
+        return None  # Kein Ausreißer → Cluster überspringen
+
+    ax_sel['sample_typ'] = 'AX_Abweichung'
+
+    # Kontrollzeile aus nicht-selektierten AX-Zeilen
+    ctrl_pool = ctrl_pool.copy()
+    ctrl_pool['sample_typ']    = 'AX_Kontrolle'
+    ctrl_pool['abweichung_typ'] = 'Kontrolle'
+    ax_ctrl = ctrl_pool.head(N_CTRL)
 
     # PRE: alle Dinas-Zeilen
     pre = pre_rows.copy()
@@ -222,31 +235,30 @@ def _cluster_block(pre_rows: pd.DataFrame,
     pre['abweichung_pct'] = (
         pre['abweichung_eur'] / pre['soll_fracht'].replace(0, np.nan) * 100
     )
-    pre['sample_typ'] = 'Dinas_Basis'
+    pre['sample_typ']    = 'Dinas_Basis'
+    pre['abweichung_typ'] = ''
 
-    # AX mit Abweichung: größte Abw. zuerst, max N_ABW Zeilen
-    ax_abw['sample_typ'] = 'AX_Abweichung'
-    ax_abw = ax_abw.loc[
-        ax_abw['abweichung_eur'].abs().sort_values(ascending=False).index
-    ].head(N_ABW)
-
-    # AX Kontrolle: max N_CTRL Zeilen ohne Abweichung
-    ax_ctrl['sample_typ'] = 'AX_Kontrolle'
-    ax_ctrl = ax_ctrl.head(N_CTRL)
-
-    return pd.concat([pre, ax_abw, ax_ctrl], ignore_index=True)
+    return pd.concat([pre, ax_sel, ax_ctrl], ignore_index=True)
 
 
-def analyse(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Führt Cluster-Analyse für alle 5 Zielkunden durch."""
-    results: dict[str, pd.DataFrame] = {}
+def analyse(df: pd.DataFrame) -> list[dict]:
+    """
+    Führt Cluster-Analyse für alle 5 Zielkunden durch.
+    Gibt Liste von Dicts zurück: {knr, bi_name, result_df}
+    """
+    results = []
 
     for knr, cname in CUSTOMERS.items():
         knr_str = str(knr)
         cdf = df[df['Kunden Nr BK'] == knr_str].copy()
+
+        # BI-Kundenname aus den Daten (Spalte 'Kunden Name')
+        bi_name = cdf['Kunden Name'].dropna().iloc[0] if not cdf.empty else cname
+        bi_name = str(bi_name).strip()
+
         if cdf.empty:
             print(f'  {cname}: keine Daten nach Tarif-Match')
-            results[cname] = pd.DataFrame()
+            results.append({'knr': knr_str, 'bi_name': bi_name, 'result_df': pd.DataFrame()})
             continue
 
         pre_df  = cdf[cdf['system'] == 'alt']
@@ -267,21 +279,23 @@ def analyse(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
         if not parts:
             print(f'  {cname}: keine Cluster mit Abweichung')
-            results[cname] = pd.DataFrame()
+            results.append({'knr': knr_str, 'bi_name': bi_name, 'result_df': pd.DataFrame()})
             continue
 
         result    = pd.concat(parts, ignore_index=True)
         n_ck_abw  = len(parts)
         n_ax_abw  = (result['sample_typ'] == 'AX_Abweichung').sum()
+        n_unter   = (result['abweichung_typ'] == 'Unterfakturierung').sum()
+        n_ueber   = (result['abweichung_typ'] == 'Überfakturierung').sum()
         total_abw = result.loc[
             result['sample_typ'] == 'AX_Abweichung', 'abweichung_eur'
         ].sum()
         print(
-            f'  {cname}: {len(pre_keys):3d} PRE-Cluster, {len(post_keys):3d} POST-Cluster, '
+            f'  {cname}: {len(pre_keys):3d} PRE, {len(post_keys):3d} POST, '
             f'{len(common):3d} gemeinsam → {n_ck_abw:3d} mit Abw. | '
-            f'{n_ax_abw:4d} AX_Abw-Rows  Σ {total_abw:+,.2f} EUR'
+            f'{n_unter} Unter / {n_ueber} Über  Σ {total_abw:+,.2f} EUR'
         )
-        results[cname] = result
+        results.append({'knr': knr_str, 'bi_name': bi_name, 'result_df': result})
 
     return results
 
@@ -362,18 +376,30 @@ def _write_sheet(ws, df: pd.DataFrame, avail: list[str]) -> None:
         row_num += 1
 
 
-def write_excel(results: dict[str, pd.DataFrame]) -> None:
-    wb = Workbook()
-    wb.remove(wb.active)
+def _safe_name(s: str) -> str:
+    """Bereinigt einen String für Dateinamen (ersetzt Leerzeichen/Sonderzeichen)."""
+    import re
+    return re.sub(r'[^\w\-]', '_', s).strip('_')
 
+
+def write_excel(results: list[dict]) -> None:
+    OUT_DIR_CL.mkdir(parents=True, exist_ok=True)
     avail = [c for c in DISPLAY_COLS if c in COL_META]
 
-    for cname, df in results.items():
-        ws = wb.create_sheet(title=cname[:31])
-        _write_sheet(ws, df, avail)
+    for entry in results:
+        knr     = entry['knr']
+        bi_name = entry['bi_name']
+        df      = entry['result_df']
 
-    wb.save(OUT_XL)
-    print(f'\n[Excel] gespeichert: {OUT_XL}')
+        fname   = f"{knr}_{_safe_name(bi_name)}_cluster_5vs5.xlsx"
+        fpath   = OUT_DIR_CL / fname
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = bi_name[:31]
+        _write_sheet(ws, df, avail)
+        wb.save(fpath)
+        print(f'  → {fpath}')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -390,30 +416,32 @@ def main() -> None:
     write_excel(results)
 
     # Zusammenfassung
-    print('\n' + '=' * 70)
+    print('\n' + '=' * 72)
     print('  ZUSAMMENFASSUNG CLUSTER-VERGLEICH')
-    print('=' * 70)
+    print('=' * 72)
     total_rows = 0
     total_eur  = 0.0
-    for cname, res_df in results.items():
+    for entry in results:
+        cname  = entry['bi_name']
+        res_df = entry['result_df']
         if res_df.empty:
             print(f'  {cname:<30s}  — keine Abweichungen')
             continue
-        n_abw  = (res_df['sample_typ'] == 'AX_Abweichung').sum()
-        n_ck   = res_df.loc[res_df['sample_typ'] == 'AX_Abweichung', 'cluster_key'].nunique()
-        summe  = res_df.loc[res_df['sample_typ'] == 'AX_Abweichung', 'abweichung_eur'].sum()
-        total_rows += n_abw
+        abw_df = res_df[res_df['sample_typ'] == 'AX_Abweichung']
+        n_ck    = abw_df['cluster_key'].nunique()
+        n_unter = (abw_df['abweichung_typ'] == 'Unterfakturierung').sum()
+        n_ueber = (abw_df['abweichung_typ'] == 'Überfakturierung').sum()
+        summe   = abw_df['abweichung_eur'].sum()
+        total_rows += len(abw_df)
         total_eur  += summe
         print(
             f'  {cname:<30s}  {n_ck:3d} Cluster  '
-            f'{n_abw:4d} AX-Abw-Rows  Σ {summe:+10,.2f} EUR'
+            f'Unter: {n_unter:3d}  Über: {n_ueber:3d}  '
+            f'Σ {summe:+10,.2f} EUR'
         )
-    print('-' * 70)
-    print(
-        f'  {"GESAMT":<30s}  '
-        f'{total_rows:4d} AX-Abw-Rows  Σ {total_eur:+10,.2f} EUR'
-    )
-    print('=' * 70)
+    print('-' * 72)
+    print(f'  {"GESAMT":<30s}  {total_rows:4d} AX-Abw-Rows  Σ {total_eur:+10,.2f} EUR')
+    print('=' * 72)
 
 
 if __name__ == '__main__':
