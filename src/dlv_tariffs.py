@@ -548,48 +548,69 @@ def lookup_tariff_price(row):
     except Exception as e:
         return default
 
-# Placeholder-Lookups — werden in den nächsten Prompts implementiert
 def _lookup_herma(row, tariff):
     """HERMA: Preis pro Sendung. Abrechnungsgewicht = max(Tonnage, LDM*1500, Vol*300).
-    Lookup: Empfänger Land → country, dann PLZ → Zone (je Land unterschiedlich), dann Gewichtsband."""
+    Lookup: country → Von/Bis PLZ-Bereich → Zone → Gewichtsband."""
+
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
 
     country = str(row.get('Empfänger Land', '')).strip()
-    plz = str(row.get('Empfänger PLZ', '')).strip()
+    plz     = str(row.get('Empfänger PLZ', '')).strip()
     gewicht = row.get('herma_gewicht', row.get('Tonnage (eff.)', 0))
     if pd.isna(gewicht) or gewicht <= 0:
         gewicht = row.get('Tonnage (eff.)', 0)
 
-    # Filter auf Land
+    # 1. Filter auf Land (country = Sheet-Name, z.B. 'AT')
     t = tariff[tariff['country'] == country]
     if t.empty:
-        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung', 'weight_band_matched': '', 'zone_matched': country, 'min_price_tariff': np.nan})
+        return _nan
 
-    # Gewichtsband parsen: "bis 50 kg" → 50, "bis 100 kg" → 100
-    t = t.copy()
-    t['weight_limit'] = t['weight_band_raw'].str.extract(r'(\d+)').astype(float)
-    t = t.dropna(subset=['weight_limit', 'price'])
-    t = t[t['price'].apply(lambda x: pd.notna(x) and isinstance(x, (int, float)))]
+    # 2. PLZ → Zone: Finde die Zeile wo plz_int zwischen Von und Bis liegt
+    try:
+        plz_int = int(''.join(filter(str.isdigit, plz[:5])))
+    except (ValueError, TypeError):
+        plz_int = 0
 
-    if t.empty:
-        return pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung', 'weight_band_matched': '', 'zone_matched': country, 'min_price_tariff': np.nan})
+    if 'Von' in t.columns and 'Bis' in t.columns:
+        t_von = pd.to_numeric(t['Von'], errors='coerce')
+        t_bis = pd.to_numeric(t['Bis'], errors='coerce')
+        t_zone = t[(t_von <= plz_int) & (t_bis >= plz_int)]
+    elif 'Von PLZ' in t.columns:
+        t_plz = pd.to_numeric(t['Von PLZ'], errors='coerce')
+        t_zone = t[t_plz == plz_int]
+    else:
+        t_zone = pd.DataFrame()
 
-    # Passendes Gewichtsband: kleinstes weight_limit >= gewicht
-    passend = t[t['weight_limit'] >= gewicht]
+    if t_zone.empty:
+        t_zone = t  # Fallback: alle Zeilen des Landes (ungenau)
+
+    # 3. Gewichtsband matchen: "bis 400 kg" → weight_limit 400
+    t_zone = t_zone.copy()
+    t_zone['weight_limit'] = (
+        t_zone['weight_band_raw']
+        .str.replace(r'\.', '', regex=True)   # "1.000" → "1000"
+        .str.extract(r'(\d+)')[0]
+        .astype(float)
+    )
+    t_zone = t_zone.dropna(subset=['weight_limit', 'price'])
+
+    if t_zone.empty:
+        return _nan
+
+    passend = t_zone[t_zone['weight_limit'] >= gewicht]
     if passend.empty:
-        # Über höchstem Band → nehme höchstes
-        match = t.loc[t['weight_limit'].idxmax()]
+        match = t_zone.loc[t_zone['weight_limit'].idxmax()]
     else:
         match = passend.loc[passend['weight_limit'].idxmin()]
 
-    price = float(match['price']) if pd.notna(match['price']) else np.nan
-    band = str(match['weight_band_raw'])
-
+    zone = match.get('Zone', '')
     return pd.Series({
-        'soll_fracht': price,
-        'pricing_basis': 'EUR/Sendung',
-        'weight_band_matched': band,
-        'zone_matched': country,
-        'min_price_tariff': np.nan
+        'soll_fracht':        float(match['price']),
+        'pricing_basis':      'EUR/Sendung',
+        'weight_band_matched': str(match['weight_band_raw']),
+        'zone_matched':       f'{country} Zone {zone}',
+        'min_price_tariff':   np.nan,
     })
 
 def _lookup_geze(row, tariff):
