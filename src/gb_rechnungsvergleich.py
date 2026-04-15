@@ -1561,6 +1561,18 @@ def main():
             bi_raw['nk_eust_zoll'].fillna(0)       + bi_raw['nk_versicherung'].fillna(0)
         )
 
+        # --- CLUSTER-ZUORDNUNG ---
+        bins = [0, 50, 100, 150, 200, 250, 300, 500, 1000, 2000, 3000, float('inf')]
+        labels = ['bis 50kg','bis 100kg','bis 150kg','bis 200kg','bis 250kg','bis 300kg','bis 500kg','bis 1000kg','bis 2000kg','bis 3000kg','über 3000kg']
+        bi_raw['weight_band'] = pd.cut(bi_raw['Tonnage (eff.)'], bins=bins, labels=labels, right=True)
+        bi_raw['system'] = bi_raw['periode'].map({'PRE': 'alt', 'POST': 'neu'})
+        bi_raw['cluster_key'] = (
+            bi_raw['Kunden Nr BK'].astype(str) + '|' +
+            bi_raw['Empfänger Land'].astype(str) + '|' +
+            bi_raw['weight_band'].astype(str) + '|' +
+            bi_raw['pricing_basis'].fillna('unbekannt')
+        )
+
     for customer in customers:
         try:
             run_customer(customer, bi_raw, ZIP_PATH)
