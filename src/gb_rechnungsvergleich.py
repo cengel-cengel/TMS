@@ -1492,6 +1492,75 @@ def main():
 
         print(f"Tarifmotor integriert. soll_fracht befüllt: {bi_raw['soll_fracht'].notna().sum()} von {len(bi_raw)}")
 
+        # --- NEBENKOSTEN: Einheitliche Spalten pro Sendung ---
+
+        # Initialisierung aus BI-Spalten (gültig für POST; PRE-Zeilen werden ggf. überschrieben)
+        bi_raw['nk_fracht']         = bi_raw['Erlöse Fracht']
+        bi_raw['nk_diesel']         = bi_raw['Erlöse Diesel']
+        bi_raw['nk_maut']           = bi_raw['Erlöse Maut']
+        bi_raw['nk_lademittel']     = bi_raw['Erlöse Lademittel']
+        bi_raw['nk_peak']           = bi_raw['Erlöse Peak'].fillna(0)
+        bi_raw['nk_nebengebuehren'] = bi_raw['Erlöse Nebengebühr']
+        bi_raw['nk_eust_zoll']      = bi_raw['Erlöse EUST Zoll']
+        bi_raw['nk_versicherung']   = bi_raw['Erlöse Transportversicherung'].fillna(0)
+
+        # Dinas (PRE): Überschreibe nk_ Spalten aus extrahierten PDF-Rechnungsdaten
+        _dinas_path = BASE / 'output' / 'herma_dinas_gb_invoices.csv'
+        if _dinas_path.exists():
+            dinas_inv = pd.read_csv(_dinas_path, sep=';')
+            # Rechnungsnummer aus Dateiname extrahieren: "RECHNUNG03764345.pdf" → "03764345"
+            dinas_inv['Rechnungsnummer'] = dinas_inv['invoice'].str.extract(r'(\d+)')[0]
+            # Nebenkosten als Residual: total_shipment − fracht − diesel (= lsz + ausfuhr + ssd)
+            dinas_inv['neben_eur'] = (
+                dinas_inv['total_shipment'] - dinas_inv['fracht'] - dinas_inv['diesel']
+            ).round(4)
+            # Merge-Key: (Rechnungsnummer, Lademeter gerundet)
+            dinas_inv['_ldm'] = dinas_inv['ldm'].round(2)
+            dinas_key = (
+                dinas_inv[['Rechnungsnummer', '_ldm', 'fracht', 'diesel', 'neben_eur']]
+                .drop_duplicates(subset=['Rechnungsnummer', '_ldm'])
+            )
+
+            # PRE-Zeilen mit Merge-Keys versehen, join auf (Rechnungsnummer, Lademeter)
+            pre_idx = bi_raw.index[bi_raw['periode'] == 'PRE']
+            bi_pre = (
+                bi_raw.loc[pre_idx, ['Rechnungsnummer', 'Lademeter']]
+                .assign(
+                    Rechnungsnummer=lambda d: d['Rechnungsnummer'].astype(str).str.strip(),
+                    _ldm=lambda d: d['Lademeter'].round(2)
+                )
+                .reset_index()                          # bewahrt den Original-Index als Spalte
+                .rename(columns={'index': '_orig_idx'})
+            )
+            merged = (
+                bi_pre
+                .merge(dinas_key, on=['Rechnungsnummer', '_ldm'], how='left')
+                .drop_duplicates(subset=['_orig_idx'])  # max. 1 Match pro bi_raw-Zeile
+                .set_index('_orig_idx')
+            )
+            has_match = merged['fracht'].notna()
+            matched = merged.index[has_match]
+
+            bi_raw.loc[matched, 'nk_fracht']         = merged.loc[has_match, 'fracht'].values
+            bi_raw.loc[matched, 'nk_diesel']         = merged.loc[has_match, 'diesel'].values
+            bi_raw.loc[matched, 'nk_nebengebuehren'] = merged.loc[has_match, 'neben_eur'].values
+            bi_raw.loc[matched, 'nk_maut']           = 0.0
+            bi_raw.loc[matched, 'nk_lademittel']     = 0.0
+            bi_raw.loc[matched, 'nk_peak']           = 0.0
+            bi_raw.loc[matched, 'nk_eust_zoll']      = 0.0
+            bi_raw.loc[matched, 'nk_versicherung']   = 0.0
+
+            print(f"Dinas NK-Merge: {has_match.sum()} PRE-Zeilen mit Rechnungsdaten angereichert "
+                  f"(von {len(pre_idx)} PRE gesamt)")
+
+        # Gesamtsumme Nebenkosten
+        bi_raw['nk_summe'] = (
+            bi_raw['nk_fracht'].fillna(0)         + bi_raw['nk_diesel'].fillna(0)      +
+            bi_raw['nk_maut'].fillna(0)            + bi_raw['nk_lademittel'].fillna(0)  +
+            bi_raw['nk_peak'].fillna(0)            + bi_raw['nk_nebengebuehren'].fillna(0) +
+            bi_raw['nk_eust_zoll'].fillna(0)       + bi_raw['nk_versicherung'].fillna(0)
+        )
+
     for customer in customers:
         try:
             run_customer(customer, bi_raw, ZIP_PATH)
