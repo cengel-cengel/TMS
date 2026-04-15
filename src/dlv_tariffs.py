@@ -20,14 +20,23 @@ def get_tariff(knr: str) -> pd.DataFrame:
 LOADERS = {}
 
 def load_herma():
-    """Lädt HERMA Tarifdaten (KNR 423650). Abrechnungsbasis: max(Tonnage, LDM*1500, Vol*300), Preis pro Sendung."""
-    # Finde den tatsächlichen Pfad zur Herma-Frachtraten-Datei im Projekt
-    # Erwarteter Pfad enthält: Herma, Frachtraten, 2026-2028
-    # Sheets: AT, CH, EE, ES, FR, GB, IRL, IT, PT, RS/MK/BA
+    """Lädt HERMA Tarifdaten (KNR 423650). Abrechnungsbasis: max(Tonnage, LDM*1500, Vol*300), Preis pro Sendung.
 
-    filepath = Path('/home/user/TMS/Herma/Herma Konditionen/Herma Konditionen/Herma Etiketten/2026/20251212_Herma_Frachtraten mit VL_2026-2028_NT.xlsx')
+    Sheets mit Von/Bis/Zone-Struktur (AT, ES, EE) werden vollständig geparst:
+      AT, ES : Bezeichnung | Von | Bis | Zone | bis 50 kg | bis 100 kg | ...
+      EE     : Bezeichnung | Von PLZ | Zone | bis 50 kg | ...
+
+    Sheets mit abweichender Struktur (CH, FR, GB, IRL, IT, PT) werden übersprungen
+    und in einem separaten Schritt implementiert.
+
+    Ergebnis-Spalten: Bezeichnung, Von, Bis, Zone (soweit vorhanden),
+                      weight_band_raw, price, country, pricing_basis, knr
+    """
+    filepath = Path(
+        '/home/user/TMS/Herma/Herma Konditionen/Herma Konditionen/'
+        'Herma Etiketten/2026/20251212_Herma_Frachtraten mit VL_2026-2028_NT.xlsx'
+    )
     if not filepath.exists():
-        # Fallback: rglob-Suche
         for p in Path('/home/user/TMS').rglob('*Herma*Frachtraten*'):
             if p.suffix == '.xlsx':
                 filepath = p
@@ -37,28 +46,111 @@ def load_herma():
             return pd.DataFrame()
 
     print(f"HERMA Tarifdatei: {filepath}")
-    sheets = ['AT','CH','EE','ES','FR','GB','IRL','IT','PT']
+
+    # Sheets mit Von/Bis/Zone-Struktur → vollständig geparst
+    VON_BIS_ZONE = {'AT', 'ES', 'EE'}
     all_rows = []
 
-    for sheet in sheets:
+    for sheet in ['AT', 'CH', 'EE', 'ES', 'FR', 'GB', 'IRL', 'IT', 'PT']:
+        if sheet not in VON_BIS_ZONE:
+            print(f"  {sheet}: übersprungen (andere Struktur, folgt)")
+            continue
         try:
-            raw = pd.read_excel(filepath, sheet_name=sheet)
-            # Gewichtsspalten identifizieren (enthalten "kg" oder "bis")
-            weight_cols = [c for c in raw.columns if any(kw in str(c).lower() for kw in ['kg', 'bis'])]
-            id_cols = [c for c in raw.columns if c not in weight_cols]
+            raw = pd.read_excel(filepath, sheet_name=sheet, header=None)
 
-            if not weight_cols:
-                print(f"  {sheet}: keine Gewichtsspalten gefunden, übersprungen")
+            # Schritt 1: Header-Zeile finden
+            # Kriterium: enthält Gewichtsspalte 'bis X kg' UND Zone-/Von-Kenner
+            header_row_idx = None
+            for i in range(min(15, len(raw))):
+                vals = [str(v).strip() for v in raw.iloc[i]
+                        if str(v).strip() not in ('nan', '')]
+                has_wt  = any(re.search(r'bis\s+[\d.,]+\s*kg', v, re.I) for v in vals)
+                has_key = any(v.lower() in ('zone', 'von', 'von plz') for v in vals)
+                if has_wt and has_key:
+                    header_row_idx = i
+                    break
+
+            if header_row_idx is None:
+                print(f"  {sheet}: keine Header-Zeile gefunden, übersprungen")
                 continue
 
-            melted = raw.melt(id_vars=id_cols, value_vars=weight_cols, var_name='weight_band_raw', value_name='price')
-            melted['country'] = sheet
+            # Schritt 2: Header setzen, Daten ab nächster Zeile
+            raw_hdrs = raw.iloc[header_row_idx].tolist()
+            seen: dict[str, int] = {}
+            headers = []
+            for ci, v in enumerate(raw_hdrs):
+                s = str(v).strip() if str(v).strip() not in ('nan', '') else f'_c{ci}'
+                if s in seen:
+                    seen[s] += 1
+                    s = f'{s}_{seen[s]}'
+                else:
+                    seen[s] = 0
+                headers.append(s)
+
+            data = raw.iloc[header_row_idx + 1:].copy()
+            data.columns = headers
+
+            # Schritt 3: Gewichtsspalten ('bis X kg')
+            weight_cols = [c for c in data.columns
+                           if re.match(r'bis\s+[\d.,]+\s*kg', c, re.I)]
+            if not weight_cols:
+                print(f"  {sheet}: keine Gewichtsspalten, übersprungen")
+                continue
+
+            # Schritt 4: ID-Spalten (erste immer 'Bezeichnung' o.ä., plus Von/Bis/Zone)
+            KNOWN_IDS = ('Bezeichnung', 'Von', 'Bis', 'Zone', 'Von PLZ')
+            id_cols = [c for c in KNOWN_IDS if c in data.columns]
+            if not id_cols:
+                print(f"  {sheet}: keine ID-Spalten gefunden, übersprungen")
+                continue
+
+            # Schritt 5: Nur echte Datenzeilen behalten
+            first_id = id_cols[0]
+            data = data[
+                data[first_id].apply(
+                    lambda v: pd.notna(v) and str(v).strip() not in ('', 'nan')
+                )
+            ].copy()
+
+            # Nur Zeilen mit mindestens einem positiv-numerischen Gewichtspreis
+            def _any_price(row):
+                for c in weight_cols[:6]:
+                    try:
+                        if float(str(row[c]).replace(',', '.')) > 0:
+                            return True
+                    except Exception:
+                        pass
+                return False
+
+            data = data[data.apply(_any_price, axis=1)]
+
+            if data.empty:
+                print(f"  {sheet}: keine Datenzeilen nach Filter, übersprungen")
+                continue
+
+            # Schritt 6: Melt → eine Zeile pro (ID-Kombi × Gewichtsband)
+            melted = data.melt(
+                id_vars=id_cols, value_vars=weight_cols,
+                var_name='weight_band_raw', value_name='price'
+            )
+            melted['country']       = sheet
             melted['pricing_basis'] = 'EUR/Sendung'
-            melted['knr'] = '423650'
+            melted['knr']           = '423650'
+            melted['price'] = pd.to_numeric(
+                melted['price'].astype(str).str.replace(',', '.'), errors='coerce'
+            )
+            melted = melted[melted['price'].notna() & (melted['price'] > 0)]
+
+            # Numerische Von/Bis/Zone normalisieren
+            for col in ('Von', 'Bis', 'Zone'):
+                if col in melted.columns:
+                    melted[col] = pd.to_numeric(melted[col], errors='coerce')
+
             all_rows.append(melted)
             print(f"  {sheet}: {len(melted)} Zeilen geladen")
+
         except Exception as e:
-            print(f"  {sheet}: Fehler - {e}")
+            print(f"  {sheet}: Fehler – {e}")
 
     result = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
     print(f"HERMA gesamt: {len(result)} Tarifzeilen")
