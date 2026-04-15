@@ -17,7 +17,7 @@ Pro Cluster gezeigt:
   - Bis zu 1 AX-Zeile OHNE Abw.     (sample_typ='AX_Kontrolle')
 
 Daten:    output/bi_top20_data.pkl  +  dlv_tariffs.lookup_tariff_price
-Output:   output/cluster_vergleich/{KNR}_{Name}_cluster_5vs5.xlsx  (pro Kunde)
+Output:   output/cluster_vergleich/{KNR}_{Name}_cluster.xlsx  (pro Kunde)
 
 Usage:
     python src/cluster_vergleich_5vs5.py
@@ -52,6 +52,24 @@ CUSTOMERS = {
     406035: 'GEZE GmbH',
     410844: 'EBM-Papst Mulfingen',
     486073: 'CHT Germany GmbH',
+}
+
+# ── NK-Quellen pro Kunde (KNR-String → Excel-Quelldatei + Sheet) ─────────────
+_GEZE_DLV = (
+    BASE / 'GEZE Leonberg/2025/'
+    '20250305_Geze_Export_incl. MP_ PT_GB_IT_FR_AT_ES_CH_'
+    'inkl. Maut und Zusatzkosten IT-00_ERGÄNZT UM DUBLIN.xlsx'
+)
+_EBM_DLV = (
+    BASE / 'EBM-Papst, Mulfingen/'
+    '20260227_ebm-papst Mulfingen GmbH  Co. KG 74673 Hollenbach_Export Europa.xlsx'
+)
+NK_SOURCES: dict[str, dict] = {
+    '406035': {'file': _GEZE_DLV,  'sheet': 'Dieselfloater'},
+    '410844': {'file': _EBM_DLV,   'sheet': 'Surcharges'},
+    # 423650 HERMA: Nebenkosten_2026-2028.docx — python-docx nicht installiert, übersprungen
+    # 486073 CHT:   kein dediziertes NK-File vorhanden
+    # 409480 Fischerwerke: kein NK-File vorhanden
 }
 
 ABS_THRESH = 1.0   # EUR absolute Abweichungsschwelle
@@ -382,6 +400,27 @@ def _safe_name(s: str) -> str:
     return re.sub(r'[^\w\-]', '_', s).strip('_')
 
 
+def _append_nk_sheet(wb: Workbook, knr: str) -> None:
+    """Hängt NK_Konditionen-Sheet an wb an, falls NK-Quelle für diesen KNR vorhanden."""
+    src = NK_SOURCES.get(knr)
+    if src is None:
+        return
+    fp, sname = src['file'], src['sheet']
+    if not fp.exists():
+        print(f'    [NK] Datei nicht gefunden: {fp.name}')
+        return
+    try:
+        nk_df = pd.read_excel(fp, sheet_name=sname, header=None)
+        ws = wb.create_sheet(title='NK_Konditionen')
+        for r_idx, row in enumerate(nk_df.values, 1):
+            for c_idx, val in enumerate(row, 1):
+                if pd.notna(val):
+                    ws.cell(row=r_idx, column=c_idx, value=val)
+        print(f'    [NK] Sheet "{sname}" aus {fp.name} eingefügt ({nk_df.shape[0]} Zeilen)')
+    except Exception as e:
+        print(f'    [NK] Fehler beim Lesen von {fp.name}: {e}')
+
+
 def write_excel(results: list[dict]) -> None:
     OUT_DIR_CL.mkdir(parents=True, exist_ok=True)
     avail = [c for c in DISPLAY_COLS if c in COL_META]
@@ -391,13 +430,14 @@ def write_excel(results: list[dict]) -> None:
         bi_name = entry['bi_name']
         df      = entry['result_df']
 
-        fname   = f"{knr}_{_safe_name(bi_name)}_cluster_5vs5.xlsx"
+        fname   = f"{knr}_{_safe_name(bi_name)}_cluster.xlsx"
         fpath   = OUT_DIR_CL / fname
 
         wb = Workbook()
         ws = wb.active
         ws.title = bi_name[:31]
         _write_sheet(ws, df, avail)
+        _append_nk_sheet(wb, knr)
         wb.save(fpath)
         print(f'  → {fpath}')
 
