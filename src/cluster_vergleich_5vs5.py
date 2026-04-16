@@ -52,6 +52,9 @@ CUSTOMERS = {
     406035: 'GEZE GmbH',
     410844: 'EBM-Papst Mulfingen',
     486073: 'CHT Germany GmbH',
+    408244: 'Helukabel GmbH',
+    406345: 'Bitzer SE',
+    490085: 'Hornschuch AG',
 }
 
 # ── NK-Quellen pro Kunde (KNR-String → Excel-Quelldatei + Sheet) ─────────────
@@ -69,14 +72,15 @@ NK_SOURCES: dict[str, dict] = {
     '410844': {'file': _EBM_DLV,   'sheet': 'Surcharges'},
 }
 
-# Glob-Muster für NK-Dateien ohne festen Pfad (nur xlsx, case-sensitive)
+# Exakte NK-Dateipfade relativ zu BASE (keine Glob-Wildcards nötig)
 _NK_GLOB_PATTERNS: dict[str, list[str]] = {
-    '423650': ['**/*Nebenkosten*Herma*.xlsx', '**/*Herma*Nebenkosten*.xlsx',
-               '**/*NK*Herma*.xlsx',          '**/*Herma*NK*.xlsx'],
-    '486073': ['**/*NK*CHT*.xlsx',            '**/*CHT*NK*.xlsx'],
-    '409480': ['**/*NK*Fischer*.xlsx',        '**/*Fischer*NK*.xlsx'],
-    # Groz-Beckert (KNR falls später ergänzt)
-    'GROZ':   ['**/NK*Groz*.xlsx',            '**/*Groz*NK*.xlsx'],
+    '423650': ['data/extracted/v2/Herma/Nebenbedingungen DINAS/NK Herma.xlsx'],
+    '486073': ['data/extracted/v1/Noerpel AI/CHT/Nebenbedingungen DINAS/NK CHT.xlsx'],
+    '409480': ['data/extracted/v2/Fischer/Nebenbedingungen DINAS/NK Fischerwerke.xlsx'],
+    'GROZ':   ['data/extracted/v1/Noerpel AI/Groz Beckert/Nebenbedingungen DINAS/NK Groz.xlsx'],
+    '408244': ['data/extracted/v1/Noerpel AI/Helu/Nebenbedingungen DINAS/NK Helu.xlsx'],
+    '406345': ['data/extracted/v1/Noerpel AI/Bitzer/Nebenbedingungen DINAS/NK Bitzer.xlsx'],
+    '490085': ['data/extracted/v1/Noerpel AI/Hornschuch/Nebenbedingungen DINAS/NK Hornschuch.xlsx'],
 }
 
 ABS_THRESH = 1.0   # EUR absolute Abweichungsschwelle

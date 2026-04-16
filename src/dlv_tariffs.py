@@ -812,6 +812,12 @@ def lookup_tariff_price(row):
             return _lookup_cht(row, tariff)
         elif knr == '409480':
             return _lookup_fischer(row, tariff)
+        elif knr == '408244':
+            return _lookup_helu(row, tariff)
+        elif knr == '406345':
+            return _lookup_bitzer(row, tariff)
+        elif knr == '490085':
+            return _lookup_hornschuch(row, tariff)
         else:
             return default
     except Exception as e:
@@ -1305,6 +1311,11 @@ _BITZER_BASE  = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Bitzer/DLV/Bit
 _HORNSCHUCH_DLV = Path(
     '/home/user/TMS/data/extracted/v1/Noerpel AI/Hornschuch/DLV/2025/'
     '20250129_Erka_ContiTech Megatrans Deutsc.xlsx'
+)
+# PL-Korrekturdatei: Sondertarife Polen (Sheet 'CT-SSL-WEI-P001.' mit korrigiertem Spalten-Offset)
+_HORNSCHUCH_PL = Path(
+    '/home/user/TMS/data/extracted/v1/Noerpel AI/Hornschuch/DLV/2025/'
+    '20250612_Erka_ContiTech_PL_korrigiert.xlsx'
 )
 _GROZ_BASE    = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Groz Beckert/DLV')
 
@@ -1934,7 +1945,7 @@ def load_hornschuch():
                 price = float(row.iloc[ci])
             except (TypeError, ValueError):
                 continue
-            if price <= 0 or price >= 9999:
+            if pd.isna(price) or price <= 0 or price >= 9999:
                 continue
             all_rows.append({
                 'weight_to':     wt,
@@ -1946,8 +1957,57 @@ def load_hornschuch():
                 'knr':           '490085',
             })
 
+    # ── PL-Korrekturdatei: 'CT-SSL-WEI-P001.' mit Offset -1 ─────────────────
+    # Spalten-Layout im Dot-Sheet: col4=Origin, col5=OriginCluster,
+    # col8=DestCountry, col9=DestCluster, col10=In/Out, col11+=Preise
+    if _HORNSCHUCH_PL.is_file():
+        try:
+            raw_pl = pd.read_excel(_HORNSCHUCH_PL, sheet_name='CT-SSL-WEI-P001.', header=None)
+            hdr_pl = raw_pl.iloc[7]
+            # Gewichtsbänder aus Kopfzeile (col 11-34, analog zu Hauptblatt)
+            wt_bands_pl: list = []
+            for ci in range(11, min(35, raw_pl.shape[1])):
+                v = str(hdr_pl.iloc[ci]).strip() if pd.notna(hdr_pl.iloc[ci]) else ''
+                if not v or v == 'nan':
+                    continue
+                if 'minimum' in v.lower():
+                    wt_bands_pl.append((ci, 50.0, 'per Sendung'))
+                else:
+                    norm = v.replace(',', '.')
+                    nums = re.findall(r'\d+\.?\d*', norm)
+                    if nums:
+                        try:
+                            wt_bands_pl.append((ci, float(nums[-1]), 'per_kg'))
+                        except ValueError:
+                            pass
+            for i in range(8, len(raw_pl)):
+                row = raw_pl.iloc[i]
+                def _c(ci): return str(row.iloc[ci]).strip() if pd.notna(row.iloc[ci]) else ''
+                if _c(4) != 'DE' or _c(5) != '74' or _c(10) != 'Outbound':
+                    continue
+                dest_country = _c(8)
+                zone_cluster = _c(9)
+                if not dest_country or not zone_cluster:
+                    continue
+                for ci, wt, unit in wt_bands_pl:
+                    try:
+                        price = float(row.iloc[ci])
+                    except (TypeError, ValueError):
+                        continue
+                    if price <= 0 or price >= 9999:
+                        continue
+                    all_rows.append({
+                        'weight_to': wt, 'zone': zone_cluster, 'unit': unit,
+                        'price': price, 'country': dest_country,
+                        'pricing_basis': 'EUR/kg', 'knr': '490085',
+                    })
+        except Exception as exc:
+            print(f"  Hornschuch PL-Korrektur Lesefehler: {exc}")
+
     result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     if not result.empty:
+        # Doppelte Zeilen (ggf. aus PL-Überschneidung) entfernen
+        result = result.drop_duplicates(subset=['country', 'zone', 'weight_to'])
         countries = sorted(result['country'].unique().tolist())
         n_zones = result.groupby('country')['zone'].nunique()
         print(f"Hornschuch gesamt: {len(result)} Tarifzeilen, {len(countries)} Länder")
@@ -1961,3 +2021,229 @@ def load_hornschuch():
 
 
 LOADERS['490085'] = load_hornschuch
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lookup-Funktionen für Helu, Bitzer, Hornschuch
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _lookup_helu(row, tariff):
+    """Helu (KNR 408244): EUR/100kg mit Minimum per Sendung.
+    Zone-Mapping je Land:
+      AT/PT  → 'PLZ N' (N = erstes Digit des PLZ)
+      IT/ES  → 2-stelliger PLZ-Prefix (zero-padded)
+      GR     → 'gr-athen' (PLZ-Prefix 11/12/14/16/17) oder 'gr-other'
+      IE     → County-Name via _eircode_to_county()
+      GB     → Zone '1'-'10' via HELU_ZONE_MAPS['GB'] (Outward-Code → Zone)
+      PL     → 'Zone N' via HELU_ZONE_MAPS['PL'] (2-digit int → Zone)
+      CH     → 'CH' + 2-stelliger PLZ-Prefix
+    """
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    country = str(row.get('Empfänger Land', '')).strip().upper()
+    plz     = str(row.get('Empfänger PLZ',  '')).strip()
+    weight  = row.get('Tonnage (eff.)', 0)
+    if pd.isna(weight) or weight <= 0:
+        return _nan
+
+    billing_kg = math.ceil(weight / 100) * 100
+    d = ''.join(filter(str.isdigit, plz))
+
+    # ── Zone bestimmen ────────────────────────────────────────────────────────
+    if country in ('AT', 'PT'):
+        zone = f'PLZ {d[0]}' if d else None
+    elif country in ('IT', 'ES'):
+        zone = d[:2].zfill(2) if len(d) >= 2 else None
+    elif country == 'GR':
+        if len(d) >= 2 and int(d[:2]) in {11, 12, 14, 16, 17}:
+            zone = 'gr-athen'
+        else:
+            zone = 'gr-other'
+    elif country == 'IE':
+        zone = _eircode_to_county(plz)
+    elif country == 'GB':
+        m = re.match(r'^([A-Z]{1,2})', plz.upper())
+        if m:
+            area = m.group(1)
+            gb_map = HELU_ZONE_MAPS.get('GB', {})
+            zone = gb_map.get(area, gb_map.get(area[:1]))
+        else:
+            zone = None
+    elif country == 'PL':
+        if len(d) >= 2:
+            pl_map = HELU_ZONE_MAPS.get('PL', {})
+            zone = pl_map.get(int(d[:2]))
+        else:
+            zone = None
+    elif country == 'CH':
+        zone = f'CH{d[:2]}' if len(d) >= 2 else None
+    else:
+        return _nan
+
+    if zone is None:
+        return _nan
+
+    # ── Tarifzeilen filtern ───────────────────────────────────────────────────
+    t = tariff[(tariff['country'] == country) & (tariff['zone'] == str(zone))].copy()
+    if t.empty:
+        return _nan
+
+    t['wt'] = pd.to_numeric(t['weight_to'], errors='coerce')
+    t = t.dropna(subset=['wt', 'price'])
+
+    passend = t[t['wt'] >= billing_kg]
+    match = (passend.loc[passend['wt'].idxmin()] if not passend.empty
+             else t.loc[t['wt'].idxmax()])
+
+    unit  = str(match.get('unit', 'per 100 kg'))
+    price = float(match['price'])
+    soll  = price if 'sendung' in unit.lower() else price * billing_kg / 100
+
+    return pd.Series({
+        'soll_fracht':         soll,
+        'pricing_basis':       'EUR/100kg',
+        'weight_band_matched': f"bis {match['wt']:.0f} kg",
+        'zone_matched':        f'{country} {zone}',
+        'min_price_tariff':    np.nan,
+    })
+
+
+def _lookup_bitzer(row, tariff):
+    """Bitzer (KNR 406345): EUR/100kg mit Minimum per Sendung.
+    Zone-Mapping je Land:
+      AT/FR/IT/PT/ES → 'Zone N' via BITZER_ZONE_MAPS[country] (2-digit PLZ → Zone)
+      BE             → BENELUX Zone 1
+      NL/LU          → BENELUX Zone 2
+      CH             → 'CH' + 2-stelliger PLZ-Prefix
+    """
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/100kg',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    empf_land = str(row.get('Empfänger Land', '')).strip().upper()
+    plz       = str(row.get('Empfänger PLZ',  '')).strip()
+    weight    = row.get('Tonnage (eff.)', 0)
+    if pd.isna(weight) or weight <= 0:
+        return _nan
+
+    billing_kg = math.ceil(weight / 100) * 100
+    d = ''.join(filter(str.isdigit, plz))
+
+    # ── Land → Tarif-Land + Zone ──────────────────────────────────────────────
+    if empf_land in ('NL', 'LU'):
+        country, zone = 'BENELUX', 'Zone 2'
+    elif empf_land == 'BE':
+        country, zone = 'BENELUX', 'Zone 1'
+    elif empf_land == 'CH':
+        country = 'CH'
+        zone    = f'CH{d[:2]}' if len(d) >= 2 else None
+    elif empf_land in BITZER_ZONE_MAPS:
+        country = empf_land
+        zone    = BITZER_ZONE_MAPS[empf_land].get(int(d[:2])) if len(d) >= 2 else None
+    else:
+        return _nan
+
+    if zone is None:
+        return _nan
+
+    # ── Tarifzeilen filtern ───────────────────────────────────────────────────
+    t = tariff[(tariff['country'] == country) & (tariff['zone'] == str(zone))].copy()
+    if t.empty:
+        return _nan
+
+    t['wt'] = pd.to_numeric(t['weight_to'], errors='coerce')
+    t = t.dropna(subset=['wt', 'price'])
+
+    passend = t[t['wt'] >= billing_kg]
+    match = (passend.loc[passend['wt'].idxmin()] if not passend.empty
+             else t.loc[t['wt'].idxmax()])
+
+    unit  = str(match.get('unit', 'per 100 kg'))
+    price = float(match['price'])
+    soll  = price if 'sendung' in unit.lower() else price * billing_kg / 100
+
+    return pd.Series({
+        'soll_fracht':         soll,
+        'pricing_basis':       'EUR/100kg',
+        'weight_band_matched': f"bis {match['wt']:.0f} kg",
+        'zone_matched':        f'{country} {zone}',
+        'min_price_tariff':    np.nan,
+    })
+
+
+# Länder in CT-SSL-WEI-P001 mit 1-stelligem PLZ-Prefix als Zone-Key
+_HS_SINGLE_DIGIT = frozenset({
+    'AT', 'BE', 'CH', 'DK', 'GR', 'LT', 'LU', 'LV', 'NL', 'PT', 'SI',
+})
+
+
+def _lookup_hornschuch(row, tariff):
+    """Hornschuch (KNR 490085): EUR/kg direkt (ContiTech MegaTrans CT-SSL-WEI-P001).
+    Zone-Key = PLZ-Prefix (2-stellig für IT/FR/ES/PL/…, 1-stellig für AT/BE/CH/…).
+    Minimum-Band (weight_to=50, per Sendung) für Sendungen ≤ 50 kg.
+    """
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/kg',
+                      'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
+
+    country = str(row.get('Empfänger Land', '')).strip().upper()
+    plz     = str(row.get('Empfänger PLZ',  '')).strip()
+    weight  = row.get('Tonnage (eff.)', 0)
+    if pd.isna(weight) or weight <= 0:
+        return _nan
+
+    d = ''.join(filter(str.isdigit, plz))
+
+    # ── Zone aus PLZ ──────────────────────────────────────────────────────────
+    if country == 'GB':
+        m = re.match(r'^([A-Z]{1,2})', plz.upper())
+        zone = m.group(1) if m else None
+    elif country == 'IE':
+        ec = plz.upper().strip()
+        zone = ec[:3] if len(ec) >= 3 else None
+    elif country in _HS_SINGLE_DIGIT:
+        zone = d[:1] if d else None
+    else:
+        zone = d[:2] if len(d) >= 2 else None
+
+    if zone is None:
+        return _nan
+
+    t = tariff[(tariff['country'] == country) & (tariff['zone'] == str(zone))].copy()
+    if t.empty and country == 'PT' and d:
+        # Sonderfall PT-Inseln: zone '9 (islands)' → startswith('9')
+        t = tariff[(tariff['country'] == 'PT') &
+                   tariff['zone'].str.startswith(d[:1])].copy()
+    if t.empty:
+        return _nan
+
+    t['wt'] = pd.to_numeric(t['weight_to'], errors='coerce')
+    t = t.dropna(subset=['wt', 'price'])
+
+    # Minimum-Pauschale für ≤ 50 kg
+    if weight <= 50:
+        min_rows = t[t['unit'] == 'per Sendung']
+        if not min_rows.empty:
+            price = float(min_rows.iloc[0]['price'])
+            return pd.Series({
+                'soll_fracht': price, 'pricing_basis': 'EUR/kg',
+                'weight_band_matched': 'minimum <50kg',
+                'zone_matched': f'{country} {zone}', 'min_price_tariff': np.nan,
+            })
+
+    # Gewichtsband: kleinster weight_to ≥ weight (nur per_kg-Zeilen)
+    per_kg = t[t['unit'] == 'per_kg']
+    if per_kg.empty:
+        per_kg = t
+    passend = per_kg[per_kg['wt'] >= weight]
+    match = (passend.loc[passend['wt'].idxmin()] if not passend.empty
+             else per_kg.loc[per_kg['wt'].idxmax()])
+
+    soll = weight * float(match['price'])
+
+    return pd.Series({
+        'soll_fracht':         soll,
+        'pricing_basis':       'EUR/kg',
+        'weight_band_matched': f"bis {match['wt']:.0f} kg",
+        'zone_matched':        f'{country} {zone}',
+        'min_price_tariff':    np.nan,
+    })
