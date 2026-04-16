@@ -116,6 +116,17 @@ for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
 matched_pre = pre['Dinas Fracht'].notna().sum()
 print(f'DINAS NK re-joined: {matched_pre}/{len(pre)} PRE Zeilen matched (sendungs_nr)')
 
+# Filter PRE-Zeilen mit Fracht=0 (Zoll/NK-only Sendungen, nicht vergleichbar)
+zero_pre = pre[pre['Dinas Fracht'].fillna(-1) == 0]
+if len(zero_pre):
+    print(f'Filtere {len(zero_pre)} PRE Zeile(n) mit Dinas Fracht=0 '
+          f'(Zoll/NK-only, kein Frachtvergleich möglich):')
+    for _, z in zero_pre.iterrows():
+        print(f'  RN={z.get("Rechnungsnummer")}  Auftr={z.get("Auftragsnummer")}  '
+              f'Gesamt={z.get("Dinas Gesamt"):.2f} EUR  '
+              f'(Verzollung={z.get("Dinas Verzollung",0):.2f})')
+pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
+
 # ── Eff. EUR/100kg pro Sendung ─────────────────────────────────────────────
 pre['_eff_100kg']  = pre['Dinas Fracht']  / pre['Tonnage (eff.)'] * 100
 post['_eff_100kg'] = post['AX Fracht']    / post['Tonnage (eff.)'] * 100
@@ -233,18 +244,19 @@ THIN = Side(border_style='thin', color='BBBBBB')
 BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 EUR_FMT = '#,##0.00'
 
-# 24 Spalten
-HDR_COLS = ['System','Auftrags-Nr','Rech.-Nr','Kunde','Land','Empf.PLZ','Vers.PLZ',
+# 25 Spalten
+HDR_COLS = ['System','Auftrags-Nr','Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
             'Gew.band','Zone','Basis','Basispreis',
-            'Tonnage kg','Soll EUR',
-            'Fracht EUR','Eff. EUR/100kg','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
+            'Eff. Preis','Tonnage kg','Soll EUR',
+            'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
             'Erlöse','Abw. Grund']
-N = len(HDR_COLS)  # 24
+N = len(HDR_COLS)  # 25
 
-# 11=Basispreis, 13=Soll EUR, 14=Fracht EUR, 15=Eff. EUR/100kg, 16-22=NK, 23=Erlöse
-EUR_COLS = {11,13,14,15,16,17,18,19,20,21,22,23}   # 1-based
-KG_COL   = 12   # Tonnage kg
+# 12=Basispreis, 13=Eff.Preis, 15=Soll EUR, 16=Fracht EUR, 17-23=NK, 24=Erlöse
+EUR_COLS = {12,13,15,16,17,18,19,20,21,22,23,24}   # 1-based
+KG_COL   = 14   # Tonnage kg
+DATE_COL = 4    # Sendungsdatum
 
 FILL_HDR  = fill('1F497D')
 FILL_CLU  = fill('2E75B6')
@@ -265,8 +277,9 @@ def write_row(ws, row, values, row_fill, is_ctrl=False):
     rf = FILL_CTRL if is_ctrl else row_fill
     for ci, v in enumerate(values, 1):
         if v is not None and isinstance(v, float) and math.isnan(v): v = None
-        fmt = EUR_FMT if ci in EUR_COLS else None
-        al  = 'right' if ci in EUR_COLS or ci in (KG_COL, 10, 12) else 'left'
+        fmt = ('DD.MM.YYYY' if ci == DATE_COL else
+               EUR_FMT if ci in EUR_COLS else None)
+        al  = 'right' if ci in EUR_COLS or ci == KG_COL else 'left'
         wc(ws, row, ci, v, rf, fnt(size=9), al, fmt, BRD)
 
 # ── Sheet 1: Helu GmbH ────────────────────────────────────────────────────
@@ -330,11 +343,12 @@ def build_main_sheet(ws):
             bp      = r.get('_basispreis')
             eff     = r.get('_eff_100kg')
             is_ctrl = (r.name == ctrl_pi)
-            vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'), KUNDE,
+            vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
+                    r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
-                    gwband, zone, BASIS, bp,
+                    gwband, zone, BASIS, bp, eff,
                     r.get('Tonnage (eff.)'), soll,
-                    nk[0], eff, *nk[1:],
+                    *nk,
                     erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_ALT, is_ctrl)
 
@@ -348,17 +362,18 @@ def build_main_sheet(ws):
             bp      = r.get('_basispreis')
             eff     = r.get('_eff_100kg')
             is_ctrl = (r.name == ctrl_oi)
-            vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'), KUNDE,
+            vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
+                    r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
-                    gwband, zone, BASIS, bp,
+                    gwband, zone, BASIS, bp, eff,
                     r.get('Tonnage (eff.)'), soll,
-                    nk[0], eff, *nk[1:],
+                    *nk,
                     erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_NEU, is_ctrl)
 
         row += 1  # Leerzeile
 
-    widths = [8,15,13,18,5,8,8,11,8,10,10, 9,10, 10,10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,13,12,18,5,8,8,11,8,10,10, 10,9,10, 10,9,9,9,9,9,9,9, 11,22]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
