@@ -67,9 +67,16 @@ _EBM_DLV = (
 NK_SOURCES: dict[str, dict] = {
     '406035': {'file': _GEZE_DLV,  'sheet': 'Dieselfloater'},
     '410844': {'file': _EBM_DLV,   'sheet': 'Surcharges'},
-    # 423650 HERMA: Nebenkosten_2026-2028.docx — python-docx nicht installiert, übersprungen
-    # 486073 CHT:   kein dediziertes NK-File vorhanden
-    # 409480 Fischerwerke: kein NK-File vorhanden
+}
+
+# Glob-Muster für NK-Dateien ohne festen Pfad (nur xlsx, case-sensitive)
+_NK_GLOB_PATTERNS: dict[str, list[str]] = {
+    '423650': ['**/*Nebenkosten*Herma*.xlsx', '**/*Herma*Nebenkosten*.xlsx',
+               '**/*NK*Herma*.xlsx',          '**/*Herma*NK*.xlsx'],
+    '486073': ['**/*NK*CHT*.xlsx',            '**/*CHT*NK*.xlsx'],
+    '409480': ['**/*NK*Fischer*.xlsx',        '**/*Fischer*NK*.xlsx'],
+    # Groz-Beckert (KNR falls später ergänzt)
+    'GROZ':   ['**/NK*Groz*.xlsx',            '**/*Groz*NK*.xlsx'],
 }
 
 ABS_THRESH = 1.0   # EUR absolute Abweichungsschwelle
@@ -489,24 +496,54 @@ def _safe_name(s: str) -> str:
 
 
 def _append_nk_sheet(wb: Workbook, knr: str) -> None:
-    """Hängt NK_Konditionen-Sheet an wb an, falls NK-Quelle für diesen KNR vorhanden."""
+    """Hängt NK_Konditionen-Sheet an wb an.
+
+    Strategie:
+    1. NK_SOURCES: fester Pfad + Sheet-Name (GEZE, EBM)
+    2. _NK_GLOB_PATTERNS: Suche per glob im Projektverzeichnis (xlsx only)
+    Falls nichts gefunden: Sheet wird übersprungen.
+    """
+    # ── 1) Fester Pfad ────────────────────────────────────────────────────────
     src = NK_SOURCES.get(knr)
-    if src is None:
+    if src is not None:
+        fp, sname = src['file'], src['sheet']
+        if not fp.exists():
+            print(f'    [NK] Datei nicht gefunden: {fp.name}')
+            return
+        try:
+            nk_df = pd.read_excel(fp, sheet_name=sname, header=None)
+            ws = wb.create_sheet(title='NK_Konditionen')
+            for r_idx, row in enumerate(nk_df.values, 1):
+                for c_idx, val in enumerate(row, 1):
+                    if pd.notna(val):
+                        ws.cell(row=r_idx, column=c_idx, value=val)
+            print(f'    [NK] Sheet "{sname}" aus {fp.name} eingefügt ({nk_df.shape[0]} Zeilen)')
+        except Exception as e:
+            print(f'    [NK] Fehler beim Lesen von {fp.name}: {e}')
         return
-    fp, sname = src['file'], src['sheet']
-    if not fp.exists():
-        print(f'    [NK] Datei nicht gefunden: {fp.name}')
+
+    # ── 2) Glob-Suche ─────────────────────────────────────────────────────────
+    pats = _NK_GLOB_PATTERNS.get(knr, [])
+    nk_fp: Path | None = None
+    for pat in pats:
+        hits = [p for p in BASE.glob(pat) if not p.name.startswith('~')]
+        if hits:
+            nk_fp = hits[0]
+            break
+
+    if nk_fp is None:
+        print(f'    [NK] Keine NK-xlsx für KNR {knr} gefunden — Sheet übersprungen')
         return
     try:
-        nk_df = pd.read_excel(fp, sheet_name=sname, header=None)
+        nk_df = pd.read_excel(nk_fp, header=None)
         ws = wb.create_sheet(title='NK_Konditionen')
         for r_idx, row in enumerate(nk_df.values, 1):
             for c_idx, val in enumerate(row, 1):
                 if pd.notna(val):
                     ws.cell(row=r_idx, column=c_idx, value=val)
-        print(f'    [NK] Sheet "{sname}" aus {fp.name} eingefügt ({nk_df.shape[0]} Zeilen)')
+        print(f'    [NK] {nk_fp.name} eingefügt ({nk_df.shape[0]} Zeilen)')
     except Exception as e:
-        print(f'    [NK] Fehler beim Lesen von {fp.name}: {e}')
+        print(f'    [NK] Fehler beim Lesen von {nk_fp.name}: {e}')
 
 
 def write_excel(results: list[dict]) -> None:
@@ -515,8 +552,17 @@ def write_excel(results: list[dict]) -> None:
 
     for entry in results:
         knr     = entry['knr']
-        bi_name = entry['bi_name']
         df      = entry['result_df']
+
+        # Name aus BI-Daten ('Name' bevorzugt, Fallback 'Kunden Name', dann CUSTOMERS-Dict)
+        bi_name = entry['bi_name']
+        if not df.empty:
+            for _nc in ('Name', 'Kunden Name'):
+                if _nc in df.columns:
+                    _vals = df[_nc].dropna().unique()
+                    if len(_vals) > 0:
+                        bi_name = str(_vals[0]).strip()
+                        break
 
         fname   = f"{knr}_{_safe_name(bi_name)}_cluster.xlsx"
         fpath   = OUT_DIR_CL / fname
