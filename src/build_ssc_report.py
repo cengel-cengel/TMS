@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0, 'src')
 from dinas_pdf_parser import parse_one, flatten
 
-SRC_XLSX  = Path('output/sika_dinas_vergleich.xlsx')
+BI_PKL    = Path('output/bi_top20_data.pkl')
 NK_XLSX   = Path('data/extracted/v1/Noerpel AI/SIka/Nebenbedingungen DINAS/NK Sika.xlsx')
 DLV_XLSX  = Path('data/extracted/v1/Noerpel AI/SIka/DLV/SIKA Deutschland GmbH Stuttgart/2026/20260211_SIKA DE & SSC Export div. LKZ_Stellplatzofferte_2026.xlsx')
 DINAS_DIR = Path('data/extracted/v1/Noerpel AI/SIka/Rechnungen/Rechnungen DINAS')
@@ -67,9 +67,21 @@ print('Lade Sika DLV...')
 dlv = load_sika_dlv()
 print(f'DLV: {len(dlv)} Routen')
 
-# ── Daten laden ────────────────────────────────────────────────────────────
-pre  = pd.read_excel(SRC_XLSX, sheet_name='PRE Dinas Detail',  header=2)
-post = pd.read_excel(SRC_XLSX, sheet_name='POST AX Detail',    header=2)
+# ── Daten laden aus BI-Pickle (KNR 511241, nur Export) ────────────────────
+_bi = pd.read_pickle(BI_PKL)['df']
+_ssc = _bi[(_bi['Kunden Nr BK'] == 511241) & (_bi['Empfänger Land'] != 'DE')].copy()
+pre  = _ssc[_ssc['periode'] == 'PRE'].copy()
+post = _ssc[_ssc['periode'] == 'POST'].copy()
+print(f'SSC geladen: {len(pre)} PRE, {len(post)} POST (nur Export)')
+
+# POST: Erlöse-Spalten → AX-Namen
+post = post.rename(columns={
+    'Erlöse Fracht': 'AX Fracht', 'Erlöse Diesel': 'AX Diesel',
+    'Erlöse Maut': 'AX Maut', 'Erlöse Nebengebühr': 'AX Nebengebühr',
+    'Erlöse Lademittel': 'AX Lademittel', 'Erlöse Peak': 'AX Peak',
+    'Erlöse EUST Zoll': 'AX EUST/Zoll', 'Erlöse Transportversicherung': 'AX Versicherung',
+    'Erloese': 'AX Gesamt',
+})
 
 for df, name in [(pre,'PRE'),(post,'POST')]:
     bad = df['Rechnungsnummer'].apply(
@@ -306,5 +318,5 @@ last_row = build_main_sheet(wb.active)
 build_nk_sheet(wb.create_sheet('NK_Konditionen'))
 wb.save(OUT_XLSX)
 print(f'\nGespeichert: {OUT_XLSX}')
-print(f'  Sheet "Sika Deutschland GmbH": {last_row} Zeilen')
+print(f'  Sheet "Sika Supply Center GmbH": {last_row} Zeilen')
 print(f'  Sheet "NK_Konditionen": NK Sika.xlsx kopiert')
