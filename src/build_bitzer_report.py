@@ -2,339 +2,476 @@
 """
 build_bitzer_report.py
 ======================
-Erstellt output/billing_report/bitzer_dinas_vergleich.xlsx
-mit 4 Sheets: Zusammenfassung | PRE Dinas Detail | POST AX Detail | Cluster-Vergleich
-
-Datenquellen:
-  - output/bitzer_dinas_vergleich.xlsx   (PRE/POST already matched)
-  - cluster_vergleich/406345_Bitzer*.xlsx (Soll EUR per Auftrag)
+Erstellt output/billing_report/bitzer_dinas_vergleich.xlsx:
+  Sheet 1 "Bitzer SE"      — 33-Spalten Cluster-Vergleich (alt/neu, ▶-Header)
+  Sheet 2 "NK_Konditionen" — NK Bitzer.xlsx kopiert
 """
 
-import math, re
+import glob as _glob, math, re
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+import sys; sys.path.insert(0, 'src')
+from dlv_tariffs import load_bitzer, _lookup_bitzer
+from dinas_pdf_parser import parse_one, flatten
 
 SRC_XLSX    = Path('/home/user/TMS/output/bitzer_dinas_vergleich.xlsx')
 CLUSTER_XLS = Path('/home/user/TMS/output/cluster_vergleich/406345_Bitzer_Kühlmaschinenbau_GmbH_cluster.xlsx')
+NK_XLSX     = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Bitzer/Nebenbedingungen DINAS/NK Bitzer.xlsx')
+DINAS_DIR   = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Bitzer/Rechnungen/Rechnungen DINAS')
+CACHE       = Path('/home/user/TMS/output/dinas_cache_406345.pkl')
 REPORT_DIR  = Path('/home/user/TMS/output/billing_report')
 OUT_XLSX    = REPORT_DIR / 'bitzer_dinas_vergleich.xlsx'
-
 REPORT_DIR.mkdir(exist_ok=True)
 
-# ── Gewichtsbänder ─────────────────────────────────────────────────────────────
-BANDS = [50, 100, 150, 200, 250, 300, 500, 750, 1000, 2000, 3000]
-def gew_band(kg):
-    try:
-        kg = float(kg)
-    except (TypeError, ValueError):
-        return '?'
-    if math.isnan(kg) or kg <= 0:
-        return '?'
-    for b in BANDS:
-        if kg <= b:
-            return f'bis {b}kg'
-    return 'über 3000kg'
+KNR   = 406345
+KUNDE = 'Bitzer SE'
+BASIS = 'EUR/100kg'
 
-def plz2(plz): return str(plz).strip()[:2]
+BANDS = [50,100,150,200,250,300,500,750,1000,2000,3000]
+def gew_band(kg):
+    try: kg = float(kg)
+    except: return '?'
+    if math.isnan(kg) or kg <= 0: return '?'
+    for b in BANDS:
+        if kg <= b: return f'bis {b}kg'
+    return 'ueber 3000kg'
+
 def norm_id(v):
     try: return str(int(float(str(v))))
     except: return str(v).strip()
 
-# ── Daten laden ────────────────────────────────────────────────────────────────
+# ── Master/Sub-Konsolidierung ──────────────────────────────────────────────
+_ms_map_cache = None
+
+def norm_ms(v):
+    try: return str(int(float(str(v).strip())))
+    except: return str(v).strip()
+
+def _get_ms_map():
+    global _ms_map_cache
+    if _ms_map_cache is not None: return _ms_map_cache
+    _bi = pd.read_pickle(Path('output/bi_top20_data.pkl'))['df']
+    _bi = _bi[['Auftragsnummer','Mastersendung','Unterauftrag']].copy()
+    _bi['_aid'] = _bi['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
+    _bi['_ms']  = _bi['Mastersendung'].apply(lambda v: norm_ms(v) if pd.notna(v) else '')
+    _ms_map_cache = _bi.drop_duplicates('_aid').set_index('_aid')[['_ms','Unterauftrag']]
+    return _ms_map_cache
+
+def enrich_master_sub(df):
+    fin_cols = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
+                'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
+    msmap = _get_ms_map()
+    df = df.copy()
+    aid = df['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
+    ms  = aid.map(msmap['_ms']).fillna('')
+    ua  = aid.map(msmap['Unterauftrag'])
+    df['_is_master']  = (ms.values == aid.values) & (ms.values != '')
+    df['_is_sub']     = (ms.values != '') & ~df['_is_master']
+    df['_ms_ref']     = ms.values
+    df['_unterauftr'] = ua.values
+    subs = df[df['_is_sub']]
+    if len(subs) > 0:
+        present = [c for c in fin_cols if c in df.columns]
+        for c in present: df[c] = pd.to_numeric(df[c], errors='coerce')
+        ssums = subs.groupby('_ms_ref')[present].sum()
+        for c in present:
+            msk = df['_is_master']
+            df.loc[msk, c] = df.loc[msk,'_ms_ref'].map(ssums[c]).fillna(df.loc[msk,c])
+    df['_master_nr']  = ms.where(ms != '', None).values
+    df['_sub_nrs']    = df.apply(
+        lambda r: str(r['_unterauftr']) if r['_is_master'] and pd.notna(r['_unterauftr']) else None, axis=1)
+    df['_n_subs']     = df['_sub_nrs'].apply(lambda v: len(v.split(',')) if isinstance(v, str) and v else 0)
+    df['_ist_master'] = df['_is_master'].map({True:'Ja', False:''})
+    n_sub = df['_is_sub'].sum()
+    df = df[~df['_is_sub']].copy()
+    print(f'  Master/Sub: {n_sub} Subs entfernt, {df["_is_master"].sum()} Masters angereichert')
+    return df
+
+def add_empty_master_cols(df):
+    df = df.copy()
+    for c in ('_master_nr','_sub_nrs','_ist_master'): df[c] = None
+    df['_n_subs'] = 0
+    return df
+
+# ── Tarif laden ────────────────────────────────────────────────────────────
+print('Lade Bitzer-Tarif...')
+tariff = load_bitzer()
+print(f'Tarif: {len(tariff)} Zeilen, Länder: {sorted(tariff["country"].unique())}')
+
+# ── Daten laden ────────────────────────────────────────────────────────────
 pre  = pd.read_excel(SRC_XLSX, sheet_name='PRE Dinas Detail',  header=2)
 post = pd.read_excel(SRC_XLSX, sheet_name='POST AX Detail',    header=2)
 
 for df in (pre, post):
     df['Tonnage (eff.)'] = pd.to_numeric(df['Tonnage (eff.)'], errors='coerce')
-    df['Empfänger PLZ']  = df['Empfänger PLZ'].astype(str).str.strip()
-    df['Empfänger Land'] = df['Empfänger Land'].astype(str).str.strip()
-    df['_gwb']           = df['Tonnage (eff.)'].apply(gew_band)
-    df['_plz2']          = df['Empfänger PLZ'].apply(plz2)
-    df['_cluster']       = df['Empfänger Land'] + '|' + df['_plz2'] + '|' + df['_gwb']
+    df['_plz2']  = df['Empfänger PLZ'].astype(str).str.strip().str[:2]
+    df['_land']  = df['Empfänger Land'].astype(str).str.strip()
+    df['_vplz2'] = df['Versender PLZ'].astype(str).str.strip().str[:2]
+    df['_gwb']   = df['Tonnage (eff.)'].apply(gew_band)
+    df['_cl']    = df['_land'] + '|' + df['_plz2'] + '|' + df['_gwb']
 
-# NK numerisch
+# Filter ungültige Rechnungsnummern (RN=0 → kein Vergleich möglich)
+for df, name in [(pre, 'PRE'), (post, 'POST')]:
+    bad = df['Rechnungsnummer'].apply(
+        lambda v: str(v).strip().rstrip('0').rstrip('.') in ('0', '', 'nan'))
+    if bad.sum():
+        print(f'Filtere {bad.sum()} {name} Zeile(n) mit RN=0: '
+              f'{df[bad]["Auftragsnummer"].tolist()}')
+        df.drop(index=df[bad].index, inplace=True)
+
+POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
+           'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
+for c in POST_NK: post[c] = pd.to_numeric(post.get(c), errors='coerce')
+
+# ── DINAS-NK: Per-Sendung aus Cache (sendungs_nr = Auftragsnummer) ─────────
+# Bugfix: alte Version aggregierte ALLE Positionen einer Rechnung und wies den
+# Gesamtbetrag jeder BI-Zeile zu (falsch bei Sammelrechnungen mit 50+ Sendungen).
+# Fix: Parser liest jetzt alle Seiten; Join auf sendungs_nr = Auftragsnummer.
+if CACHE.exists():
+    dinas_cache = pd.read_pickle(CACHE)
+    print(f'DINAS cache geladen: {len(dinas_cache)} Positionen')
+else:
+    print('Parse DINAS PDFs (einmalig, wird gecacht)...')
+    pdfs = _glob.glob(str(DINAS_DIR / '*.pdf'))
+    rows = [flatten(pos) for p in pdfs for pos in parse_one(p)]
+    dinas_cache = pd.DataFrame(rows)
+    dinas_cache.to_pickle(CACHE)
+    print(f'Cache gespeichert: {len(dinas_cache)} Positionen')
+
+def _norm(v):
+    s = re.sub(r'\D', '', str(v)).lstrip('0')
+    return s if s else str(v).strip()
+
+dinas_cache['_snr'] = dinas_cache['sendungs_nr'].astype(str).apply(_norm)
+pre['_snr'] = pre['Auftragsnummer'].astype(str).apply(_norm)
+
+# Drop stale DINAS-NK columns (wrong aggregated values) and re-join per shipment
 PRE_NK  = ['Dinas Fracht','Dinas Diesel','Dinas Maut/SSD','Dinas Ausfuhr',
            'Dinas Verzollung','Dinas Zoll Duty','Dinas Zollbetrag',
            'Dinas Sulphur','Dinas Nebenkostenpausch.','Dinas Redebit',
            'Dinas Sonstige','Dinas Gesamt']
-POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
-           'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
+pre.drop(columns=[c for c in PRE_NK if c in pre.columns], inplace=True)
 
-for c in PRE_NK:
-    pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
-for c in POST_NK:
-    post[c] = pd.to_numeric(post.get(c), errors='coerce')
+DINAS_RENAME = {
+    'fracht': 'Dinas Fracht', 'diesel': 'Dinas Diesel', 'maut_ssd': 'Dinas Maut/SSD',
+    'ausfuhr': 'Dinas Ausfuhr', 'verzollung': 'Dinas Verzollung',
+    'zoll_duty': 'Dinas Zoll Duty', 'zoll_betrag': 'Dinas Zollbetrag',
+    'sulphur': 'Dinas Sulphur', 'neben_pausch': 'Dinas Nebenkostenpausch.',
+    'redebit': 'Dinas Redebit', 'sonstige': 'Dinas Sonstige',
+    'gesamtbetrag': 'Dinas Gesamt',
+}
+cache_nk = dinas_cache.rename(columns=DINAS_RENAME)[['_snr'] + list(DINAS_RENAME.values())].copy()
+pre = pre.merge(cache_nk, on='_snr', how='left')
+pre.drop(columns=['_snr'], inplace=True)
 
-# ── Soll EUR aus Cluster-Excel joinen ─────────────────────────────────────────
+for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
+matched_pre = pre['Dinas Fracht'].notna().sum()
+print(f'DINAS NK re-joined: {matched_pre}/{len(pre)} PRE Zeilen matched (sendungs_nr)')
+
+# Filter PRE-Zeilen mit Fracht=0 (Zoll/NK-only Sendungen, nicht vergleichbar)
+zero_pre = pre[pre['Dinas Fracht'].fillna(-1) == 0]
+if len(zero_pre):
+    print(f'Filtere {len(zero_pre)} PRE Zeile(n) mit Dinas Fracht=0 '
+          f'(Zoll/NK-only, kein Frachtvergleich möglich):')
+    for _, z in zero_pre.iterrows():
+        print(f'  RN={z.get("Rechnungsnummer")}  Auftr={z.get("Auftragsnummer")}  '
+              f'Gesamt={z.get("Dinas Gesamt"):.2f} EUR  '
+              f'(Verzollung={z.get("Dinas Verzollung",0):.2f})')
+pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
+
+print('Konsolidiere Master/Sub-Sendungen...')
+post = enrich_master_sub(post)
+pre  = add_empty_master_cols(pre)
+
+# ── Eff. EUR/100kg pro Sendung ─────────────────────────────────────────────
+pre['_eff_100kg']  = pre['Dinas Fracht']  / pre['Tonnage (eff.)'] * 100
+post['_eff_100kg'] = post['AX Fracht']    / post['Tonnage (eff.)'] * 100
+
+# ── Tarif-Lookup für alle Zeilen ───────────────────────────────────────────
+print('Berechne Soll EUR via Tarif-Engine...')
+pre_lookup  = pre.apply(lambda r: _lookup_bitzer(r, tariff), axis=1)
+post_lookup = post.apply(lambda r: _lookup_bitzer(r, tariff), axis=1)
+
+pre['_soll_tarif']  = pre_lookup['soll_fracht']
+pre['_zone']        = pre_lookup['zone_matched'].str.replace(r'^[A-Z]+\s+', '', regex=True)
+pre['_basispreis']  = None  # Bitzer gibt keine base_rate zurück
+post['_soll_tarif'] = post_lookup['soll_fracht']
+post['_zone']       = post_lookup['zone_matched'].str.replace(r'^[A-Z]+\s+', '', regex=True)
+post['_basispreis'] = None
+
+# ── Soll EUR: Tarif-Engine hat Vorrang; Cluster-Datei als Ergänzung ────────
 cl_df = pd.read_excel(CLUSTER_XLS, sheet_name=0)
-alt_cl = cl_df[cl_df['System'] == 'alt'][['Auftrags-Nr','Soll EUR']].copy()
-neu_cl = cl_df[cl_df['System'] == 'neu'][['Auftrags-Nr','Soll EUR']].copy()
-alt_cl['_aid'] = alt_cl['Auftrags-Nr'].apply(norm_id)
-neu_cl['_aid'] = neu_cl['Auftrags-Nr'].apply(norm_id)
-alt_cl['Soll EUR'] = pd.to_numeric(alt_cl['Soll EUR'], errors='coerce')
-neu_cl['Soll EUR'] = pd.to_numeric(neu_cl['Soll EUR'], errors='coerce')
-soll_pre  = alt_cl.dropna(subset=['Soll EUR']).set_index('_aid')['Soll EUR'].to_dict()
-soll_post = neu_cl.dropna(subset=['Soll EUR']).set_index('_aid')['Soll EUR'].to_dict()
-pre['_aid']    = pre['Auftragsnummer'].apply(norm_id)
-post['_aid']   = post['Auftragsnummer'].apply(norm_id)
-pre['Soll EUR']  = pre['_aid'].map(soll_pre)
-post['Soll EUR'] = post['_aid'].map(soll_post)
-print(f'Soll EUR matched: PRE {pre["Soll EUR"].notna().sum()}/{len(pre)}, '
+alt_cl = cl_df[cl_df['System']=='alt'][['Auftrags-Nr','Soll EUR']].copy()
+neu_cl = cl_df[cl_df['System']=='neu'][['Auftrags-Nr','Soll EUR']].copy()
+for df in (alt_cl, neu_cl):
+    df['_aid'] = df['Auftrags-Nr'].apply(norm_id)
+    df['Soll EUR'] = pd.to_numeric(df['Soll EUR'], errors='coerce')
+soll_pre_cl  = alt_cl.dropna(subset=['Soll EUR']).set_index('_aid')['Soll EUR'].to_dict()
+soll_post_cl = neu_cl.dropna(subset=['Soll EUR']).set_index('_aid')['Soll EUR'].to_dict()
+pre['_aid']  = pre['Auftragsnummer'].apply(norm_id)
+post['_aid'] = post['Auftragsnummer'].apply(norm_id)
+
+# Prefer tariff; fall back to cluster file
+pre['Soll EUR']  = pre['_soll_tarif'].where(pre['_soll_tarif'].notna(),
+                       pre['_aid'].map(soll_pre_cl))
+post['Soll EUR'] = post['_soll_tarif'].where(post['_soll_tarif'].notna(),
+                       post['_aid'].map(soll_post_cl))
+print(f'Soll EUR final: PRE {pre["Soll EUR"].notna().sum()}/{len(pre)}, '
       f'POST {post["Soll EUR"].notna().sum()}/{len(post)}')
 
-# ── Cluster-Statistiken ────────────────────────────────────────────────────────
-def cluster_stats(pre, post):
-    pa = pre.groupby('_cluster').agg(
-        n_pre=('Dinas Gesamt','count'),
-        avg_d_ges=('Dinas Gesamt','mean'),
-        avg_d_fr=('Dinas Fracht','mean'),
-        avg_d_di=('Dinas Diesel','mean'),
-        avg_d_maut=('Dinas Maut/SSD','mean'),
-    ).reset_index()
-    oa = post.groupby('_cluster').agg(
-        n_post=('AX Gesamt','count'),
-        avg_ax_ges=('AX Gesamt','mean'),
-        avg_ax_fr=('AX Fracht','mean'),
-        avg_ax_di=('AX Diesel','mean'),
-        avg_ax_maut=('AX Maut','mean'),
-        avg_ax_neben=('AX Nebengebühr','mean'),
-    ).reset_index()
-    s = pa.merge(oa, on='_cluster', how='inner')
-    s = s[s['avg_ax_ges'] < s['avg_d_ges']].copy()
-    s['delta']     = s['avg_ax_ges'] - s['avg_d_ges']
-    s['delta_pct'] = s['delta'] / s['avg_d_ges'].replace(0, np.nan) * 100
-    s['delta_fr']  = s['avg_ax_fr']   - s['avg_d_fr']
-    s['delta_di']  = s['avg_ax_di']   - s['avg_d_di']
-    s['delta_maut']= s['avg_ax_maut'] - s['avg_d_maut']
-    s['est_loss']  = s['delta'] * s['n_post']
-    def abw(r):
-        neg = {k:v for k,v in {'Fracht':r.delta_fr,'Diesel':r.delta_di,
-                                'Maut':r.delta_maut}.items() if v < -0.5}
-        if not neg: return 'n/a'
-        t = sum(neg.values())
-        return 'Hauptursache: ' + ', '.join(
-            f'{k}: {v/t*100:+.0f}%' for k,v in sorted(neg.items(), key=lambda x:x[1])[:2])
-    s['abw_grund'] = s.apply(abw, axis=1)
-    parts = s['_cluster'].str.split('|', expand=True)
-    s['Land'] = parts[0]; s['PLZ_pre'] = parts[1]; s['Gew_band'] = parts[2]
-    return s.sort_values('est_loss').reset_index(drop=True)
+# ── Cluster-Statistiken ────────────────────────────────────────────────────
+pa = pre.groupby('_cl').agg(
+    n_pre=('Dinas Gesamt','count'), avg_d=('Dinas Gesamt','mean'),
+    avg_df=('Dinas Fracht','mean'), avg_dd=('Dinas Diesel','mean'),
+    avg_dm=('Dinas Maut/SSD','mean'), vplz2=('_vplz2','first'),
+    avg_eff_d=('_eff_100kg','mean'), avg_dlv=('_basispreis','mean')).reset_index()
+oa = post.groupby('_cl').agg(
+    n_post=('AX Gesamt','count'), avg_ax=('AX Gesamt','mean'),
+    avg_af=('AX Fracht','mean'), avg_ad=('AX Diesel','mean'),
+    avg_am=('AX Maut','mean'), avg_eff_ax=('_eff_100kg','mean')).reset_index()
+stats = pa.merge(oa, on='_cl', how='inner')
+stats = stats[stats['avg_ax'] < stats['avg_d']].copy()
+stats['delta'] = stats['avg_ax'] - stats['avg_d']
+stats['pct']   = stats['delta'] / stats['avg_d'].replace(0, np.nan) * 100
+stats['loss']  = stats['delta'] * stats['n_post']
 
-stats = cluster_stats(pre, post)
-print(f'Unterfakturierungs-Cluster: {len(stats)}, '
-      f'Σ Verlust: {stats["est_loss"].sum():,.0f} EUR')
+def abw_grund_cluster(r):
+    neg = {k:v for k,v in
+           {'Fracht': r.avg_af-r.avg_df, 'Diesel': r.avg_ad-r.avg_dd,
+            'Maut':   r.avg_am-r.avg_dm}.items() if v < -0.5}
+    if not neg: return 'sonstige NK'
+    t = sum(neg.values())
+    return ', '.join(f'{k} ({v/t*100:+.0f}%)'
+                     for k,v in sorted(neg.items(), key=lambda x:x[1])[:2])
 
-# ── Kontroll-Sendung ───────────────────────────────────────────────────────────
-def find_kontroll(pre_all, post_all):
-    if pre_all.empty or post_all.empty: return None, None
-    best = (None, None, float('inf'))
-    for pi, pr in pre_all.iterrows():
-        pr_n = str(pr.get('Empfänger Name',''))[:12]
-        pr_kg = pr.get('Tonnage (eff.)')
-        if pd.isna(pr_kg): continue
-        same = post_all[post_all['Empfänger Name'].astype(str).str[:12] == pr_n]
-        for oi, po in (same if not same.empty else post_all).iterrows():
-            po_kg = po.get('Tonnage (eff.)')
-            if pd.isna(po_kg): continue
-            d = abs(float(pr_kg) - float(po_kg))
-            if d < best[2]: best = (pi, oi, d)
-    return best[0], best[1]
+stats['abw_grund'] = stats.apply(abw_grund_cluster, axis=1)
+stats['delta_eff_pct'] = ((stats['avg_eff_ax'] - stats['avg_eff_d'])
+                           / stats['avg_eff_d'].replace(0, np.nan) * 100)
+# Nur Cluster mit >5% Eff.-Preis-Abweichung
+stats = stats[stats['delta_eff_pct'].abs() > 5].copy()
+stats = stats.sort_values('loss').reset_index(drop=True)
+print(f'Cluster (|ΔEff|>5%): {len(stats)}, Sigma Verlust: {stats["loss"].sum():,.0f} EUR')
 
-# ── Styles ─────────────────────────────────────────────────────────────────────
+top5 = stats.reindex(stats['delta_eff_pct'].abs().nlargest(5).index)
+print('\nTop-5 Cluster nach Eff.-Preis-Abweichung:')
+for _, cl in top5.iterrows():
+    parts = cl['_cl'].split('|'); land, plz_p, gwband = (parts+['','',''])[:3]
+    dlv = cl.avg_dlv if not pd.isna(cl.avg_dlv) else float('nan')
+    print(f'  {land}|{plz_p}|{gwband}  '
+          f'Eff.Dinas={cl.avg_eff_d:.2f}  Eff.AX={cl.avg_eff_ax:.2f}  '
+          f'DLV={dlv:.2f}  Δ={cl.delta_eff_pct:+.1f}%')
+
+# ── NK-Mapping ─────────────────────────────────────────────────────────────
+def get_nk_alt(r):
+    fracht  = r.get('Dinas Fracht') or 0
+    diesel  = r.get('Dinas Diesel') or 0
+    maut    = r.get('Dinas Maut/SSD') or 0
+    lademl  = 0
+    peak    = 0
+    neben   = r.get('Dinas Ausfuhr') or 0
+    eust    = ((r.get('Dinas Verzollung') or 0) + (r.get('Dinas Zoll Duty') or 0)
+               + (r.get('Dinas Zollbetrag') or 0))
+    versich = ((r.get('Dinas Sulphur') or 0) + (r.get('Dinas Nebenkostenpausch.') or 0)
+               + (r.get('Dinas Redebit') or 0)  + (r.get('Dinas Sonstige') or 0))
+    return fracht, diesel, maut, lademl, peak, neben, eust, versich
+
+def get_nk_neu(r):
+    return (r.get('AX Fracht') or 0, r.get('AX Diesel') or 0,
+            r.get('AX Maut') or 0,   r.get('AX Lademittel') or 0,
+            r.get('AX Peak') or 0,   r.get('AX Nebengebühr') or 0,
+            r.get('AX EUST/Zoll') or 0, r.get('AX Versicherung') or 0)
+
+def abw_grund_row(nk, soll, erloese):
+    if pd.isna(soll) or soll == 0: return 'Soll n/a'
+    pct = (erloese - soll) / soll * 100
+    if abs(pct) < 5: return 'OK'
+    return 'Unterfakturierung' if pct < 0 else 'Überfakturierung'
+
+# ── Styles ─────────────────────────────────────────────────────────────────
 def fill(h): return PatternFill('solid', fgColor=h)
-def font(bold=False, color='000000', size=9, italic=False):
+def fnt(bold=False, color='000000', size=9, italic=False):
     return Font(bold=bold, color=color, size=size, italic=italic)
-THIN = Side(border_style='thin', color='AAAAAA')
-MED  = Side(border_style='medium', color='555555')
-BRD  = Border(left=THIN, right=THIN, top=THIN,  bottom=THIN)
-BRD_H= Border(left=THIN, right=THIN, top=MED,   bottom=MED)
-EUR  = '#,##0.00'
+THIN = Side(border_style='thin', color='BBBBBB')
+BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+EUR_FMT = '#,##0.00'
+
+# 33 Spalten
+HDR_COLS = ['System','Auftrags-Nr','Master-Nr','Sub-Nr(n)','Anzahl Subs','Ist Master',
+            'Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
+            'Gew.band','Zone','Basis','Basis Menge','Basispreis',
+            'Eff. Preis','Tonnage kg','Stellplätze','Lademeter','Volumen','Soll EUR',
+            'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
+            'Neben EUR','EUST Zoll','Versich.',
+            'Erlöse','Abw. Grund']
+N = len(HDR_COLS)  # 33
+
+EUR_COLS  = {17,18,23,24,25,26,27,28,29,30,31,32}  # 1-based
+NUM_RIGHT = {5, 16, 19, 20, 21, 22}  # Anzahl Subs, Basis Menge, Tonnage kg, Stellplätze, Lademeter, Volumen
+DATE_COL  = 8
+STR_COLS  = {2, 3, 7}  # Auftrags-Nr, Master-Nr, Rech.-Nr
+
+FILL_HDR  = fill('1F497D')
+FILL_CLU  = fill('2E75B6')
+FILL_ALT  = fill('BDD7EE')
+FILL_NEU  = fill('FCE4D6')
+FILL_CTRL = fill('E2EFDA')
 
 def wc(ws, r, c, v=None, f=None, fn=None, al='left', fmt=None, brd=None):
     cell = ws.cell(row=r, column=c)
     if v is not None: cell.value = v
-    if f:  cell.fill  = f
-    if fn: cell.font  = fn
+    if f:   cell.fill  = f
+    if fn:  cell.font  = fn
     if fmt: cell.number_format = fmt
     if brd: cell.border = brd
     cell.alignment = Alignment(horizontal=al, vertical='center')
-    return cell
 
-def mrow(ws, r, c1, c2, v, f=None, fn=None, al='left'):
-    ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
-    wc(ws, r, c1, v, f, fn, al)
+def write_row(ws, row, values, row_fill, is_ctrl=False):
+    rf = FILL_CTRL if is_ctrl else row_fill
+    for ci, v in enumerate(values, 1):
+        if v is not None and isinstance(v, float) and math.isnan(v): v = None
+        # Auftrags-Nr / Rech.-Nr als Text (verhindert E-Notation bei großen Nummern)
+        if ci in STR_COLS and v is not None:
+            try: v = str(int(float(str(v))))
+            except: v = str(v)
+        fmt = ('DD.MM.YYYY' if ci == DATE_COL else
+               EUR_FMT if ci in EUR_COLS else None)
+        al  = 'right' if ci in EUR_COLS or ci in NUM_RIGHT else 'left'
+        wc(ws, row, ci, v, rf, fnt(size=9), al, fmt, BRD)
 
-# ── Spalten-Layout ─────────────────────────────────────────────────────────────
-COLS = [
-    ('RN',       'Rechnungsnummer','Rechnungsnummer', 11),
-    ('Auftrag',  'Auftragsnummer', 'Auftragsnummer',  12),
-    ('Datum',    'Leistungsdatum', 'Leistungsdatum',  11),
-    ('Empfänger','Empfänger Name', 'Empfänger Name',  22),
-    ('PLZ',      'Empfänger PLZ',  'Empfänger PLZ',    7),
-    ('Land',     'Empfänger Land', 'Empfänger Land',   5),
-    ('Ton. kg',  'Tonnage (eff.)', 'Tonnage (eff.)',   9),
-    ('Soll €',   'Soll EUR',       'Soll EUR',         9),
-    # NK (shared physical columns, different labels for PRE vs POST)
-    ('Fracht €',    'Dinas Fracht',          'AX Fracht',        10),
-    ('Diesel €',    'Dinas Diesel',          'AX Diesel',         9),
-    ('Maut €',      'Dinas Maut/SSD',        'AX Maut',           9),
-    ('Ausfuhr €',   'Dinas Ausfuhr',         'AX Nebengebühr',    9),
-    ('Verzoll. €',  'Dinas Verzollung',      'AX Lademittel',     9),
-    ('ZollD. €',    'Dinas Zoll Duty',       'AX Peak',           8),
-    ('Sulphur €',   'Dinas Sulphur',         'AX EUST/Zoll',      9),
-    ('NKP. €',      'Dinas Nebenkostenpausch.','AX Versicherung', 9),
-    ('Redebit €',   'Dinas Redebit',         None,                8),
-    ('Sonstige €',  'Dinas Sonstige',        None,                8),
-    ('GESAMT €',    'Dinas Gesamt',          'AX Gesamt',        11),
-]
-N = len(COLS)
+# ── Sheet 1: Bitzer SE ────────────────────────────────────────────────────
+def build_main_sheet(ws):
+    ws.title = 'Bitzer SE'
+    ws.freeze_panes = 'A3'
 
-PRE_OVR  = {9:'D-Fracht €',10:'D-Diesel €',11:'D-Maut €',12:'D-Ausfuhr €',
-            13:'D-Verzoll €',14:'D-ZollD €',15:'D-Sulphur €',16:'D-NKP €',
-            17:'D-Redebit €',18:'D-Sonstige €',19:'D-GESAMT €'}
-POST_OVR = {9:'AX Fracht €',10:'AX Diesel €',11:'AX Maut €',
-            12:'AX Neben €',13:'AX Lademl €',14:'AX Peak €',
-            15:'AX EUST €',16:'AX Versich €',17:'',18:'',19:'AX GESAMT €'}
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=N)
+    wc(ws,1,1, f'Bitzer SE ({KNR}) — Dinas PRE vs AX POST  |  '
+               f'Cluster: {len(stats)}  |  Sigma Verlust: {stats["loss"].sum():,.0f} EUR',
+       FILL_HDR, fnt(bold=True, color='FFFFFF', size=12), 'center')
 
-def write_hdrs(ws, row, ovr, hf):
-    for ci,(h,_,_,_) in enumerate(COLS, 1):
-        wc(ws, row, ci, ovr.get(ci,h), hf,
-           font(bold=True,color='FFFFFF',size=8),'center',brd=BRD_H)
+    for ci, h in enumerate(HDR_COLS, 1):
+        wc(ws, 2, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
 
-def write_drow(ws, row, src, si, rf):
-    for ci,cd in enumerate(COLS, 1):
-        col = cd[si]
-        v   = src.get(col) if col else None
-        if v is not None and pd.isna(v): v = None
-        e = '€' in cd[0]
-        wc(ws, row, ci, v, rf, font(size=9),
-           'right' if e or cd[0]=='Ton. kg' else 'left',
-           EUR if e else None, BRD)
-
-# ── Sheet 1: Zusammenfassung ───────────────────────────────────────────────────
-def ws_zusammenfassung(ws):
-    ws.title = 'Zusammenfassung'
-    ws.column_dimensions['A'].width = 40
-    ws.column_dimensions['B'].width = 22
-    rows = [
-        ('Bitzer Kühlmaschinenbau GmbH (406345) — Dinas PDF vs AX Vergleich', ''),
-        ('', ''),
-        ('── PRE (Dinas-System) ──────────────────────────', ''),
-        ('BI-Zeilen PRE (gematcht)', len(pre)),
-        ('Σ Dinas Fracht EUR', round(pre['Dinas Fracht'].sum(), 2)),
-        ('Σ Dinas Gesamt EUR', round(pre['Dinas Gesamt'].sum(), 2)),
-        ('', ''),
-        ('── POST (AX-System) ────────────────────────────', ''),
-        ('BI-Zeilen POST', len(post)),
-        ('Σ AX Fracht EUR', round(post['AX Fracht'].sum(), 2)),
-        ('Σ AX Gesamt EUR', round(post['AX Gesamt'].sum(), 2)),
-        ('', ''),
-        ('── Cluster-Vergleich ────────────────────────────', ''),
-        ('Unterfakturierungs-Cluster', len(stats)),
-        ('Σ geschätzter Gesamtverlust EUR', round(stats['est_loss'].sum(), 0)),
-    ]
-    for i,(k,v) in enumerate(rows, 1):
-        ws.cell(i,1).value = k
-        ws.cell(i,2).value = v
-        if v=='' and k.startswith('─'):
-            ws.cell(i,1).fill = fill('D6E4F7')
-            ws.cell(i,1).font = font(bold=True)
-        elif i==1:
-            ws.cell(i,1).font = font(bold=True,size=12)
-        else:
-            ws.cell(i,2).alignment = Alignment(horizontal='right')
-
-# ── Sheet 4: Cluster-Vergleich ─────────────────────────────────────────────────
-def ws_cluster(ws, top_n=20):
-    ws.title = 'Cluster-Vergleich'
-    mrow(ws,1,1,N,'Bitzer Kühlmaschinenbau GmbH (406345) — Cluster-Vergleich: Unterfakturierung',
-         fill('1F497D'), font(bold=True,color='FFFFFF',size=12),'center')
-    mrow(ws,2,1,N,'PRE: Dinas NK  |  POST: AX NK  |  Soll EUR aus Tarifmotor  |  Grün = Kontroll-Paar',
-         fill('2E4057'), font(color='CCCCCC',size=9,italic=True),'center')
     row = 2
 
-    for _,cl in stats.head(top_n).iterrows():
-        ckey = cl['_cluster']
-        pre_all  = pre[pre['_cluster']==ckey]
-        post_all = post[post['_cluster']==ckey]
-        pre_s    = pre_all.head(5)
-        post_s   = post_all.head(5)
-        kpi, koi = find_kontroll(pre_all, post_all)
+    for _, cl in stats.iterrows():
+        ckey  = cl['_cl']
+        parts = ckey.split('|')
+        land, plz_p, gwband = (parts+['','',''])[:3]
+        vplz  = str(cl.get('vplz2', ''))
 
-        row += 1
-        mrow(ws,row,1,N,
-             f'  CLUSTER: Land={cl.Land}  |  PLZ={cl.PLZ_pre}  |  '
-             f'Gew.band={cl.Gew_band}  |  n PRE={int(cl.n_pre)}  |  n POST={int(cl.n_post)}',
-             fill('2E75B6'), font(bold=True,color='FFFFFF',size=10))
-        row += 1
-        mrow(ws,row,1,N,
-             f'  Ø Dinas: {cl.avg_d_ges:,.2f} €  |  Ø AX: {cl.avg_ax_ges:,.2f} €  '
-             f'|  Δ: {cl.delta:,.2f} € ({cl.delta_pct:+.1f}%)  '
-             f'|  Gesch. Verlust: {cl.est_loss:,.0f} €  |  {cl.abw_grund}',
-             fill('D6E4F7'), font(size=9))
+        pre_all   = pre[pre['_cl']==ckey]
+        post_all  = post[post['_cl']==ckey]
+        # Nur unterfakturierte POST-Zeilen: AX Fracht < Ø Dinas Fracht im Cluster
+        post_under = post_all[post_all['AX Fracht'].fillna(float('inf')) < cl.avg_df]
+        # Zusätzlich: Abw.-Grund-Filter — nur Zeilen behalten wo abw_grund_row != 'Überfakturierung'
+        post_under = post_under[[
+            abw_grund_row(get_nk_neu(r), r.get('Soll EUR'), r.get('AX Gesamt') or 0) != 'Überfakturierung'
+            for _, r in post_under.iterrows()
+        ]]
+        # Cluster komplett raus wenn keine unterfakturierten POST-Zeilen
+        if len(post_under) == 0:
+            continue
+        pre_s  = pre_all.head(5)
+        post_s = post_under.head(5)
 
-        # PRE
-        row += 1
-        mrow(ws,row,1,N,'  PRE — Dinas Rechnungen',fill('4472C4'),font(bold=True,color='FFFFFF'))
-        row += 1; write_hdrs(ws, row, PRE_OVR, fill('4472C4'))
-        for _,pr in pre_s.iterrows():
-            row += 1; write_drow(ws, row, pr, 1, fill('BDD7EE'))
+        # Kontroll-Paar (aus gefilterten POST-Zeilen)
+        ctrl_pi, ctrl_oi = None, None
+        best = float('inf')
+        for pi, pr in pre_all.iterrows():
+            pr_kg = pr.get('Tonnage (eff.)')
+            if pd.isna(pr_kg): continue
+            for oi, po in post_under.iterrows():
+                po_kg = po.get('Tonnage (eff.)')
+                if pd.isna(po_kg): continue
+                d = abs(float(pr_kg) - float(po_kg))
+                if d < best: best=d; ctrl_pi=pi; ctrl_oi=oi
 
-        # POST
+        # Cluster-Header
         row += 1
-        mrow(ws,row,1,N,'  POST — AX Rechnungen',fill('C55A11'),font(bold=True,color='FFFFFF'))
-        row += 1; write_hdrs(ws, row, POST_OVR, fill('C55A11'))
-        for _,po in post_s.iterrows():
-            row += 1; write_drow(ws, row, po, 2, fill('FCE4D6'))
+        dlv_str = f'{cl.avg_dlv:,.2f}' if not pd.isna(cl.avg_dlv) else 'n/a'
+        lbl = (f'▶ {KNR}|{vplz}|{land}|{plz_p}|{gwband}|{BASIS}     '
+               f'n_PRE={int(cl.n_pre)}  n_POST={int(cl.n_post)}  '
+               f'Ø Dinas={cl.avg_d:,.2f} EUR  Ø AX={cl.avg_ax:,.2f} EUR  '
+               f'Δ={cl.delta:,.2f} EUR ({cl.pct:+.1f}%)  '
+               f'est.Verlust={cl.loss:,.0f} EUR  |  '
+               f'Eff. Dinas={cl.avg_eff_d:,.2f} | Eff. AX={cl.avg_eff_ax:,.2f} | '
+               f'DLV={dlv_str} | ΔEff={cl.delta_eff_pct:+.1f}%  |  {cl.abw_grund}')
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=N)
+        wc(ws, row, 1, lbl, FILL_CLU, fnt(bold=True, color='FFFFFF', size=10))
 
-        # Kontroll
-        if kpi is not None or koi is not None:
+        # alt (Dinas PRE)
+        for _, r in pre_s.iterrows():
             row += 1
-            mrow(ws,row,1,N,'  ★ Kontroll-Sendung (bestes PRE/POST-Paar)',
-                 fill('E2EFDA'), font(bold=True,color='1F5C00'))
-            if kpi is not None:
-                row += 1
-                wc(ws,row,1,'PRE',fill('E2EFDA'),font(bold=True,italic=True))
-                pr = pre.loc[kpi]
-                for ci,(h,ps,_,_) in enumerate(COLS[1:],2):
-                    v=pr.get(ps) if ps else None
-                    if v is not None and pd.isna(v): v=None
-                    e='€' in h
-                    wc(ws,row,ci,v,fill('E2EFDA'),font(size=9),
-                       'right' if e else 'left', EUR if e else None, BRD)
-            if koi is not None:
-                row += 1
-                wc(ws,row,1,'POST',fill('E2EFDA'),font(bold=True,italic=True))
-                po = post.loc[koi]
-                for ci,(h,_,qs,_) in enumerate(COLS[1:],2):
-                    v=po.get(qs) if qs else None
-                    if v is not None and pd.isna(v): v=None
-                    e='€' in h
-                    wc(ws,row,ci,v,fill('E2EFDA'),font(size=9),
-                       'right' if e else 'left', EUR if e else None, BRD)
+            nk      = get_nk_alt(r)
+            erloese = r.get('Dinas Gesamt') or 0
+            soll    = r.get('Soll EUR')
+            zone    = r.get('_zone') or 'n/a'
+            bp      = r.get('_basispreis')
+            eff     = r.get('_eff_100kg')
+            kg      = r.get('Tonnage (eff.)')
+            billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
+            is_ctrl = (r.name == ctrl_pi)
+            vals = ['alt', r.get('Auftragsnummer'),
+                    r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
+                    r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
+                    r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
+                    gwband, zone, BASIS, billing_kg, bp, eff,
+                    kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
+                    *nk,
+                    erloese, abw_grund_row(nk, soll, erloese)]
+            write_row(ws, row, vals, FILL_ALT, is_ctrl)
+
+        # neu (AX POST)
+        for _, r in post_s.iterrows():
+            row += 1
+            nk      = get_nk_neu(r)
+            erloese = r.get('AX Gesamt') or 0
+            soll    = r.get('Soll EUR')
+            zone    = r.get('_zone') or 'n/a'
+            bp      = r.get('_basispreis')
+            eff     = r.get('_eff_100kg')
+            kg      = r.get('Tonnage (eff.)')
+            billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
+            is_ctrl = (r.name == ctrl_oi)
+            vals = ['neu', r.get('Auftragsnummer'),
+                    r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
+                    r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
+                    r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
+                    gwband, zone, BASIS, billing_kg, bp, eff,
+                    kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
+                    *nk,
+                    erloese, abw_grund_row(nk, soll, erloese)]
+            write_row(ws, row, vals, FILL_NEU, is_ctrl)
+
         row += 1  # Leerzeile
 
-    for ci,(_,_,_,w) in enumerate(COLS,1):
+    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22]
+    for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
-    ws.freeze_panes = 'A3'
+    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[2].height = 18
     return row
 
-# ── Schreiben ──────────────────────────────────────────────────────────────────
-wb = Workbook()
-ws_zusammenfassung(wb.active)
-ws_pre = wb.create_sheet('PRE Dinas Detail')
-ws_pre.append(list(pre.columns))
-for _,r in pre.iterrows(): ws_pre.append(list(r))
-ws_post = wb.create_sheet('POST AX Detail')
-ws_post.append(list(post.columns))
-for _,r in post.iterrows(): ws_post.append(list(r))
-last_row = ws_cluster(wb.create_sheet('Cluster-Vergleich'))
+# ── Sheet 2: NK_Konditionen ───────────────────────────────────────────────
+def build_nk_sheet(ws):
+    ws.title = 'NK_Konditionen'
+    nk_wb = load_workbook(NK_XLSX, data_only=True)
+    nk_ws = nk_wb.active
+    for r_idx, row in enumerate(nk_ws.iter_rows(values_only=True), 1):
+        for c_idx, val in enumerate(row, 1):
+            ws.cell(row=r_idx, column=c_idx).value = val
+    for ci in range(1, (nk_ws.max_column or 19) + 1):
+        ws.column_dimensions[get_column_letter(ci)].width = 22
 
+# ── Schreiben ──────────────────────────────────────────────────────────────
+wb = Workbook()
+last_row = build_main_sheet(wb.active)
+build_nk_sheet(wb.create_sheet('NK_Konditionen'))
 wb.save(OUT_XLSX)
 print(f'\nGespeichert: {OUT_XLSX}')
-print(f'  Cluster-Vergleich: {last_row} Zeilen')
-print(f'  PRE Dinas Detail:  {len(pre)} Zeilen')
-print(f'  POST AX Detail:    {len(post)} Zeilen')
+print(f'  Sheet "Bitzer SE":       {last_row} Zeilen')
+print(f'  Sheet "NK_Konditionen":  NK Bitzer.xlsx kopiert')
