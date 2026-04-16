@@ -1436,3 +1436,241 @@ def load_groz_beckert():
     print("Groz-Beckert: nicht in BI-Daten, kein Tarif-Lookup möglich.")
     return pd.DataFrame()
 # Hinweis: LOADERS-Eintrag für Groz-Beckert wird NICHT gesetzt.
+
+
+def load_helu():
+    """Lädt Helu Tarifdaten (KNR 408244).
+    Strukturen je nach Land:
+      AT/PT : ERKA-Format, 'PLZ N' Zonen-Spalten (1. Stelle PLZ)
+      IT    : Direkt-Spalten '00\\nRoma', '01\\nViterbo' ... (2-stelliger Prefix)
+      ES    : Direkt-Spalten 'PLZ 01\\nAlava' ... (2-stelliger Prefix)
+      GR    : 2 Zonen ('gr-other', 'gr-athen')
+      IE    : County-Namen als Zonen
+      GB    : Zonen 1-10, Postcodes-Abschnitt → HELU_ZONE_MAPS['GB']
+      PL    : Separate Zonen-Kopfzeile + PLZ-Mapping → HELU_ZONE_MAPS['PL']
+      CH    : 'Postcode'-Kopfzeile, Gewichtsstufen-Spalten (per Sendung)
+    """
+    if not _HELU_BASE.is_dir():
+        print(f"Helu DLV-Verzeichnis nicht gefunden: {_HELU_BASE}")
+        return pd.DataFrame()
+
+    all_rows: list = []
+
+    for fp in sorted(_HELU_BASE.glob('*.xlsx')):
+        name = fp.name
+
+        # ── Land aus Dateiname erkennen ──────────────────────────────────────
+        if 'Export AT' in name:
+            country = 'AT'
+        elif 'Export CH' in name and 'CH-' not in name:
+            country = 'CH'
+        elif re.search(r'Export ES\s', name):          # "Export ES " – nicht ES-Mendaro
+            country = 'ES'
+        elif 'Export ES-' in name:
+            continue
+        elif 'Export GB' in name:
+            country = 'GB'
+        elif 'Export IE' in name:
+            country = 'IE'
+        elif 'Export IT' in name:
+            country = 'IT'
+        elif 'Export PL' in name:
+            country = 'PL'
+        elif re.search(r'Export PT\s', name):          # "Export PT " – nicht PT-Lanheses
+            country = 'PT'
+        elif 'Export PT-' in name:
+            continue
+        elif 'GR' in name or '#U00e4' in name:         # URL-kodiertes 'ä' in "ergänzt"
+            country = 'GR'
+        else:
+            continue                                    # xlsb-Masterdatei u. a. überspringen
+
+        try:
+            raw = pd.read_excel(fp, sheet_name=0, header=None)
+        except Exception as exc:
+            print(f"  Helu {name}: Fehler – {exc}")
+            continue
+
+        before = len(all_rows)
+
+        # ── CH: 'Postcode'-Kopfzeile + Gewichtsstufen-Spalten ───────────────
+        if country == 'CH':
+            hdr = next(
+                (i for i, r in raw.iterrows()
+                 if pd.notna(r.iloc[0]) and 'postcode' in str(r.iloc[0]).lower()),
+                None)
+            if hdr is None:
+                continue
+            wt_cols = [
+                (ci, float(str(raw.iloc[hdr, ci]).replace(',', '.')))
+                for ci in range(1, raw.shape[1])
+                if pd.notna(raw.iloc[hdr, ci]) and
+                re.match(r'[\d,\.]+$', str(raw.iloc[hdr, ci]).strip())
+            ]
+            for i in range(hdr + 1, len(raw)):
+                plz_val = str(raw.iloc[i, 0]).strip() if pd.notna(raw.iloc[i, 0]) else ''
+                if not re.match(r'CH\d+', plz_val, re.I):
+                    continue
+                zone_key = plz_val.upper()
+                for ci, wt in wt_cols:
+                    try:
+                        price = float(raw.iloc[i, ci])
+                        if price > 0:
+                            all_rows.append({'weight_to': wt, 'zone': zone_key,
+                                             'unit': 'per Sendung', 'price': price,
+                                             'country': 'CH', 'pricing_basis': 'EUR',
+                                             'knr': '408244'})
+                    except (TypeError, ValueError):
+                        pass
+
+        # ── PL: Separate Zonen-Kopfzeile, PLZ-Mapping, dann Gewichtszeilen ──
+        elif country == 'PL':
+            # 1) Zonen-Kopfzeile finden (Zone 1–7)
+            zh_idx = None
+            zone_cols_pl: list = []
+            for i, row in raw.iterrows():
+                cands = [(ci, str(v).strip()) for ci, v in enumerate(row)
+                         if pd.notna(v) and re.match(r'Zone\s*\d+', str(v).strip(), re.I)]
+                if len(cands) >= 2:
+                    zh_idx, zone_cols_pl = i, cands
+                    break
+            if zh_idx is None:
+                continue
+
+            # 2) PLZ-Mapping aufbauen (PLZ 0 … PLZ 9 → Zone N)
+            pl_map: dict = {}
+            wh_idx = None
+            for i in range(zh_idx + 1, len(raw)):
+                v0 = str(raw.iloc[i, 0]).strip() if pd.notna(raw.iloc[i, 0]) else ''
+                if 'bis kg' in v0.lower():
+                    wh_idx = i
+                    break
+                if not re.match(r'PLZ\s*\d', v0, re.I):
+                    continue
+                for ci, zone_name in zone_cols_pl:
+                    v = raw.iloc[i, ci] if ci < raw.shape[1] else np.nan
+                    if pd.isna(v) or str(v).strip() in ('', '-', 'nan'):
+                        continue
+                    for part in re.split(r',', str(v)):
+                        part = part.strip()
+                        mr = re.match(r'(\d+)\s*[-–]\s*(\d+)', part)
+                        if mr:
+                            for n in range(min(int(mr.group(1)), int(mr.group(2))),
+                                           max(int(mr.group(1)), int(mr.group(2))) + 1):
+                                pl_map[n] = zone_name
+                        elif re.search(r'\d+', part):
+                            pl_map[int(re.search(r'\d+', part).group())] = zone_name
+            HELU_ZONE_MAPS['PL'] = pl_map
+
+            if wh_idx is None:
+                continue
+            rows = _parse_erka_bands(raw, wh_idx, zone_cols_pl, 'PL', '408244')
+            all_rows.extend(rows)
+
+        # ── GB: Zonen 1–10, dann Postcodes-Abschnitt ────────────────────────
+        elif country == 'GB':
+            zh_idx = None
+            zone_cols_gb: list = []
+            for i, row in raw.iterrows():
+                num_cells = [(ci, int(float(str(v)))) for ci, v in enumerate(row.iloc[1:12], 1)
+                             if pd.notna(v) and re.match(r'^\d+$', str(v).strip())]
+                nums = [n for _, n in num_cells]
+                if len(nums) >= 8 and nums[0] == 1:
+                    zh_idx = i
+                    zone_cols_gb = [(ci, str(n)) for ci, n in num_cells if n <= 10]
+                    break
+            if zh_idx is None:
+                continue
+
+            all_rows.extend(_parse_erka_bands(raw, zh_idx, zone_cols_gb, 'GB', '408244'))
+
+            # Postcodes → HELU_ZONE_MAPS['GB']
+            pc_idx = next(
+                (i for i, r in raw.iterrows()
+                 if pd.notna(r.iloc[0]) and 'postcode' in str(r.iloc[0]).lower()),
+                None)
+            if pc_idx is not None:
+                col_to_zone = {ci: z for ci, z in zone_cols_gb}
+                gb_map: dict = {}
+                for i in range(pc_idx, min(pc_idx + 60, len(raw))):
+                    for ci in range(1, 11):
+                        v = raw.iloc[i, ci] if ci < raw.shape[1] else np.nan
+                        if pd.isna(v):
+                            continue
+                        area = str(v).strip().upper()
+                        if re.match(r'^[A-Z]{1,2}$', area) and ci in col_to_zone:
+                            gb_map[area] = col_to_zone[ci]
+                HELU_ZONE_MAPS['GB'] = gb_map
+
+        # ── GR: 2 Zonen (col1 = gr-other, col2 = gr-athen) ─────────────────
+        elif country == 'GR':
+            hdr = next(
+                (i for i, r in raw.iterrows()
+                 if pd.notna(r.iloc[0]) and 'bis kg' in str(r.iloc[0]).lower()),
+                None)
+            if hdr is None:
+                continue
+            zone_cols_gr: list = []
+            for ci in range(1, min(6, raw.shape[1])):
+                v = raw.iloc[hdr, ci]
+                if pd.isna(v) or str(v).strip() in ('', '-', 'nan'):
+                    continue
+                if not zone_cols_gr:
+                    zone_cols_gr.append((ci, 'gr-other'))
+                elif len(zone_cols_gr) == 1:
+                    zone_cols_gr.append((ci, 'gr-athen'))
+                if len(zone_cols_gr) == 2:
+                    break
+            all_rows.extend(_parse_erka_bands(raw, hdr, zone_cols_gr, 'GR', '408244'))
+
+        # ── AT / PT / IT / ES / IE: Standard-ERKA-Format ────────────────────
+        else:
+            hdr = None
+            zone_cols_std: list = []
+            for i, row in raw.iterrows():
+                v0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+                is_hdr = (v0.lower() in ('bis kg', 'gewichte') or 'bis kg' in v0.lower())
+                # IE: Kopfzeile hat leeres col0, col1 = 'Dublin' etc.
+                if country == 'IE' and not is_hdr and v0 == '':
+                    v1 = str(row.iloc[1]).strip() if raw.shape[1] > 1 and pd.notna(row.iloc[1]) else ''
+                    if v1 and v1[0].isupper() and len(v1) > 2 and not v1[0].isdigit():
+                        is_hdr = True
+                if not is_hdr:
+                    continue
+                cands: list = []
+                for ci in range(1, raw.shape[1]):
+                    v = row.iloc[ci]
+                    if pd.isna(v) or str(v).strip() in ('', '-', 'nan'):
+                        continue
+                    v_str = str(v).strip()
+                    if country in ('AT', 'PT'):
+                        if re.match(r'PLZ\s*\d+', v_str, re.I):
+                            cands.append((ci, v_str))
+                    elif country == 'IT':
+                        m = re.match(r'^(\d{2})\b', v_str.replace('\n', ' '))
+                        if m:
+                            cands.append((ci, m.group(1).zfill(2)))
+                    elif country == 'ES':
+                        m = re.search(r'PLZ\s*(\d+)', v_str, re.I)
+                        if m:
+                            cands.append((ci, m.group(1).zfill(2)))
+                    elif country == 'IE':
+                        if v_str[0].isupper() and len(v_str) > 2:
+                            cands.append((ci, v_str))
+                if len(cands) >= 2:
+                    hdr, zone_cols_std = i, cands
+                    break
+            if hdr is not None and zone_cols_std:
+                all_rows.extend(
+                    _parse_erka_bands(raw, hdr, zone_cols_std, country, '408244'))
+
+        file_rows = len(all_rows) - before
+        print(f"  Helu {country} ({fp.name[:50]}): {file_rows} Zeilen")
+
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+    countries = sorted(result['country'].unique().tolist()) if not result.empty else []
+    print(f"Helu gesamt: {len(result)} Tarifzeilen, Länder: {countries}")
+    return result
+
+
+LOADERS['408244'] = load_helu
