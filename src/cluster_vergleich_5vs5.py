@@ -398,14 +398,14 @@ def build_bi_raw() -> pd.DataFrame:
     df = df[df['soll_fracht'].notna()].copy()
     print(f'    {len(df):,} Zeilen mit Tarif-Match')
 
-    # ── FILTER 1: Keine Null-Erlöse ───────────────────────────────────────────
-    # POST: muss Erlöse Fracht != 0 haben
-    # PRE: behalten wenn nk_fracht befüllt (Dinas-Daten vorhanden), sonst gleiche Regel
+    # ── FILTER 1: Keine Null-Erlöse (nur POST) ────────────────────────────────
+    # PRE-Zeilen: immer behalten — Erlöse Fracht ist im Dinas-BI grundsätzlich 0
+    # POST-Zeilen: muss Erlöse Fracht != 0 haben
     n_before_f1 = df.groupby('Kunden Nr BK').size()
     _erloes_fracht = pd.to_numeric(df['Erlöse Fracht'], errors='coerce')
+    is_pre     = df['periode'] == 'PRE'
     erloes_ok  = _erloes_fracht.notna() & (_erloes_fracht != 0)
-    pre_nk_ok  = (df['periode'] == 'PRE') & (df['nk_fracht'].fillna(0) != 0)
-    df = df[erloes_ok | pre_nk_ok].copy()
+    df = df[is_pre | erloes_ok].copy()
     n_after_f1 = df.groupby('Kunden Nr BK').size()
     print(f'    Filter 1 (Null-Erlöse): {(n_before_f1 - n_after_f1.reindex(n_before_f1.index, fill_value=0)).sum():,} '
           f'Zeilen entfernt → {len(df):,} verbleiben')
