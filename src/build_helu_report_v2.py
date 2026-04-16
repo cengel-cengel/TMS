@@ -253,20 +253,20 @@ THIN = Side(border_style='thin', color='BBBBBB')
 BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 EUR_FMT = '#,##0.00'
 
-# 25 Spalten
+# 29 Spalten
 HDR_COLS = ['System','Auftrags-Nr','Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
-            'Gew.band','Zone','Basis','Basispreis',
-            'Eff. Preis','Tonnage kg','Soll EUR',
+            'Gew.band','Zone','Basis','Basis Menge','Basispreis',
+            'Eff. Preis','Tonnage kg','Stellplätze','Lademeter','Volumen','Soll EUR',
             'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
             'Erlöse','Abw. Grund']
-N = len(HDR_COLS)  # 25
+N = len(HDR_COLS)  # 29
 
-# 12=Basispreis, 13=Eff.Preis, 15=Soll EUR, 16=Fracht EUR, 17-23=NK, 24=Erlöse
-EUR_COLS = {12,13,15,16,17,18,19,20,21,22,23,24}   # 1-based
-KG_COL   = 14   # Tonnage kg
-DATE_COL = 4    # Sendungsdatum
-STR_COLS = {2, 3}  # Auftrags-Nr, Rech.-Nr — als Text um E-Notation zu verhindern
+# 13=Basispreis, 14=Eff.Preis, 19=Soll EUR, 20=Fracht EUR, 21-27=NK, 28=Erlöse
+EUR_COLS  = {13,14,19,20,21,22,23,24,25,26,27,28}  # 1-based
+NUM_RIGHT = {12, 15, 16, 17, 18}  # Basis Menge, Tonnage kg, Stellplätze, Lademeter, Volumen
+DATE_COL  = 4    # Sendungsdatum
+STR_COLS  = {2, 3}  # Auftrags-Nr, Rech.-Nr — als Text um E-Notation zu verhindern
 
 FILL_HDR  = fill('1F497D')
 FILL_CLU  = fill('2E75B6')
@@ -293,7 +293,7 @@ def write_row(ws, row, values, row_fill, is_ctrl=False):
             except: v = str(v)
         fmt = ('DD.MM.YYYY' if ci == DATE_COL else
                EUR_FMT if ci in EUR_COLS else None)
-        al  = 'right' if ci in EUR_COLS or ci == KG_COL else 'left'
+        al  = 'right' if ci in EUR_COLS or ci in NUM_RIGHT else 'left'
         wc(ws, row, ci, v, rf, fnt(size=9), al, fmt, BRD)
 
 # ── Sheet 1: Helu GmbH ────────────────────────────────────────────────────
@@ -366,12 +366,14 @@ def build_main_sheet(ws):
             zone    = r.get('_zone') or 'n/a'
             bp      = r.get('_basispreis')
             eff     = r.get('_eff_100kg')
+            kg      = r.get('Tonnage (eff.)')
+            billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             is_ctrl = (r.name == ctrl_pi)
             vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
                     r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
-                    gwband, zone, BASIS, bp, eff,
-                    r.get('Tonnage (eff.)'), soll,
+                    gwband, zone, BASIS, billing_kg, bp, eff,
+                    kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk,
                     erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_ALT, is_ctrl)
@@ -385,19 +387,21 @@ def build_main_sheet(ws):
             zone    = r.get('_zone') or 'n/a'
             bp      = r.get('_basispreis')
             eff     = r.get('_eff_100kg')
+            kg      = r.get('Tonnage (eff.)')
+            billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             is_ctrl = (r.name == ctrl_oi)
             vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
                     r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
-                    gwband, zone, BASIS, bp, eff,
-                    r.get('Tonnage (eff.)'), soll,
+                    gwband, zone, BASIS, billing_kg, bp, eff,
+                    kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk,
                     erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_NEU, is_ctrl)
 
         row += 1  # Leerzeile
 
-    widths = [8,15,13,12,18,5,8,8,11,8,10,10, 10,9,10, 10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,13,12,18,5,8,8, 11,8,10, 9,10,10,9,9,9,9,10, 10,9,9,9,9,9,9,9, 11,22]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
