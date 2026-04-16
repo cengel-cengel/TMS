@@ -153,6 +153,71 @@ NUM_COLS = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 0) Mastersendungen konsolidieren
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Erlöse-Spalten, die über alle Sub-Zeilen summiert werden
+_ERLOESE_COLS = [
+    'Erlöse Fracht', 'Erlöse Diesel', 'Erlöse Maut', 'Erlöse Nebengebühr',
+    'Erlöse Lademittel', 'Erlöse Peak', 'Erlöse EUST Zoll',
+    'Erlöse Transportversicherung', 'Erloese', 'Kosten Fracht',
+]
+
+
+def consolidate_master_shipments(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Gruppiert Mastersendungen BEVOR der Tarifvergleich läuft.
+
+    Struktur im BI:
+      - Master-Zeile:  Auftragsnummer == int(Mastersendung), Erlöse = 0,
+                       physische Dimensionen = Aggregat (korrekt)
+      - Sub-Zeilen:    Erlöse aufgeteilt, Dimensionen = Teilwerte, Unterauftrag gesetzt
+
+    Konsolidierungsregel:
+      - Physische Dimensionen (Tonnage, LDM, Stellplätze, Volumen, Colli, Packstücke)
+        → aus der Master-Zeile übernehmen (bereits aggregiert)
+      - Erlöse-Spalten → über ALLE Zeilen der Gruppe summieren (Master hat 0)
+      - Zeilen ohne Mastersendung bleiben unverändert
+    """
+    erloes_present = [c for c in _ERLOESE_COLS if c in df.columns]
+
+    ms_numeric = pd.to_numeric(df['Mastersendung'], errors='coerce')
+
+    # Standalone-Zeilen (kein Mastersendung-Eintrag) → unverändert
+    standalone = df[ms_numeric.isna()].copy()
+
+    grouped_df = df[ms_numeric.notna()].copy()
+    if grouped_df.empty:
+        return df
+
+    grouped_df['_ms_num']    = pd.to_numeric(grouped_df['Mastersendung'],  errors='coerce')
+    grouped_df['_auftr_num'] = pd.to_numeric(grouped_df['Auftragsnummer'], errors='coerce')
+    grouped_df['_is_master'] = grouped_df['_auftr_num'] == grouped_df['_ms_num']
+
+    consolidated_parts: list[pd.Series] = []
+
+    for ms_val, grp in grouped_df.groupby('_ms_num', sort=False):
+        master_rows = grp[grp['_is_master']]
+        base = (master_rows.iloc[0] if not master_rows.empty else grp.iloc[0]).copy()
+
+        # Erlöse aufsummieren (Master-Zeile hat 0, Sub-Zeilen tragen die echten Werte)
+        for col in erloes_present:
+            col_vals = pd.to_numeric(grp[col], errors='coerce')
+            base[col] = col_vals.sum(min_count=1)
+
+        consolidated_parts.append(base)
+
+    if consolidated_parts:
+        consolidated = pd.DataFrame(consolidated_parts).drop(
+            columns=['_ms_num', '_auftr_num', '_is_master'], errors='ignore'
+        )
+    else:
+        consolidated = pd.DataFrame(columns=df.columns)
+
+    return pd.concat([standalone, consolidated], ignore_index=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 1) Daten laden & anreichern
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -176,14 +241,51 @@ def build_bi_raw() -> pd.DataFrame:
         .astype('Int64').astype(str)
     )
 
-    # HERMA Abrechnungsgewicht: max(Tonnage, LDM*1500, Vol*300)
+    # ── Mastersendungen konsolidieren ─────────────────────────────────────────
+    n_before_ms = len(df)
+    ms_numeric  = pd.to_numeric(df['Mastersendung'], errors='coerce')
+    n_ms_groups = int(ms_numeric.notna().sum())
+
+    # Vor/nach-Beispiel: erste Mastersendung mit mind. 3 Zeilen
+    _ex_ms: int | None = None
+    if n_ms_groups > 0:
+        ms_grp_sizes = df[ms_numeric.notna()].groupby(
+            pd.to_numeric(df.loc[ms_numeric.notna(), 'Mastersendung'], errors='coerce')
+        ).size()
+        big_groups = ms_grp_sizes[ms_grp_sizes >= 3]
+        if not big_groups.empty:
+            _ex_ms = int(big_groups.index[0])
+
+    if _ex_ms is not None:
+        _ex_mask = pd.to_numeric(df['Mastersendung'], errors='coerce') == _ex_ms
+        _ex_before = df[_ex_mask][
+            ['Auftragsnummer', 'Mastersendung', 'Tonnage (eff.)', 'Lademeter',
+             'Stellplätze', 'Erloese', 'Erlöse Fracht', 'Erlöse Diesel']
+        ].head(6)
+        print(f'\n--- Mastersendung Beispiel VOR Konsolidierung (MS={_ex_ms}, {int(_ex_mask.sum())} Zeilen) ---')
+        print(_ex_before.to_string(index=False))
+
+    df = consolidate_master_shipments(df)
+    n_after_ms = len(df)
+    print(f'\n[1b] Mastersendungen konsolidiert: {n_before_ms:,} → {n_after_ms:,} Zeilen '
+          f'(−{n_before_ms - n_after_ms:,} Sub-Zeilen entfernt)')
+
+    if _ex_ms is not None:
+        _ex_mask2 = pd.to_numeric(df['Mastersendung'], errors='coerce') == _ex_ms
+        _ex_after = df[_ex_mask2][
+            ['Auftragsnummer', 'Mastersendung', 'Tonnage (eff.)', 'Lademeter',
+             'Stellplätze', 'Erloese', 'Erlöse Fracht', 'Erlöse Diesel']
+        ].head(3)
+        print(f'--- Mastersendung Beispiel NACH Konsolidierung ({int(_ex_mask2.sum())} Zeile) ---')
+        print(_ex_after.to_string(index=False))
+        print()
+
+    # Abgeleitete Dimensionsspalten (nach Konsolidierung, damit Mastersendungs-Werte korrekt)
     df['herma_gewicht'] = pd.concat([
         df['Tonnage (eff.)'],
         df['Lademeter'].mul(1500),
         df['Volumen'].mul(300),
     ], axis=1).max(axis=1)
-
-    # Stellplätze ableiten
     df['Stellplätze_calc'] = np.where(
         df['Stellplätze'].isna() | (df['Stellplätze'] == 0),
         np.ceil(df['Lademeter'] / 0.4),
