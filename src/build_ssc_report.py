@@ -63,6 +63,59 @@ def lookup_sika(dlv, land, plz, n_stpl):
                 return prices.get(n)
     return None
 
+# ── Master/Sub-Konsolidierung ──────────────────────────────────────────────
+_ms_map_cache = None
+
+def norm_ms(v):
+    try: return str(int(float(str(v).strip())))
+    except: return str(v).strip()
+
+def _get_ms_map():
+    global _ms_map_cache
+    if _ms_map_cache is not None: return _ms_map_cache
+    _bi = pd.read_pickle(BI_PKL)['df']
+    _bi = _bi[['Auftragsnummer','Mastersendung','Unterauftrag']].copy()
+    _bi['_aid'] = _bi['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
+    _bi['_ms']  = _bi['Mastersendung'].apply(lambda v: norm_ms(v) if pd.notna(v) else '')
+    _ms_map_cache = _bi.drop_duplicates('_aid').set_index('_aid')[['_ms','Unterauftrag']]
+    return _ms_map_cache
+
+def enrich_master_sub(df):
+    fin_cols = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
+                'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
+    msmap = _get_ms_map()
+    df = df.copy()
+    aid = df['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
+    ms  = aid.map(msmap['_ms']).fillna('')
+    ua  = aid.map(msmap['Unterauftrag'])
+    df['_is_master']  = (ms.values == aid.values) & (ms.values != '')
+    df['_is_sub']     = (ms.values != '') & ~df['_is_master']
+    df['_ms_ref']     = ms.values
+    df['_unterauftr'] = ua.values
+    subs = df[df['_is_sub']]
+    if len(subs) > 0:
+        present = [c for c in fin_cols if c in df.columns]
+        for c in present: df[c] = pd.to_numeric(df[c], errors='coerce')
+        ssums = subs.groupby('_ms_ref')[present].sum()
+        for c in present:
+            msk = df['_is_master']
+            df.loc[msk, c] = df.loc[msk,'_ms_ref'].map(ssums[c]).fillna(df.loc[msk,c])
+    df['_master_nr']  = ms.where(ms != '', None).values
+    df['_sub_nrs']    = df.apply(
+        lambda r: str(r['_unterauftr']) if r['_is_master'] and pd.notna(r['_unterauftr']) else None, axis=1)
+    df['_n_subs']     = df['_sub_nrs'].apply(lambda v: len(v.split(',')) if isinstance(v, str) and v else 0)
+    df['_ist_master'] = df['_is_master'].map({True:'Ja', False:''})
+    n_sub = df['_is_sub'].sum()
+    df = df[~df['_is_sub']].copy()
+    print(f'  Master/Sub: {n_sub} Subs entfernt, {df["_is_master"].sum()} Masters angereichert')
+    return df
+
+def add_empty_master_cols(df):
+    df = df.copy()
+    for c in ('_master_nr','_sub_nrs','_ist_master'): df[c] = None
+    df['_n_subs'] = 0
+    return df
+
 print('Lade Sika DLV...')
 dlv = load_sika_dlv()
 print(f'DLV: {len(dlv)} Routen')
@@ -135,6 +188,10 @@ pre['_stpl']  = pre['Lademeter'].apply(
     lambda x: max(1, math.ceil(float(x)/0.4)) if pd.notna(x) and float(x) > 0 else 1)
 post['_stpl'] = pd.to_numeric(post['Stellplätze'], errors='coerce').fillna(1).clip(lower=1)
 
+print('Konsolidiere Master/Sub-Sendungen...')
+post = enrich_master_sub(post)
+pre  = add_empty_master_cols(pre)
+
 for df in (pre, post):
     df['_land']  = df['Empfänger Land'].astype(str).str.strip()
     df['_plz2']  = df['Empfänger PLZ'].astype(str).str.strip().str[:2]
@@ -201,16 +258,17 @@ def fnt(bold=False, color='000000', size=9):
 THIN = Side(border_style='thin', color='BBBBBB')
 BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 EUR_FMT = '#,##0.00'
-HDR_COLS = ['System','Auftrags-Nr','Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
+HDR_COLS = ['System','Auftrags-Nr','Master-Nr','Sub-Nr(n)','Anzahl Subs','Ist Master',
+            'Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
             'Gew.band','Zone','Basis','Basis Menge','Basispreis',
             'Eff. Preis','Tonnage kg','Stellplätze','Lademeter','Volumen','Soll EUR',
             'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
             'Erlöse','Abw. Grund']
 N = len(HDR_COLS)
-EUR_COLS  = {13,14,19,20,21,22,23,24,25,26,27,28}
-NUM_RIGHT = {12, 15, 16, 17, 18}
-STR_COLS  = {2, 3}; DATE_COL = 4
+EUR_COLS  = {17,18,23,24,25,26,27,28,29,30,31,32}
+NUM_RIGHT = {5, 16, 19, 20, 21, 22}
+STR_COLS  = {2, 3, 7}; DATE_COL = 8
 FILL_HDR = fill('1F497D'); FILL_CLU = fill('2E75B6')
 FILL_ALT = fill('BDD7EE'); FILL_NEU = fill('FCE4D6'); FILL_CTRL = fill('E2EFDA')
 
@@ -279,8 +337,9 @@ def build_main_sheet(ws):
             nk = get_nk_alt(r); erloese = r.get('Dinas Gesamt') or 0
             soll = r.get('Soll EUR'); stpl = r.get('_stpl') or 1; eff = r.get('_eff')
             bp = soll / stpl if soll and stpl else None
-            vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
-                    r.get('Leistungsdatum'), KUNDE,
+            vals = ['alt', r.get('Auftragsnummer'),
+                    r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
+                    r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
                     sb, 'n/a', BASIS, stpl, bp, eff,
                     r.get('Tonnage (eff.)'), r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
@@ -291,15 +350,16 @@ def build_main_sheet(ws):
             nk = get_nk_neu(r); erloese = r.get('AX Gesamt') or 0
             soll = r.get('Soll EUR'); stpl = r.get('_stpl') or 1; eff = r.get('_eff')
             bp = soll / stpl if soll and stpl else None
-            vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
-                    r.get('Leistungsdatum'), KUNDE,
+            vals = ['neu', r.get('Auftragsnummer'),
+                    r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
+                    r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
                     sb, 'n/a', BASIS, stpl, bp, eff,
                     r.get('Tonnage (eff.)'), r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk, erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_NEU, r.name==ctrl_oi)
         row += 1
-    widths = [8,15,13,12,18,5,8,8, 11,8,10, 9,10,10,9,9,9,9,10, 10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20; ws.row_dimensions[2].height = 18

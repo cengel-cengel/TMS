@@ -50,6 +50,59 @@ def norm_id(v):
     try: return str(int(float(str(v))))
     except: return str(v).strip()
 
+# ── Master/Sub-Konsolidierung ──────────────────────────────────────────────
+_ms_map_cache = None
+
+def norm_ms(v):
+    try: return str(int(float(str(v).strip())))
+    except: return str(v).strip()
+
+def _get_ms_map():
+    global _ms_map_cache
+    if _ms_map_cache is not None: return _ms_map_cache
+    _bi = pd.read_pickle(Path('output/bi_top20_data.pkl'))['df']
+    _bi = _bi[['Auftragsnummer','Mastersendung','Unterauftrag']].copy()
+    _bi['_aid'] = _bi['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
+    _bi['_ms']  = _bi['Mastersendung'].apply(lambda v: norm_ms(v) if pd.notna(v) else '')
+    _ms_map_cache = _bi.drop_duplicates('_aid').set_index('_aid')[['_ms','Unterauftrag']]
+    return _ms_map_cache
+
+def enrich_master_sub(df):
+    fin_cols = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
+                'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
+    msmap = _get_ms_map()
+    df = df.copy()
+    aid = df['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
+    ms  = aid.map(msmap['_ms']).fillna('')
+    ua  = aid.map(msmap['Unterauftrag'])
+    df['_is_master']  = (ms.values == aid.values) & (ms.values != '')
+    df['_is_sub']     = (ms.values != '') & ~df['_is_master']
+    df['_ms_ref']     = ms.values
+    df['_unterauftr'] = ua.values
+    subs = df[df['_is_sub']]
+    if len(subs) > 0:
+        present = [c for c in fin_cols if c in df.columns]
+        for c in present: df[c] = pd.to_numeric(df[c], errors='coerce')
+        ssums = subs.groupby('_ms_ref')[present].sum()
+        for c in present:
+            msk = df['_is_master']
+            df.loc[msk, c] = df.loc[msk,'_ms_ref'].map(ssums[c]).fillna(df.loc[msk,c])
+    df['_master_nr']  = ms.where(ms != '', None).values
+    df['_sub_nrs']    = df.apply(
+        lambda r: str(r['_unterauftr']) if r['_is_master'] and pd.notna(r['_unterauftr']) else None, axis=1)
+    df['_n_subs']     = df['_sub_nrs'].apply(lambda v: len(v.split(',')) if isinstance(v, str) and v else 0)
+    df['_ist_master'] = df['_is_master'].map({True:'Ja', False:''})
+    n_sub = df['_is_sub'].sum()
+    df = df[~df['_is_sub']].copy()
+    print(f'  Master/Sub: {n_sub} Subs entfernt, {df["_is_master"].sum()} Masters angereichert')
+    return df
+
+def add_empty_master_cols(df):
+    df = df.copy()
+    for c in ('_master_nr','_sub_nrs','_ist_master'): df[c] = None
+    df['_n_subs'] = 0
+    return df
+
 # ── Tarif laden ────────────────────────────────────────────────────────────
 print('Lade Helu-Tarif...')
 tariff = load_helu()
@@ -135,6 +188,10 @@ if len(zero_pre):
               f'Gesamt={z.get("Dinas Gesamt"):.2f} EUR  '
               f'(Verzollung={z.get("Dinas Verzollung",0):.2f})')
 pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
+
+print('Konsolidiere Master/Sub-Sendungen...')
+post = enrich_master_sub(post)
+pre  = add_empty_master_cols(pre)
 
 # ── Eff. EUR/100kg pro Sendung ─────────────────────────────────────────────
 pre['_eff_100kg']  = pre['Dinas Fracht']  / pre['Tonnage (eff.)'] * 100
@@ -253,20 +310,20 @@ THIN = Side(border_style='thin', color='BBBBBB')
 BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 EUR_FMT = '#,##0.00'
 
-# 29 Spalten
-HDR_COLS = ['System','Auftrags-Nr','Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
+# 33 Spalten
+HDR_COLS = ['System','Auftrags-Nr','Master-Nr','Sub-Nr(n)','Anzahl Subs','Ist Master',
+            'Rech.-Nr','Sendungsdatum','Kunde','Land','Empf.PLZ','Vers.PLZ',
             'Gew.band','Zone','Basis','Basis Menge','Basispreis',
             'Eff. Preis','Tonnage kg','Stellplätze','Lademeter','Volumen','Soll EUR',
             'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
             'Erlöse','Abw. Grund']
-N = len(HDR_COLS)  # 29
+N = len(HDR_COLS)  # 33
 
-# 13=Basispreis, 14=Eff.Preis, 19=Soll EUR, 20=Fracht EUR, 21-27=NK, 28=Erlöse
-EUR_COLS  = {13,14,19,20,21,22,23,24,25,26,27,28}  # 1-based
-NUM_RIGHT = {12, 15, 16, 17, 18}  # Basis Menge, Tonnage kg, Stellplätze, Lademeter, Volumen
-DATE_COL  = 4    # Sendungsdatum
-STR_COLS  = {2, 3}  # Auftrags-Nr, Rech.-Nr — als Text um E-Notation zu verhindern
+EUR_COLS  = {17,18,23,24,25,26,27,28,29,30,31,32}  # 1-based
+NUM_RIGHT = {5, 16, 19, 20, 21, 22}  # Anzahl Subs, Basis Menge, Tonnage kg, Stellplätze, Lademeter, Volumen
+DATE_COL  = 8
+STR_COLS  = {2, 3, 7}  # Auftrags-Nr, Master-Nr, Rech.-Nr
 
 FILL_HDR  = fill('1F497D')
 FILL_CLU  = fill('2E75B6')
@@ -369,8 +426,9 @@ def build_main_sheet(ws):
             kg      = r.get('Tonnage (eff.)')
             billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             is_ctrl = (r.name == ctrl_pi)
-            vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
-                    r.get('Leistungsdatum'), KUNDE,
+            vals = ['alt', r.get('Auftragsnummer'),
+                    r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
+                    r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
                     gwband, zone, BASIS, billing_kg, bp, eff,
                     kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
@@ -390,8 +448,9 @@ def build_main_sheet(ws):
             kg      = r.get('Tonnage (eff.)')
             billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             is_ctrl = (r.name == ctrl_oi)
-            vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
-                    r.get('Leistungsdatum'), KUNDE,
+            vals = ['neu', r.get('Auftragsnummer'),
+                    r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
+                    r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
                     gwband, zone, BASIS, billing_kg, bp, eff,
                     kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
@@ -401,7 +460,7 @@ def build_main_sheet(ws):
 
         row += 1  # Leerzeile
 
-    widths = [8,15,13,12,18,5,8,8, 11,8,10, 9,10,10,9,9,9,9,10, 10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
