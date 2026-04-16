@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""build_sika_report.py — Sika Deutschland GmbH (KNR 491063), Stellplatz-basiert"""
+"""build_geze_report.py — GEZE GmbH (KNR 406035), Tonnage-basiert EUR/100kg"""
 import glob as _glob, math, re
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -9,71 +9,103 @@ from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0, 'src')
 from dinas_pdf_parser import parse_one, flatten
 
-SRC_XLSX  = Path('output/sika_dinas_vergleich.xlsx')
-NK_XLSX   = Path('data/extracted/v1/Noerpel AI/SIka/Nebenbedingungen DINAS/NK Sika.xlsx')
-DLV_XLSX  = Path('data/extracted/v1/Noerpel AI/SIka/DLV/SIKA Deutschland GmbH Stuttgart/2026/20260211_SIKA DE & SSC Export div. LKZ_Stellplatzofferte_2026.xlsx')
-DINAS_DIR = Path('data/extracted/v1/Noerpel AI/SIka/Rechnungen/Rechnungen DINAS')
-CACHE     = Path('output/dinas_cache_491063.pkl')
-OUT_XLSX  = Path('output/billing_report/sika_dinas_vergleich.xlsx')
+SRC_XLSX  = Path('output/geze_dinas_vergleich.xlsx')
+NK_XLSX   = Path('data/extracted/v1/Noerpel AI/GEZE/Nebenbedingungen DINAS/NK Geze.xlsx')
+DLV_PATH  = Path('data/extracted/v1/Noerpel AI/GEZE/DLV/2025/20250305_Geze_Export_incl. MP_ PT_GB_IT_FR_AT_ES_CH_inkl. Maut und Zusatzkosten IT-00_ERG#U00c4NZT UM DUBLIN.xlsx')
+DINAS_DIR = Path('data/extracted/v1/Noerpel AI/GEZE/Rechnungen/Rechnungen DINAS')
+CACHE     = Path('output/dinas_cache_406035.pkl')
+OUT_XLSX  = Path('output/billing_report/geze_dinas_vergleich.xlsx')
 OUT_XLSX.parent.mkdir(exist_ok=True)
-KNR, KUNDE, BASIS = 491063, 'Sika Deutschland GmbH', 'EUR/Stpl'
+KNR, KUNDE, BASIS = 406035, 'GEZE GmbH', 'EUR/100kg'
 
-STPL_BANDS = [2, 5, 10, 20, 33]
-def stpl_band(n):
-    try: n = float(n)
+BANDS = [100, 200, 300, 500, 750, 1000, 2000, 3000]
+def gew_band(kg):
+    try: kg = float(kg)
     except: return '?'
-    if math.isnan(n) or n <= 0: return '?'
-    for b in STPL_BANDS:
-        if n <= b: return f'bis {b} Stpl'
-    return 'ueber 33 Stpl'
+    if math.isnan(kg) or kg <= 0: return '?'
+    for b in BANDS:
+        if kg <= b: return f'bis {b}kg'
+    return 'ueber 3000kg'
 
-# ── DLV Sika Stellplatz-Tarif ──────────────────────────────────────────────
-def load_sika_dlv():
-    df = pd.read_excel(DLV_XLSX, sheet_name='Sika Export Rates 2025', header=None)
-    hdr = df.iloc[12]
-    col_map = {int(float(v)): i for i, v in enumerate(hdr)
-               if not pd.isna(v) and str(v).replace('.0','').strip().isdigit()}
-    rows = []
-    for _, r in df.iloc[13:77].iterrows():
-        land = str(r.iloc[0]).strip() if not pd.isna(r.iloc[0]) else ''
-        zk   = str(r.iloc[1]).strip() if not pd.isna(r.iloc[1]) else ''
-        if not land or land in ('nan','') or 'Rates' in land: break
-        prices = {}
-        for n, ci in col_map.items():
-            v = r.iloc[ci]
-            if pd.isna(v): continue
-            try: prices[n] = float(v)
-            except (ValueError, TypeError): pass
-        if not prices: continue
-        prefixes = []
-        for p in zk.replace(' ', '').split(','):
-            p = re.sub(r'xxx', '', p)
-            if '-' in p: p = p.split('-', 1)[1]
-            prefixes.append(p.upper())
-        rows.append((land, prefixes, prices))
-    return rows
+# ── DLV GEZE (Exporttarife, weight-based per 100kg) ───────────────────────
+COUNTRY_MAP = {
+    'Portugal': 'PT', 'Großbritanien': 'GB', 'Irland': 'IE',
+    'Italien': 'IT', 'Frankreich': 'FR', 'Frankreich Zone 7': 'FR',
+    'Österreich': 'AT', 'Spanien': 'ES', 'Schweiz': 'CH',
+}
 
-def lookup_sika(dlv, land, plz, n_stpl):
+def _extract_prefixes(plz_str, land):
+    prefixes = set()
+    for part in re.split(r'[,;]', str(plz_str)):
+        part = part.strip()
+        if not part or part == 'nan': continue
+        m = re.match(r'^(\d{2})\s*[-–]\s*(\d{2})$', part.replace(' ', ''))
+        if m:
+            for i in range(int(m.group(1)), int(m.group(2)) + 1):
+                prefixes.add(f'{i:02d}')
+            continue
+        nums = re.findall(r'\b(\d{2})\b', part)
+        prefixes.update(nums)
+        if land == 'GB':
+            m2 = re.match(r'^([A-Z]{1,2})', part.strip().upper())
+            if m2: prefixes.add(m2.group(1))
+    return prefixes
+
+def _parse_kg(s):
+    try: return int(re.sub(r'[^\d]', '', str(s).split('kg')[0]))
+    except: return None
+
+def load_geze_dlv():
+    df = pd.read_excel(DLV_PATH, sheet_name='Exporttarife', header=None)
+    result = {}
+    cur = None
+    band_cols = {}
+    for i, row in df.iterrows():
+        v0 = str(row.iloc[0]).strip()
+        if v0 in ('nan', '', 'NaN'): continue
+        if v0 in COUNTRY_MAP:
+            cur = COUNTRY_MAP[v0]
+            if cur not in result: result[cur] = []
+            band_cols = {}
+        elif v0.startswith('ab Werk'):
+            for ci, cell in enumerate(row):
+                kg = _parse_kg(cell) if 'kg' in str(cell) else None
+                if kg: band_cols[ci] = kg
+        elif cur and re.match(r'^Zone\s*\d', v0):
+            plz_str = str(row.iloc[1])
+            try: minimum = float(row.iloc[2])
+            except: minimum = 0.0
+            prefixes = _extract_prefixes(plz_str, cur)
+            zone_bands = []
+            for ci, kg in sorted(band_cols.items()):
+                try: zone_bands.append((kg, float(row.iloc[ci])))
+                except: pass
+            if prefixes and zone_bands:
+                result[cur].append((v0, prefixes, minimum, zone_bands))
+    return result
+
+def lookup_geze(dlv, land, plz, tonnage_kg):
+    zones = dlv.get(land, [])
+    if not zones or pd.isna(tonnage_kg): return None
     plz = str(plz).strip().upper()
-    for row_land, prefixes, prices in dlv:
-        if row_land != land: continue
-        for pfx in prefixes:
-            if plz.startswith(pfx):
-                n = max(1, min(max(prices), int(math.ceil(float(n_stpl)))))
-                return prices.get(n)
+    billing_kg = max(100, math.ceil(float(tonnage_kg) / 100) * 100)
+    for zone_name, prefixes, minimum, bands in zones:
+        if plz[:2] not in prefixes and plz[:1] not in prefixes: continue
+        rate = next((r for bis_kg, r in sorted(bands) if billing_kg <= bis_kg), bands[-1][1])
+        return max(minimum, rate * billing_kg / 100)
     return None
 
-print('Lade Sika DLV...')
-dlv = load_sika_dlv()
-print(f'DLV: {len(dlv)} Routen')
+print('Lade GEZE DLV...')
+dlv = load_geze_dlv()
+print(f'DLV: {sum(len(v) for v in dlv.values())} Zonen in {list(dlv.keys())}')
 
 # ── Daten laden ────────────────────────────────────────────────────────────
 pre  = pd.read_excel(SRC_XLSX, sheet_name='PRE Dinas Detail',  header=2)
 post = pd.read_excel(SRC_XLSX, sheet_name='POST AX Detail',    header=2)
 
-for df, name in [(pre,'PRE'),(post,'POST')]:
+for df, name in [(pre, 'PRE'), (post, 'POST')]:
     bad = df['Rechnungsnummer'].apply(
-        lambda v: str(v).strip().rstrip('0').rstrip('.') in ('0','','nan'))
+        lambda v: str(v).strip().rstrip('0').rstrip('.') in ('0', '', 'nan'))
     if bad.sum():
         print(f'Filtere {bad.sum()} {name} Zeilen RN=0')
         df.drop(index=df[bad].index, inplace=True)
@@ -87,6 +119,7 @@ if CACHE.exists():
     dinas_cache = pd.read_pickle(CACHE)
     print(f'DINAS cache: {len(dinas_cache)} Positionen')
 else:
+    print('Parse DINAS PDFs...')
     pdfs = _glob.glob(str(DINAS_DIR / '*.pdf'))
     rows = [flatten(pos) for p in pdfs for pos in parse_one(p)]
     dinas_cache = pd.DataFrame(rows)
@@ -111,32 +144,28 @@ DINAS_RENAME = {
     'sulphur':'Dinas Sulphur', 'neben_pausch':'Dinas Nebenkostenpausch.',
     'redebit':'Dinas Redebit', 'sonstige':'Dinas Sonstige', 'gesamtbetrag':'Dinas Gesamt',
 }
-cache_nk = dinas_cache.rename(columns=DINAS_RENAME)[['_snr']+list(DINAS_RENAME.values())].copy()
+cache_nk = dinas_cache.rename(columns=DINAS_RENAME)[['_snr'] + list(DINAS_RENAME.values())].copy()
 pre = pre.merge(cache_nk, on='_snr', how='left')
 pre.drop(columns=['_snr'], inplace=True)
 for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
 print(f'DINAS re-joined: {pre["Dinas Fracht"].notna().sum()}/{len(pre)} PRE')
 pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
 
-# ── Stellplätze: abgeleitet aus LDM für PRE, direkt für POST ───────────────
-pre['_stpl']  = pre['Lademeter'].apply(
-    lambda x: max(1, math.ceil(float(x)/0.4)) if pd.notna(x) and float(x) > 0 else 1)
-post['_stpl'] = pd.to_numeric(post['Stellplätze'], errors='coerce').fillna(1).clip(lower=1)
-
 for df in (pre, post):
+    df['Tonnage (eff.)'] = pd.to_numeric(df['Tonnage (eff.)'], errors='coerce')
     df['_land']  = df['Empfänger Land'].astype(str).str.strip()
     df['_plz2']  = df['Empfänger PLZ'].astype(str).str.strip().str[:2]
     df['_vplz2'] = df['Versender PLZ'].astype(str).str.strip().str[:2]
-    df['_sb']    = df['_stpl'].apply(stpl_band)
-    df['_cl']    = df['_land'] + '|' + df['_plz2'] + '|' + df['_sb']
+    df['_gwb']   = df['Tonnage (eff.)'].apply(gew_band)
+    df['_cl']    = df['_land'] + '|' + df['_plz2'] + '|' + df['_gwb']
 
-pre['_eff']  = pre['Dinas Fracht']  / pre['_stpl']
-post['_eff'] = post['AX Fracht']    / post['_stpl']
+pre['_eff']  = pre['Dinas Fracht']  / pre['Tonnage (eff.)'] * 100
+post['_eff'] = post['AX Fracht']    / post['Tonnage (eff.)'] * 100
 
 # ── Soll EUR via DLV ───────────────────────────────────────────────────────
 print('Berechne Soll EUR...')
-pre['Soll EUR']  = pre.apply( lambda r: lookup_sika(dlv, r['_land'], r['Empfänger PLZ'], r['_stpl']), axis=1)
-post['Soll EUR'] = post.apply(lambda r: lookup_sika(dlv, r['_land'], r['Empfänger PLZ'], r['_stpl']), axis=1)
+pre['Soll EUR']  = pre.apply( lambda r: lookup_geze(dlv, r['_land'], r['Empfänger PLZ'], r['Tonnage (eff.)']), axis=1)
+post['Soll EUR'] = post.apply(lambda r: lookup_geze(dlv, r['_land'], r['Empfänger PLZ'], r['Tonnage (eff.)']), axis=1)
 print(f'Soll EUR: PRE {pre["Soll EUR"].notna().sum()}/{len(pre)}, POST {post["Soll EUR"].notna().sum()}/{len(post)}')
 
 # ── Cluster-Statistiken ────────────────────────────────────────────────────
@@ -221,12 +250,12 @@ def write_row(ws, row, values, row_fill, is_ctrl=False):
         al  = 'right' if ci in EUR_COLS or ci == KG_COL else 'left'
         wc(ws, row, ci, v, rf, fnt(size=9), al, fmt, BRD)
 
-# ── Sheet 1: Sika Deutschland GmbH ────────────────────────────────────────
+# ── Sheet 1: GEZE GmbH ────────────────────────────────────────────────────
 def build_main_sheet(ws):
-    ws.title = 'Sika Deutschland GmbH'
+    ws.title = 'GEZE GmbH'
     ws.freeze_panes = 'A3'
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=N)
-    wc(ws,1,1, f'Sika Deutschland GmbH ({KNR}) — Dinas PRE vs AX POST  |  '
+    wc(ws,1,1, f'GEZE GmbH ({KNR}) — Dinas PRE vs AX POST  |  '
                f'Cluster: {len(stats)}  |  Sigma Verlust: {stats["loss"].sum():,.0f} EUR',
        FILL_HDR, fnt(bold=True, color='FFFFFF', size=12), 'center')
     for ci, h in enumerate(HDR_COLS, 1):
@@ -234,7 +263,7 @@ def build_main_sheet(ws):
     row = 2
     for _, cl in stats.iterrows():
         ckey = cl['_cl']; parts = ckey.split('|')
-        land, plz_p, sb = (parts+['','',''])[:3]
+        land, plz_p, gwband = (parts+['','',''])[:3]
         vplz = str(cl.get('vplz2',''))
         pre_all  = pre[pre['_cl']==ckey]
         post_all = post[post['_cl']==ckey]
@@ -247,12 +276,16 @@ def build_main_sheet(ws):
         pre_s = pre_all.head(5); post_s = post_under.head(5)
         ctrl_pi = ctrl_oi = None; best = float('inf')
         for pi, pr in pre_all.iterrows():
+            pr_kg = pr.get('Tonnage (eff.)')
+            if pd.isna(pr_kg): continue
             for oi, po in post_under.iterrows():
-                d = abs(float(pr.get('_stpl') or 0) - float(po.get('_stpl') or 0))
+                po_kg = po.get('Tonnage (eff.)')
+                if pd.isna(po_kg): continue
+                d = abs(float(pr_kg) - float(po_kg))
                 if d < best: best=d; ctrl_pi=pi; ctrl_oi=oi
         row += 1
         dlv_str = f'{cl.avg_dlv:,.2f}' if not pd.isna(cl.avg_dlv) else 'n/a'
-        lbl = (f'▶ {KNR}|{vplz}|{land}|{plz_p}|{sb}|{BASIS}     '
+        lbl = (f'▶ {KNR}|{vplz}|{land}|{plz_p}|{gwband}|{BASIS}     '
                f'n_PRE={int(cl.n_pre)}  n_POST={int(cl.n_post)}  '
                f'Ø Dinas={cl.avg_d:,.2f} EUR  Ø AX={cl.avg_ax:,.2f} EUR  '
                f'Δ={cl.delta:,.2f} EUR ({cl.pct:+.1f}%)  '
@@ -264,23 +297,23 @@ def build_main_sheet(ws):
         for _, r in pre_s.iterrows():
             row += 1
             nk = get_nk_alt(r); erloese = r.get('Dinas Gesamt') or 0
-            soll = r.get('Soll EUR'); stpl = r.get('_stpl') or 1; eff = r.get('_eff')
-            bp = soll / stpl if soll and stpl else None
+            soll = r.get('Soll EUR'); kg = r.get('Tonnage (eff.)'); eff = r.get('_eff')
+            bp = soll / max(1, math.ceil(float(kg)/100)*100) * 100 if soll and pd.notna(kg) else None
             vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
                     r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
-                    sb, 'n/a', BASIS, bp, eff, stpl, soll,
+                    gwband, 'n/a', BASIS, bp, eff, kg, soll,
                     *nk, erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_ALT, r.name==ctrl_pi)
         for _, r in post_s.iterrows():
             row += 1
             nk = get_nk_neu(r); erloese = r.get('AX Gesamt') or 0
-            soll = r.get('Soll EUR'); stpl = r.get('_stpl') or 1; eff = r.get('_eff')
-            bp = soll / stpl if soll and stpl else None
+            soll = r.get('Soll EUR'); kg = r.get('Tonnage (eff.)'); eff = r.get('_eff')
+            bp = soll / max(1, math.ceil(float(kg)/100)*100) * 100 if soll and pd.notna(kg) else None
             vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'),
                     r.get('Leistungsdatum'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
-                    sb, 'n/a', BASIS, bp, eff, stpl, soll,
+                    gwband, 'n/a', BASIS, bp, eff, kg, soll,
                     *nk, erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_NEU, r.name==ctrl_oi)
         row += 1
@@ -290,7 +323,6 @@ def build_main_sheet(ws):
     ws.row_dimensions[1].height = 20; ws.row_dimensions[2].height = 18
     return row
 
-# ── Sheet 2: NK_Konditionen ────────────────────────────────────────────────
 def build_nk_sheet(ws):
     ws.title = 'NK_Konditionen'
     nk_wb = load_workbook(NK_XLSX, data_only=True); nk_ws = nk_wb.active
@@ -300,11 +332,10 @@ def build_nk_sheet(ws):
     for ci in range(1, (nk_ws.max_column or 19)+1):
         ws.column_dimensions[get_column_letter(ci)].width = 22
 
-# ── Schreiben ──────────────────────────────────────────────────────────────
 wb = Workbook()
 last_row = build_main_sheet(wb.active)
 build_nk_sheet(wb.create_sheet('NK_Konditionen'))
 wb.save(OUT_XLSX)
 print(f'\nGespeichert: {OUT_XLSX}')
-print(f'  Sheet "Sika Deutschland GmbH": {last_row} Zeilen')
-print(f'  Sheet "NK_Konditionen": NK Sika.xlsx kopiert')
+print(f'  Sheet "GEZE GmbH":      {last_row} Zeilen')
+print(f'  Sheet "NK_Konditionen": NK Geze.xlsx kopiert')
