@@ -2447,6 +2447,9 @@ def _lookup_sika(row, tariff):
     empf_plz = str(row.get('Empfänger PLZ', '') or '').strip()
 
     n_stpl_raw = row.get('Stellplätze', None)
+    if n_stpl_raw is None or pd.isna(n_stpl_raw) or float(n_stpl_raw) <= 0:
+        # Fallback auf Stellplätze_calc (aus Lademeter abgeleitet, immer vorhanden)
+        n_stpl_raw = row.get('Stellplätze_calc', None)
     if n_stpl_raw is None or pd.isna(n_stpl_raw):
         return _nan
     n_stpl_raw = float(n_stpl_raw)
