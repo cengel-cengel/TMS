@@ -1674,3 +1674,176 @@ def load_helu():
 
 
 LOADERS['408244'] = load_helu
+
+
+def load_bitzer():
+    """Lädt Bitzer Tarifdaten (KNR 406345).
+    Strukturen je nach Land:
+      AT/IT/FR/ES/PT : ERKA-Format, 'Zone N' ab col2, Zoneneinteilung → BITZER_ZONE_MAPS
+      BENELUX         : col2='Belgien\\nNiederlande' (Zone 1), col3='Zone 2'
+      CH              : col1='PLZ', Gewichtsstufen-Spalten ab col3
+    Importdateien, Sonderdestinationen (FR-13400, PT-6001) werden übersprungen.
+    """
+    if not _BITZER_BASE.is_dir():
+        print(f"Bitzer DLV-Verzeichnis nicht gefunden: {_BITZER_BASE}")
+        return pd.DataFrame()
+
+    all_rows: list = []
+
+    for fp in sorted(_BITZER_BASE.glob('*.xlsx')):
+        name = fp.name
+
+        # ── Importdateien und Sonderdestinationen überspringen ───────────────
+        if 'Import' in name:
+            continue
+
+        # ── Land aus Dateiname erkennen ──────────────────────────────────────
+        if 'sterreich' in name.lower() or '#U00d6' in name:   # Österreich (Ö URL-kodiert)
+            country = 'AT'
+        elif 'BeNeLux' in name:
+            country = 'BENELUX'
+        elif 'Frankreich_Zonentarif' in name:
+            country = 'FR'
+        elif 'FR-' in name:
+            continue                                            # FR-13400, FR-77380 überspringen
+        elif 'Italien' in name:
+            country = 'IT'
+        elif 'Portugal_Zonentarif' in name:
+            country = 'PT'
+        elif 'PT-' in name:
+            continue                                            # PT-6001 überspringen
+        elif 'Schweiz' in name:
+            country = 'CH'
+        elif 'Spanien' in name:
+            country = 'ES'
+        else:
+            continue
+
+        try:
+            raw = pd.read_excel(fp, sheet_name=0, header=None)
+        except Exception as exc:
+            print(f"  Bitzer {name}: Fehler – {exc}")
+            continue
+
+        before = len(all_rows)
+
+        # ── CH: col1='PLZ', Gewichtsstufen in col3+ ─────────────────────────
+        if country == 'CH':
+            hdr = next(
+                (i for i, r in raw.iterrows()
+                 if raw.shape[1] > 1 and pd.notna(r.iloc[1])
+                 and 'plz' in str(r.iloc[1]).lower()),
+                None)
+            if hdr is None:
+                continue
+
+            # Gewichtsstufen aus Kopfzeile (col3+)
+            wt_data: list = []         # (col_idx, weight_to, unit)
+            for ci in range(3, raw.shape[1]):
+                v = raw.iloc[hdr, ci]
+                if pd.isna(v):
+                    continue
+                v_str = str(v).strip()
+                if 'minimum' in v_str.lower():
+                    wt_data.append([ci, 100.0, 'per Sendung'])
+                else:
+                    try:
+                        wt_data.append([ci, float(v_str.replace(',', '.')), 'per 100 kg'])
+                    except ValueError:
+                        pass
+
+            # Einheiten aus Folgezeile (hdr+1) nachschärfen
+            if hdr + 1 < len(raw):
+                for entry in wt_data:
+                    ci = entry[0]
+                    u = str(raw.iloc[hdr + 1, ci]).lower() if ci < raw.shape[1] else ''
+                    if 'sendung' in u:
+                        entry[2] = 'per Sendung'
+                    elif 'per 100' in u or '100 kg' in u:
+                        entry[2] = 'per 100 kg'
+
+            for i in range(hdr + 2, len(raw)):
+                row = raw.iloc[i]
+                plz_val = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
+                if not plz_val or plz_val in ('-', 'nan'):
+                    continue
+                c0 = str(row.iloc[0]).lower() if pd.notna(row.iloc[0]) else ''
+                if any(k in c0 for k in ('komplett', 'volumen', 'rundung', 'maut')):
+                    break
+                # PLZ-Werte: "10 + 14", "18", "2074", "31, 32" usw.
+                plz_keys: set = set()
+                for token in re.split(r'[,\s+]+', plz_val):
+                    token = token.strip()
+                    if re.match(r'^\d{2,4}$', token):
+                        plz_keys.add(token[:2])
+                if not plz_keys:
+                    continue
+                for ci, wt, unit in wt_data:
+                    try:
+                        price = float(row.iloc[ci])
+                        if price <= 0:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                    for pk in plz_keys:
+                        all_rows.append({
+                            'weight_to': wt, 'zone': f'CH{pk}', 'unit': unit,
+                            'price': price, 'country': 'CH',
+                            'pricing_basis': 'EUR', 'knr': '406345',
+                        })
+
+        # ── BENELUX: col2='Belgien\\nNiederlande', col3='Zone 2' ─────────────
+        elif country == 'BENELUX':
+            hdr = None
+            zone_cols_bn: list = []
+            for i, row in raw.iterrows():
+                cands = []
+                for ci in range(2, min(6, raw.shape[1])):
+                    v = str(row.iloc[ci]).strip() if pd.notna(row.iloc[ci]) else ''
+                    if not v or v == '-':
+                        continue
+                    if 'belgien' in v.lower():
+                        cands.append((ci, 'Zone 1'))
+                    elif re.match(r'Zone\s*2', v, re.I):
+                        cands.append((ci, 'Zone 2'))
+                if len(cands) >= 2:
+                    hdr, zone_cols_bn = i, cands
+                    break
+            if hdr is None or not zone_cols_bn:
+                continue
+            all_rows.extend(
+                _parse_erka_bands(raw, hdr, zone_cols_bn, 'BENELUX', '406345'))
+
+        # ── AT / IT / FR / ES / PT: Standard-ERKA-Format ────────────────────
+        else:
+            # Zonen-Kopfzeile: col2..N enthalten 'Zone N'
+            hdr = None
+            zone_cols_std: list = []
+            for i, row in raw.iterrows():
+                cands = [(ci, str(v).strip()) for ci, v in enumerate(row.iloc[2:], 2)
+                         if pd.notna(v) and re.match(r'Zone\s*\d+', str(v).strip(), re.I)]
+                if len(cands) >= 2:
+                    hdr, zone_cols_std = i, cands
+                    break
+            if hdr is None or not zone_cols_std:
+                continue
+
+            all_rows.extend(
+                _parse_erka_bands(raw, hdr, zone_cols_std, country, '406345'))
+
+            # Zoneneinteilung → BITZER_ZONE_MAPS[country]
+            zone_map = _erka_zone_plz_map(raw)
+            if zone_map:
+                BITZER_ZONE_MAPS[country] = zone_map
+
+        file_rows = len(all_rows) - before
+        print(f"  Bitzer {country} ({fp.name[:50]}): {file_rows} Zeilen")
+
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+    countries = sorted(result['country'].unique().tolist()) if not result.empty else []
+    print(f"Bitzer gesamt: {len(result)} Tarifzeilen, Länder: {countries}")
+    print(f"  BITZER_ZONE_MAPS: {list(BITZER_ZONE_MAPS.keys())}")
+    return result
+
+
+LOADERS['406345'] = load_bitzer
