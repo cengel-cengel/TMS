@@ -55,6 +55,7 @@ CUSTOMERS = {
     408244: 'Helukabel GmbH',
     406345: 'Bitzer SE',
     490085: 'Hornschuch AG',
+    491063: 'Sika Deutschland GmbH',
 }
 
 # ── NK-Quellen pro Kunde (KNR-String → Excel-Quelldatei + Sheet) ─────────────
@@ -81,6 +82,7 @@ _NK_GLOB_PATTERNS: dict[str, list[str]] = {
     '408244': ['data/extracted/v1/Noerpel AI/Helu/Nebenbedingungen DINAS/NK Helu.xlsx'],
     '406345': ['data/extracted/v1/Noerpel AI/Bitzer/Nebenbedingungen DINAS/NK Bitzer.xlsx'],
     '490085': ['data/extracted/v1/Noerpel AI/Hornschuch/Nebenbedingungen DINAS/NK Hornschuch.xlsx'],
+    '491063': ['data/extracted/v1/Noerpel AI/SIka/Nebenbedingungen DINAS/NK Sika.xlsx'],
 }
 
 ABS_THRESH = 1.0   # EUR absolute Abweichungsschwelle

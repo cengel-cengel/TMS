@@ -818,6 +818,8 @@ def lookup_tariff_price(row):
             return _lookup_bitzer(row, tariff)
         elif knr == '490085':
             return _lookup_hornschuch(row, tariff)
+        elif knr == '491063':
+            return _lookup_sika(row, tariff)
         else:
             return default
     except Exception as e:
@@ -1318,13 +1320,63 @@ _HORNSCHUCH_PL = Path(
     '20250612_Erka_ContiTech_PL_korrigiert.xlsx'
 )
 _GROZ_BASE    = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Groz Beckert/DLV')
+_SIKA_DLV     = Path(
+    '/home/user/TMS/data/extracted/v1/Noerpel AI/SIka/DLV/'
+    'SIKA Deutschland GmbH Stuttgart/2026/'
+    '20260211_SIKA DE & SSC Export div. LKZ_Stellplatzofferte_2026.xlsx'
+)
 
 
 def _erka_zone_plz_map(raw) -> dict:
     """Parst 'Zoneneinteilung'-Abschnitt → {2-stellige PLZ-Prefix (int): 'Zone N'}.
-    Zahlen >= 100 werden übersprungen (verhindert Konflikte bei 3-stelligen Bereichen)."""
+    Erkennt 2-stellige Bereiche ('20 - 25') sowie 3-/4-/5-stellige Bereiche → 2-digit-Prefix.
+    Bei überlappenden Zonen gewinnt die erste Zuweisung (setdefault)."""
     zone_plz: dict = {}
     in_sec = False
+
+    def _to2(n: int) -> int | None:
+        """Konvertiert beliebige Ganzzahl → 2-stelliger PLZ-Prefix."""
+        while n >= 100:
+            n //= 10
+        return n if n >= 0 else None
+
+    def _register(n: int, zname: str) -> None:
+        p = _to2(n)
+        if p is not None:
+            zone_plz.setdefault(p, zname)
+
+    def _process_part(part: str, zname: str) -> None:
+        """Verarbeitet einen Token (Einzelzahl oder Bereich) und registriert PLZ-Prefixes."""
+        part = part.strip()
+        if not part:
+            return
+        # Versuche als Bereich (z.B. '20 - 25', '330-337', '35 -39')
+        mr = re.match(r'^(\d+)\s*[-–]\s*(\d+)$', part)
+        ms = re.match(r'^(\d+)$', part)
+        if mr:
+            lo = int(mr.group(1))
+            hi = int(mr.group(2))
+            if lo > hi:
+                lo, hi = hi, lo
+            if hi < 100:
+                # Direkter 2-stelliger Bereich → alle Werte
+                for n in range(lo, hi + 1):
+                    zone_plz.setdefault(n, zname)
+            else:
+                # 3-stelliger+ Bereich → 2-digit-Prefixes extrahieren
+                p_lo = _to2(lo)
+                p_hi = _to2(hi)
+                if p_lo is not None and p_hi is not None:
+                    for p in range(p_lo, p_hi + 1):
+                        zone_plz.setdefault(p, zname)
+        elif ms:
+            _register(int(ms.group(1)), zname)
+        else:
+            # Fallback: führende Zahl extrahieren (z.B. '08 Barcelona', '28 Madrid')
+            ml = re.match(r'^(\d+)', part)
+            if ml:
+                _register(int(ml.group(1)), zname)
+
     for _, row in raw.iterrows():
         v0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
         if 'zoneneinteilung' in v0.lower():
@@ -1341,22 +1393,16 @@ def _erka_zone_plz_map(raw) -> dict:
         for v in row.iloc[1:]:
             if pd.isna(v):
                 continue
-            cell = str(v).strip()
-            if not cell or cell == '-':
+            # Numerische Excel-Zellen (int/float) direkt umwandeln
+            if isinstance(v, (int, float)):
+                cell = str(int(round(v)))
+            else:
+                cell = str(v).strip()
+            if not cell or cell in ('-', 'nan'):
                 continue
-            for token in re.split(r'[,\s]+', cell):
-                token = token.strip()
-                mr = re.match(r'^(\d+)\s*[-–]\s*(\d+)$', token)
-                ms = re.match(r'^(\d+)$', token)
-                if mr:
-                    for n in range(min(int(mr.group(1)), int(mr.group(2))),
-                                   max(int(mr.group(1)), int(mr.group(2))) + 1):
-                        if n < 100:
-                            zone_plz[n] = zone_name
-                elif ms:
-                    n = int(ms.group(1))
-                    if n < 100:
-                        zone_plz[n] = zone_name
+            # Zuerst nach Komma aufteilen, dann Bereichserkennung pro Teil
+            for part in re.split(r',\s*', cell):
+                _process_part(part, zone_name)
     return zone_plz
 
 
@@ -2245,5 +2291,205 @@ def _lookup_hornschuch(row, tariff):
         'pricing_basis':       'EUR/kg',
         'weight_band_matched': f"bis {match['wt']:.0f} kg",
         'zone_matched':        f'{country} {zone}',
+        'min_price_tariff':    np.nan,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIKA DEUTSCHLAND (KNR 491063) — Stellplatzofferte
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sika_parse_zip_key(country: str, zip_raw) -> list:
+    """Parst eine DLV-ZIP-Zelle in eine Liste von Lookup-Schlüsseln (Strings).
+
+    ES  : 2-stellige PLZ-Prefixes (aus 'NN, NN, ...' oder 'NNxxx' oder int)
+    IT  : 2-stellige Prefixes aus 'IT-NN+NN+NN'
+    GB  : Outward-Area-Codes aus 'GB-XY' oder 'GB-XY-ZZ'
+    PT  : Erste PLZ-Stelle aus 'PT-N'
+    IE  : Routing-Key aus 'IE-XX'
+    """
+    if pd.isna(zip_raw):
+        return []
+    if isinstance(zip_raw, (int, float)):
+        val = str(int(round(float(zip_raw))))
+    else:
+        val = str(zip_raw).strip()
+
+    keys: list = []
+
+    if country == 'IT':
+        # 'IT-10+12', 'IT-00+58+71+80', 'IT-32+32'
+        core = re.sub(r'^IT-', '', val, flags=re.I)
+        for p in core.split('+'):
+            p = p.strip().zfill(2)
+            if p and p not in keys:
+                keys.append(p)
+
+    elif country == 'GB':
+        # 'GB-AB', 'GB-DH-NE'  →  ['AB'] oder ['DH', 'NE']
+        core = re.sub(r'^GB-', '', val, flags=re.I)
+        for p in core.split('-'):
+            p = p.strip()
+            if p and p not in keys:
+                keys.append(p)
+
+    elif country == 'PT':
+        # 'PT-2', 'PT-3', 'PT-4'
+        p = re.sub(r'^PT-', '', val, flags=re.I).strip()
+        if p:
+            keys.append(p)
+
+    elif country == 'IE':
+        # 'IE-D1'
+        p = re.sub(r'^IE-', '', val, flags=re.I).strip()
+        if p:
+            keys.append(p)
+
+    elif country == 'ES':
+        # '02, 24, 30 ,34, 37', '08', 19 (int), '20xxx', '28xxx', '45xxx'
+        val_clean = re.sub(r'[xX]+', '', val)   # entferne 'xxx'-Suffix
+        for token in re.split(r'[,\s]+', val_clean):
+            token = token.strip()
+            if re.match(r'^\d+$', token) and token not in keys:
+                keys.append(token.zfill(2))
+
+    return keys
+
+
+def load_sika():
+    """Lädt Sika Deutschland Tarifdaten (KNR 491063).
+
+    Format: Stellplatzofferte — Per-Sendung-Preise für 1–10 Stellplätze.
+    Länder: ES, GB, IE, IT, PT.
+    Zone  = PLZ-Lookup-Key (2-digit für ES/IT, Outward-Code für GB,
+            erste Stelle für PT, 'D1' für IE).
+    weight_to = Anzahl Stellplätze (1–10).
+    """
+    if not _SIKA_DLV.exists():
+        print(f"Sika DLV nicht gefunden: {_SIKA_DLV}")
+        return pd.DataFrame()
+
+    try:
+        raw = pd.read_excel(_SIKA_DLV, sheet_name='Sika Export Rates 2025', header=None)
+    except Exception as exc:
+        print(f"Sika DLV Lesefehler: {exc}")
+        return pd.DataFrame()
+
+    # Kopfzeile mit Stellplatz-Zählern finden (1, 2, 3, ..., N in Datenspalten)
+    hdr_idx = None
+    stpl_cols: dict = {}     # {n_stpl (int): col_index}
+    for i, row in raw.iterrows():
+        counts = {int(round(v)): ci for ci, v in enumerate(row)
+                  if isinstance(v, (int, float)) and not pd.isna(v) and 1 <= v <= 50}
+        if len(counts) >= 5:
+            hdr_idx = i
+            stpl_cols = counts
+            break
+
+    if hdr_idx is None:
+        print("Sika: Stellplatz-Kopfzeile nicht gefunden")
+        return pd.DataFrame()
+
+    all_rows: list = []
+
+    for i in range(hdr_idx + 1, len(raw)):
+        row_data = raw.iloc[i]
+        c0 = row_data.iloc[0]
+        if not isinstance(c0, str):
+            continue
+        country = c0.strip()
+        if country not in ('ES', 'GB', 'IE', 'IT', 'PT', 'FR'):
+            break   # Ende des Preisabschnitts
+
+        zip_raw = row_data.iloc[1]
+        zone_keys = _sika_parse_zip_key(country, zip_raw)
+        if not zone_keys:
+            continue
+
+        for n_stpl, col_idx in stpl_cols.items():
+            if col_idx >= len(row_data):
+                continue
+            price = row_data.iloc[col_idx]
+            if price is None or isinstance(price, str) or pd.isna(price) or price <= 0:
+                continue
+            price = float(price)
+            for zk in zone_keys:
+                all_rows.append({
+                    'weight_to':     float(n_stpl),
+                    'zone':          zk,
+                    'unit':          'per Sendung',
+                    'price':         price,
+                    'country':       country,
+                    'pricing_basis': 'EUR/Stpl',
+                    'knr':           '491063',
+                })
+
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+    countries = sorted(result['country'].unique().tolist()) if not result.empty else []
+    max_stpl = int(result['weight_to'].max()) if not result.empty else 0
+    print(f"Sika gesamt: {len(result)} Tarifzeilen, Länder: {countries}, max Stellplätze: {max_stpl}")
+    return result
+
+
+LOADERS['491063'] = load_sika
+
+
+def _lookup_sika(row, tariff):
+    """Sika Deutschland (KNR 491063): Stellplatz-Lookup per Sendung.
+
+    Für n_stpl > 10: 10-Stellplatz-Rate als Untergrenze verwendet.
+    """
+    _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Stpl',
+                      'weight_band_matched': '', 'zone_matched': '',
+                      'min_price_tariff': np.nan})
+
+    country = str(row.get('Empfänger Land', '') or '').strip().upper()
+    empf_plz = str(row.get('Empfänger PLZ', '') or '').strip()
+
+    n_stpl_raw = row.get('Stellplätze', None)
+    if n_stpl_raw is None or pd.isna(n_stpl_raw):
+        return _nan
+    n_stpl_raw = float(n_stpl_raw)
+    if n_stpl_raw <= 0:
+        return _nan
+    # DLV-Obergrenze ermitteln; darüber wird der Max-Stpl-Preis verwendet
+    max_stpl = int(tariff['weight_to'].max()) if not tariff.empty else 33
+    n_stpl = max(1, min(max_stpl, int(round(n_stpl_raw))))
+
+    d = re.sub(r'\s+', '', empf_plz).upper()
+
+    # ── Zone-Key aus PLZ ────────────────────────────────────────────────────
+    if country == 'ES':
+        zone_key = d[:2].zfill(2) if len(d) >= 2 else None
+    elif country == 'IT':
+        zone_key = d[:2].zfill(2) if len(d) >= 2 else None
+    elif country == 'PT':
+        zone_key = d[:1] if d else None
+    elif country == 'GB':
+        m = re.match(r'^([A-Z]+)', d)
+        zone_key = m.group(1) if m else None
+    elif country == 'IE':
+        zone_key = 'D1'
+    else:
+        return _nan
+
+    if zone_key is None:
+        return _nan
+
+    match = tariff[
+        (tariff['country'] == country) &
+        (tariff['zone'] == zone_key) &
+        (tariff['weight_to'] == float(n_stpl))
+    ]
+
+    if match.empty:
+        return _nan
+
+    price = float(match.iloc[0]['price'])
+    return pd.Series({
+        'soll_fracht':         price,
+        'pricing_basis':       'EUR/Stpl',
+        'weight_band_matched': f'{n_stpl} Stpl' + (f' (cap@{max_stpl}, actual {n_stpl_raw:.0f})' if n_stpl_raw > max_stpl else ''),
+        'zone_matched':        f'{country} {zone_key}',
         'min_price_tariff':    np.nan,
     })
