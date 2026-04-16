@@ -51,6 +51,7 @@ SKIP_PREFIXES = (
     'NEUES GESETZ', 'PORTE NACH', 'PRO SDG', 'Sendungssumme',
     'Umsatzsteuerfreie', 'gemäß', 'Gesamtbetrag', '1 Position',
     '2 Position', '3 Position',
+    'Übertrag',   # Seitenübertrag in mehrseitigen Rechnungen
 )
 
 # Fußzeilen-Trigger → Sammeln von Items stoppen
@@ -96,7 +97,10 @@ def parse_one(path: str) -> list[dict]:
       total_steuerfrei, gesamtbetrag, n_items
     """
     doc   = fitz.open(path)
-    lines = [l.strip() for l in doc[0].get_text('text').split('\n') if l.strip()]
+    # Alle Seiten lesen — mehrseitige Rechnungen (z.B. 23-seitige Sammelrechnungen)
+    # würden bei doc[0]-only nur die erste Seite liefern.
+    all_text = ''.join(page.get_text('text') for page in doc)
+    lines = [l.strip() for l in all_text.split('\n') if l.strip()]
     rn    = os.path.basename(path).replace('RECHNUNG', '').replace('.pdf', '')
 
     # Suche nach invoice-Body-Start (Spalten-Header "Betrag")

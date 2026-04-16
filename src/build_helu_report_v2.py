@@ -13,7 +13,7 @@ Korrekturen v2:
   - Spalten entfernt: NK Summe, Abw. EUR, Abw. %
 """
 
-import math
+import glob as _glob, math, re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -22,10 +22,13 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0, 'src')
 from dlv_tariffs import load_helu, _lookup_helu
+from dinas_pdf_parser import parse_one, flatten
 
 SRC_XLSX    = Path('/home/user/TMS/output/helu_dinas_vergleich.xlsx')
 CLUSTER_XLS = Path('/home/user/TMS/output/cluster_vergleich/408244_HELU_KABEL_GMBH_cluster.xlsx')
 NK_XLSX     = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Helu/Nebenbedingungen DINAS/NK Helu.xlsx')
+DINAS_DIR   = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Helu/Rechnungen/Rechnungen DINAS')
+CACHE       = Path('/home/user/TMS/output/dinas_cache_408244.pkl')
 REPORT_DIR  = Path('/home/user/TMS/output/billing_report')
 OUT_XLSX    = REPORT_DIR / 'helu_dinas_vergleich.xlsx'
 REPORT_DIR.mkdir(exist_ok=True)
@@ -64,14 +67,54 @@ for df in (pre, post):
     df['_gwb']   = df['Tonnage (eff.)'].apply(gew_band)
     df['_cl']    = df['_land'] + '|' + df['_plz2'] + '|' + df['_gwb']
 
+POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
+           'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
+for c in POST_NK: post[c] = pd.to_numeric(post.get(c), errors='coerce')
+
+# ── DINAS-NK: Per-Sendung aus Cache (sendungs_nr = Auftragsnummer) ─────────
+# Bugfix: alte Version aggregierte ALLE Positionen einer Rechnung und wies den
+# Gesamtbetrag jeder BI-Zeile zu (falsch bei Sammelrechnungen mit 50+ Sendungen).
+# Fix: Parser liest jetzt alle Seiten; Join auf sendungs_nr = Auftragsnummer.
+if CACHE.exists():
+    dinas_cache = pd.read_pickle(CACHE)
+    print(f'DINAS cache geladen: {len(dinas_cache)} Positionen')
+else:
+    print('Parse DINAS PDFs (einmalig, wird gecacht)...')
+    pdfs = _glob.glob(str(DINAS_DIR / '*.pdf'))
+    rows = [flatten(pos) for p in pdfs for pos in parse_one(p)]
+    dinas_cache = pd.DataFrame(rows)
+    dinas_cache.to_pickle(CACHE)
+    print(f'Cache gespeichert: {len(dinas_cache)} Positionen')
+
+def _norm(v):
+    s = re.sub(r'\D', '', str(v)).lstrip('0')
+    return s if s else str(v).strip()
+
+dinas_cache['_snr'] = dinas_cache['sendungs_nr'].astype(str).apply(_norm)
+pre['_snr'] = pre['Auftragsnummer'].astype(str).apply(_norm)
+
+# Drop stale DINAS-NK columns (wrong aggregated values) and re-join per shipment
 PRE_NK  = ['Dinas Fracht','Dinas Diesel','Dinas Maut/SSD','Dinas Ausfuhr',
            'Dinas Verzollung','Dinas Zoll Duty','Dinas Zollbetrag',
            'Dinas Sulphur','Dinas Nebenkostenpausch.','Dinas Redebit',
            'Dinas Sonstige','Dinas Gesamt']
-POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
-           'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
-for c in PRE_NK:  pre[c]  = pd.to_numeric(pre.get(c),  errors='coerce')
-for c in POST_NK: post[c] = pd.to_numeric(post.get(c), errors='coerce')
+pre.drop(columns=[c for c in PRE_NK if c in pre.columns], inplace=True)
+
+DINAS_RENAME = {
+    'fracht': 'Dinas Fracht', 'diesel': 'Dinas Diesel', 'maut_ssd': 'Dinas Maut/SSD',
+    'ausfuhr': 'Dinas Ausfuhr', 'verzollung': 'Dinas Verzollung',
+    'zoll_duty': 'Dinas Zoll Duty', 'zoll_betrag': 'Dinas Zollbetrag',
+    'sulphur': 'Dinas Sulphur', 'neben_pausch': 'Dinas Nebenkostenpausch.',
+    'redebit': 'Dinas Redebit', 'sonstige': 'Dinas Sonstige',
+    'gesamtbetrag': 'Dinas Gesamt',
+}
+cache_nk = dinas_cache.rename(columns=DINAS_RENAME)[['_snr'] + list(DINAS_RENAME.values())].copy()
+pre = pre.merge(cache_nk, on='_snr', how='left')
+pre.drop(columns=['_snr'], inplace=True)
+
+for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
+matched_pre = pre['Dinas Fracht'].notna().sum()
+print(f'DINAS NK re-joined: {matched_pre}/{len(pre)} PRE Zeilen matched (sendungs_nr)')
 
 # ── Eff. EUR/100kg pro Sendung ─────────────────────────────────────────────
 pre['_eff_100kg']  = pre['Dinas Fracht']  / pre['Tonnage (eff.)'] * 100
