@@ -319,8 +319,14 @@ def build_main_sheet(ws):
 
         pre_all   = pre[pre['_cl']==ckey]
         post_all  = post[post['_cl']==ckey]
-        # Nur unterfakturierte POST-Zeilen: Eff. AX < Eff. Dinas (Cluster-Durchschnitt)
-        post_under = post_all[post_all['_eff_100kg'].fillna(float('inf')) < cl.avg_eff_d]
+        # Nur unterfakturierte POST-Zeilen: Eff. AX < Eff. Dinas UND AX Gesamt < Dinas Gesamt
+        post_under = post_all[
+            (post_all['_eff_100kg'].fillna(float('inf')) < cl.avg_eff_d) &
+            (post_all['AX Gesamt'].fillna(float('inf')) < cl.avg_d)
+        ]
+        # Cluster komplett raus wenn keine unterfakturierten POST-Zeilen
+        if len(post_under) == 0:
+            continue
         pre_s  = pre_all.head(5)
         post_s = post_under.head(5)
 
