@@ -2152,6 +2152,7 @@ def _lookup_helu(row, tariff):
         'weight_band_matched': f"bis {match['wt']:.0f} kg",
         'zone_matched':        f'{country} {zone}',
         'min_price_tariff':    np.nan,
+        'base_rate':           price,   # raw rate per 100 kg (or per Sendung)
     })
 
 
