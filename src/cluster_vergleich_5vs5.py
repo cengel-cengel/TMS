@@ -73,65 +73,68 @@ NK_SOURCES: dict[str, dict] = {
 }
 
 ABS_THRESH = 1.0   # EUR absolute Abweichungsschwelle
-REL_THRESH = 2.0   # % relative Abweichungsschwelle
-N_ABW      = 4     # max AX-Zeilen MIT Abweichung pro Cluster
-N_CTRL     = 1     # max AX-Zeilen OHNE Abweichung pro Cluster (Kontrollgruppe)
+N_EACH     = 5     # Zeilen pro System pro Cluster
 
-# ── Ausgabespalten ────────────────────────────────────────────────────────────
+# ── Ausgabespalten (ÄNDERUNG 3) ───────────────────────────────────────────────
 DISPLAY_COLS = [
-    'sample_typ',
-    'abweichung_typ',
-    'cluster_key',
     'system',
-    'Ausgangsbordero',
-    'Rechnungsnummer',
+    'Auftragsnummer',
     'Kunden Name',
-    'Kunden Nr BK',
-    'Versender Name',
-    'Versender PLZ',
-    'Empfänger Name',
-    'Empfänger PLZ',
     'Empfänger Land',
-    'Tonnage (eff.)',
-    'Lademeter',
-    'Stellplätze_calc',
+    'Empfänger PLZ',
+    'Versender PLZ',
     'weight_band',
+    'zone_matched',
     'pricing_basis',
+    'Tonnage (eff.)',
     'soll_fracht',
-    'Erlöse Fracht',
+    'nk_fracht',
+    'nk_diesel',
+    'nk_maut',
+    'nk_lademittel',
+    'nk_peak',
+    'nk_nebengebuehren',
+    'nk_eust_zoll',
+    'nk_versicherung',
+    'nk_summe',
+    'Erloese',
     'abweichung_eur',
     'abweichung_pct',
-    'periode',
+    'abweichung_grund',
 ]
 
 COL_META = {
-    'sample_typ':       ('Typ',         14),
-    'abweichung_typ':   ('Abw.Typ',     16),
-    'cluster_key':      ('Cluster Key', 42),
-    'system':           ('System',       8),
-    'Ausgangsbordero':  ('Bordero',     12),
-    'Rechnungsnummer':  ('Rech-Nr',     13),
-    'Kunden Name':      ('Kunde',       20),
-    'Kunden Nr BK':     ('KNR',          8),
-    'Versender Name':   ('Versender',   22),
-    'Versender PLZ':    ('Vers.PLZ',     9),
-    'Empfänger Name':   ('Empfänger',   22),
-    'Empfänger PLZ':    ('Empf.PLZ',    10),
-    'Empfänger Land':   ('Land',         6),
-    'Tonnage (eff.)':   ('Tonnage kg',  10),
-    'Lademeter':        ('LDM',          8),
-    'Stellplätze_calc': ('Stpl',         6),
-    'weight_band':      ('Gew.band',    12),
-    'pricing_basis':    ('Basis',        8),
-    'soll_fracht':      ('Soll EUR',    10),
-    'Erlöse Fracht':    ('Ist EUR',     10),
-    'abweichung_eur':   ('Abw. EUR',    10),
-    'abweichung_pct':   ('Abw. %',       9),
-    'periode':          ('Periode',      9),
+    'system':             ('System',       8),
+    'Auftragsnummer':     ('Auftrags-Nr', 14),
+    'Kunden Name':        ('Kunde',       20),
+    'Empfänger Land':     ('Land',         6),
+    'Empfänger PLZ':      ('Empf.PLZ',    10),
+    'Versender PLZ':      ('Vers.PLZ',     9),
+    'weight_band':        ('Gew.band',    12),
+    'zone_matched':       ('Zone',        18),
+    'pricing_basis':      ('Basis',        8),
+    'Tonnage (eff.)':     ('Tonnage kg',  10),
+    'soll_fracht':        ('Soll EUR',    10),
+    'nk_fracht':          ('Fracht EUR',  10),
+    'nk_diesel':          ('Diesel EUR',  10),
+    'nk_maut':            ('Maut EUR',     9),
+    'nk_lademittel':      ('Lademittel',  10),
+    'nk_peak':            ('Peak EUR',     9),
+    'nk_nebengebuehren':  ('Neben EUR',   10),
+    'nk_eust_zoll':       ('EUST Zoll',   10),
+    'nk_versicherung':    ('Versich.',     9),
+    'nk_summe':           ('NK Summe',    10),
+    'Erloese':            ('Erlöse',      10),
+    'abweichung_eur':     ('Abw. EUR',    10),
+    'abweichung_pct':     ('Abw. %',       9),
+    'abweichung_grund':   ('Abw. Grund',  16),
 }
 
-NUM_COLS = {'soll_fracht', 'Erlöse Fracht', 'abweichung_eur',
-            'abweichung_pct', 'Tonnage (eff.)', 'Lademeter', 'Stellplätze_calc'}
+NUM_COLS = {
+    'soll_fracht', 'nk_fracht', 'nk_diesel', 'nk_maut', 'nk_lademittel',
+    'nk_peak', 'nk_nebengebuehren', 'nk_eust_zoll', 'nk_versicherung',
+    'nk_summe', 'Erloese', 'abweichung_eur', 'abweichung_pct', 'Tonnage (eff.)',
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -177,6 +180,7 @@ def build_bi_raw() -> pd.DataFrame:
     tariff_result = df.apply(lookup_tariff_price, axis=1)
     df['soll_fracht']   = tariff_result['soll_fracht']
     df['pricing_basis'] = tariff_result['pricing_basis']
+    df['zone_matched']  = tariff_result['zone_matched']
     n_matched = df['soll_fracht'].notna().sum()
     print(f'    soll_fracht befüllt: {n_matched:,} / {len(df):,}')
 
@@ -191,7 +195,9 @@ def build_bi_raw() -> pd.DataFrame:
     df['system'] = df['periode'].map({'PRE': 'alt', 'POST': 'neu'})
     df['cluster_key'] = (
         df['Kunden Nr BK'].astype(str) + '|'
+        + df['Versender PLZ'].str[:2] + '|'
         + df['Empfänger Land'].astype(str) + '|'
+        + df['Empfänger PLZ'].str[:2] + '|'
         + df['weight_band'].astype(str) + '|'
         + df['pricing_basis'].fillna('unbekannt')
     )
@@ -202,7 +208,8 @@ def build_bi_raw() -> pd.DataFrame:
     # Columns:   fracht→nk_fracht, diesel→nk_diesel, lsz→nk_maut,
     #            ausfuhr→nk_eust_zoll, ssd→nk_nebengebuehren, total_shipment→nk_erloes_dinas
     _DINAS_FP = OUT_DIR / 'herma_dinas_gb_invoices.csv'
-    for _c in ['nk_fracht', 'nk_diesel', 'nk_maut', 'nk_eust_zoll', 'nk_nebengebuehren', 'nk_erloes_dinas']:
+    for _c in ['nk_fracht', 'nk_diesel', 'nk_maut', 'nk_eust_zoll', 'nk_nebengebuehren',
+               'nk_lademittel', 'nk_peak', 'nk_versicherung', 'nk_summe', 'nk_erloes_dinas']:
         df[_c] = np.nan
 
     if _DINAS_FP.exists():
@@ -248,6 +255,28 @@ def build_bi_raw() -> pd.DataFrame:
     else:
         print(f'    [Dinas] Datei nicht gefunden: {_DINAS_FP}')
 
+    # POST: NK-Spalten aus BI-Erlöse-Spalten befüllen
+    _post_mask = df['periode'] == 'POST'
+    for _src, _dst in [
+        ('Erlöse Fracht',                'nk_fracht'),
+        ('Erlöse Diesel',                'nk_diesel'),
+        ('Erlöse Maut',                  'nk_maut'),
+        ('Erlöse Lademittel',            'nk_lademittel'),
+        ('Erlöse Peak',                  'nk_peak'),
+        ('Erlöse Nebengebühr',           'nk_nebengebuehren'),
+        ('Erlöse EUST Zoll',             'nk_eust_zoll'),
+        ('Erlöse Transportversicherung', 'nk_versicherung'),
+    ]:
+        if _src in df.columns:
+            df.loc[_post_mask, _dst] = pd.to_numeric(
+                df.loc[_post_mask, _src], errors='coerce'
+            )
+
+    # nk_summe = Summe aller Komponenten (wo vorhanden)
+    _nk_comp = ['nk_fracht', 'nk_diesel', 'nk_maut', 'nk_lademittel',
+                'nk_peak', 'nk_nebengebuehren', 'nk_eust_zoll', 'nk_versicherung']
+    df['nk_summe'] = df[[c for c in _nk_comp if c in df.columns]].sum(axis=1, min_count=1)
+
     # Nur Zeilen mit Tarif-Match
     df = df[df['soll_fracht'].notna()].copy()
     print(f'    {len(df):,} Zeilen mit Tarif-Match')
@@ -258,57 +287,66 @@ def build_bi_raw() -> pd.DataFrame:
 # 2) Cluster-Analyse
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _abweichung_grund(row) -> str:
+    """Klassifiziert die Abweichungsursache einer Zeile."""
+    soll = row.get('soll_fracht')
+    if pd.isna(soll) or soll == 0:
+        return 'Kein Tarif-Match'
+    abw = row.get('abweichung_eur', np.nan)
+    if pd.isna(abw) or abs(abw) <= ABS_THRESH:
+        return 'OK'
+    nk_fr = row.get('nk_fracht', np.nan)
+    if pd.notna(nk_fr) and not pd.isna(soll):
+        fd = float(nk_fr) - float(soll)
+        if abs(fd) > ABS_THRESH:
+            return 'Fracht niedriger' if fd < 0 else 'Fracht höher'
+    return 'NK-Differenz'
+
+
 def _cluster_block(pre_rows: pd.DataFrame,
                    post_rows: pd.DataFrame) -> pd.DataFrame | None:
     """
     Baut den Sample-Block für einen cluster_key.
-    Priorisierung: Unterfakturierung vor Überfakturierung.
-    Gibt None zurück wenn weder Unter- noch Überfakturierung vorhanden.
+    Gibt None zurück wenn kein POST-Eintrag eine signifikante Abweichung hat.
+    POST: top-5 nach |abweichung_eur|; PRE: erste 5.
     """
+    # ── POST ──────────────────────────────────────────────────────────────────
     post = post_rows.copy()
-    post['abweichung_eur'] = post['Erlöse Fracht'] - post['soll_fracht']
+    post['abweichung_eur'] = (
+        pd.to_numeric(post['Erloese'], errors='coerce') - post['soll_fracht']
+    )
     post['abweichung_pct'] = (
         post['abweichung_eur'] / post['soll_fracht'].replace(0, np.nan) * 100
     )
 
-    unter = post[post['abweichung_eur'] < -ABS_THRESH].copy()
-    ueber = post[post['abweichung_eur'] >  ABS_THRESH].copy()
-    ok    = post[
-        (post['abweichung_eur'] >= -ABS_THRESH) &
-        (post['abweichung_eur'] <=  ABS_THRESH)
-    ].copy()
-
-    if not unter.empty:
-        # Unterfakturierung: größte negative Abweichung zuerst (kleinste Werte)
-        ax_sel = unter.sort_values('abweichung_eur', ascending=True).head(N_ABW).copy()
-        ax_sel['abweichung_typ'] = 'Unterfakturierung'
-        ctrl_pool = pd.concat([ueber, ok])
-    elif not ueber.empty:
-        # Überfakturierung: größte positive Abweichung zuerst
-        ax_sel = ueber.sort_values('abweichung_eur', ascending=False).head(N_ABW).copy()
-        ax_sel['abweichung_typ'] = 'Überfakturierung'
-        ctrl_pool = ok
-    else:
+    has_abw = post[post['abweichung_eur'].abs() > ABS_THRESH]
+    if has_abw.empty:
         return None  # Kein Ausreißer → Cluster überspringen
 
-    ax_sel['sample_typ'] = 'AX_Abweichung'
+    post['_abs_abw'] = post['abweichung_eur'].abs()
+    post_sel = (
+        post.sort_values('_abs_abw', ascending=False)
+        .head(N_EACH)
+        .drop(columns='_abs_abw')
+        .copy()
+    )
+    post_sel['sample_typ']      = 'AX_POST'
+    post_sel['abweichung_grund'] = post_sel.apply(_abweichung_grund, axis=1)
 
-    # Kontrollzeile aus nicht-selektierten AX-Zeilen
-    ctrl_pool = ctrl_pool.copy()
-    ctrl_pool['sample_typ']    = 'AX_Kontrolle'
-    ctrl_pool['abweichung_typ'] = 'Kontrolle'
-    ax_ctrl = ctrl_pool.head(N_CTRL)
-
-    # PRE: alle Dinas-Zeilen
-    pre = pre_rows.copy()
-    pre['abweichung_eur'] = pre['Erlöse Fracht'] - pre['soll_fracht']
+    # ── PRE ───────────────────────────────────────────────────────────────────
+    pre = pre_rows.head(N_EACH).copy()
+    _pre_erloes = pd.to_numeric(
+        pre.get('nk_erloes_dinas', pd.Series(np.nan, index=pre.index)),
+        errors='coerce'
+    )
+    pre['abweichung_eur'] = _pre_erloes - pre['soll_fracht']
     pre['abweichung_pct'] = (
         pre['abweichung_eur'] / pre['soll_fracht'].replace(0, np.nan) * 100
     )
-    pre['sample_typ']    = 'Dinas_Basis'
-    pre['abweichung_typ'] = ''
+    pre['sample_typ']      = 'Dinas_PRE'
+    pre['abweichung_grund'] = pre.apply(_abweichung_grund, axis=1)
 
-    return pd.concat([pre, ax_sel, ax_ctrl], ignore_index=True)
+    return pd.concat([pre, post_sel], ignore_index=True)
 
 
 def analyse(df: pd.DataFrame) -> list[dict]:
@@ -354,12 +392,10 @@ def analyse(df: pd.DataFrame) -> list[dict]:
 
         result    = pd.concat(parts, ignore_index=True)
         n_ck_abw  = len(parts)
-        n_ax_abw  = (result['sample_typ'] == 'AX_Abweichung').sum()
-        n_unter   = (result['abweichung_typ'] == 'Unterfakturierung').sum()
-        n_ueber   = (result['abweichung_typ'] == 'Überfakturierung').sum()
-        total_abw = result.loc[
-            result['sample_typ'] == 'AX_Abweichung', 'abweichung_eur'
-        ].sum()
+        post_res  = result[result['sample_typ'] == 'AX_POST']
+        n_unter   = (post_res['abweichung_eur'] < -ABS_THRESH).sum()
+        n_ueber   = (post_res['abweichung_eur'] >  ABS_THRESH).sum()
+        total_abw = post_res['abweichung_eur'].sum()
         print(
             f'  {cname}: {len(pre_keys):3d} PRE, {len(post_keys):3d} POST, '
             f'{len(common):3d} gemeinsam → {n_ck_abw:3d} mit Abw. | '
@@ -386,8 +422,8 @@ PLAIN_S9   = Font(size=9)
 CENTER     = Alignment(horizontal='center', vertical='center', wrap_text=True)
 LEFT       = Alignment(horizontal='left',   vertical='center', wrap_text=False)
 
-TYP_ORDER = {'Dinas_Basis': 0, 'AX_Abweichung': 1, 'AX_Kontrolle': 2}
-TYP_FILL  = {'Dinas_Basis': DINAS_FILL, 'AX_Abweichung': ABW_FILL, 'AX_Kontrolle': CTRL_FILL}
+TYP_ORDER = {'Dinas_PRE': 0, 'AX_POST': 1}
+TYP_FILL  = {'Dinas_PRE': DINAS_FILL, 'AX_POST': ABW_FILL}
 
 
 def _write_sheet(ws, df: pd.DataFrame, avail: list[str]) -> None:
@@ -519,12 +555,12 @@ def main() -> None:
         if res_df.empty:
             print(f'  {cname:<30s}  — keine Abweichungen')
             continue
-        abw_df = res_df[res_df['sample_typ'] == 'AX_Abweichung']
-        n_ck    = abw_df['cluster_key'].nunique()
-        n_unter = (abw_df['abweichung_typ'] == 'Unterfakturierung').sum()
-        n_ueber = (abw_df['abweichung_typ'] == 'Überfakturierung').sum()
-        summe   = abw_df['abweichung_eur'].sum()
-        total_rows += len(abw_df)
+        post_df = res_df[res_df['sample_typ'] == 'AX_POST']
+        n_ck    = post_df['cluster_key'].nunique()
+        n_unter = (post_df['abweichung_eur'] < -ABS_THRESH).sum()
+        n_ueber = (post_df['abweichung_eur'] >  ABS_THRESH).sum()
+        summe   = post_df['abweichung_eur'].sum()
+        total_rows += len(post_df)
         total_eur  += summe
         print(
             f'  {cname:<30s}  {n_ck:3d} Cluster  '
@@ -532,7 +568,7 @@ def main() -> None:
             f'Σ {summe:+10,.2f} EUR'
         )
     print('-' * 72)
-    print(f'  {"GESAMT":<30s}  {total_rows:4d} AX-Abw-Rows  Σ {total_eur:+10,.2f} EUR')
+    print(f'  {"GESAMT":<30s}  {total_rows:4d} AX-POST-Rows  Σ {total_eur:+10,.2f} EUR')
     print('=' * 72)
 
 
