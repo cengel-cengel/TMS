@@ -19,7 +19,7 @@ from dlv_tariffs import load_helu, _lookup_helu
 from dinas_pdf_parser import parse_one, flatten
 
 SRC_XLSX    = Path('/home/user/TMS/output/herma_dinas_vergleich.xlsx')
-CLUSTER_XLS = Path('/home/user/TMS/output/cluster_vergleich/423650_HERMA_GMBH_cluster.xlsx')
+CLUSTER_XLS = Path('/home/user/TMS/output/cluster_vergleich/423650_HERMA_GmbH_cluster.xlsx')
 NK_XLSX     = None  # NK-Datei ist .docx — kein automatisches Einlesen möglich
 DINAS_DIR   = Path('/home/user/TMS/data/extracted/bi/Herma/Herma Dinas/Herma')
 CACHE       = Path('/home/user/TMS/output/dinas_cache_423650.pkl')
@@ -103,8 +103,36 @@ tariff = load_helu()
 print(f'Tarif: {len(tariff)} Zeilen, Länder: {sorted(tariff["country"].unique())}')
 
 # ── Daten laden ────────────────────────────────────────────────────────────
-pre  = pd.read_excel(SRC_XLSX, sheet_name='PRE Dinas Detail',  header=2)
-post = pd.read_excel(SRC_XLSX, sheet_name='POST AX Detail',    header=2)
+# HERMA-Quelldatei hat header=0 und abweichende Spaltennamen
+pre  = pd.read_excel(SRC_XLSX, sheet_name='PRE Dinas Detail',  header=0)
+post = pd.read_excel(SRC_XLSX, sheet_name='POST AX Detail',    header=0)
+
+# Spaltennamen auf Standard-Format normieren
+PRE_RENAME = {
+    'RN': 'Rechnungsnummer', 'Auftrag': 'Auftragsnummer',
+    'Land': 'Empfänger Land', 'PLZ': 'Empfänger PLZ',
+    'Tonnage kg': 'Tonnage (eff.)', 'LDM': 'Lademeter',
+    'Diesel': 'Dinas Diesel', 'Maut/SSD': 'Dinas Maut/SSD',
+    'Ausfuhr': 'Dinas Ausfuhr', 'Verzoll.': 'Dinas Verzollung',
+    'Zoll Bet.': 'Dinas Zollbetrag', 'Sulphur': 'Dinas Sulphur',
+    'NK Pausch': 'Dinas Nebenkostenpausch.', 'Sonstige': 'Dinas Sonstige',
+}
+POST_RENAME = {
+    'RN': 'Rechnungsnummer', 'Auftrag': 'Auftragsnummer',
+    'Land': 'Empfänger Land', 'PLZ': 'Empfänger PLZ',
+    'Tonnage kg': 'Tonnage (eff.)', 'LDM': 'Lademeter',
+    'Diesel': 'AX Diesel', 'Maut': 'AX Maut',
+    'Neben': 'AX Nebengebühr', 'Versich.': 'AX Versicherung',
+}
+pre.rename(columns=PRE_RENAME, inplace=True)
+post.rename(columns=POST_RENAME, inplace=True)
+
+# Fehlende Spalten ergänzen
+for col in ('Versender PLZ', 'Stellplätze', 'Volumen'):
+    if col not in pre.columns:  pre[col] = None
+    if col not in post.columns: post[col] = None
+for col in ('AX Lademittel', 'AX Peak', 'AX EUST/Zoll'):
+    if col not in post.columns: post[col] = 0.0
 
 for df in (pre, post):
     df['Tonnage (eff.)'] = pd.to_numeric(df['Tonnage (eff.)'], errors='coerce')
@@ -127,60 +155,21 @@ POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
            'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
 for c in POST_NK: post[c] = pd.to_numeric(post.get(c), errors='coerce')
 
-# ── DINAS-NK: Per-Sendung aus Cache (sendungs_nr = Auftragsnummer) ─────────
-# Bugfix: alte Version aggregierte ALLE Positionen einer Rechnung und wies den
-# Gesamtbetrag jeder BI-Zeile zu (falsch bei Sammelrechnungen mit 50+ Sendungen).
-# Fix: Parser liest jetzt alle Seiten; Join auf sendungs_nr = Auftragsnummer.
-if CACHE.exists():
-    dinas_cache = pd.read_pickle(CACHE)
-    print(f'DINAS cache geladen: {len(dinas_cache)} Positionen')
-else:
-    print('Parse DINAS PDFs (einmalig, wird gecacht)...')
-    pdfs = _glob.glob(str(DINAS_DIR / '*.pdf'))
-    rows = [flatten(pos) for p in pdfs for pos in parse_one(p)]
-    dinas_cache = pd.DataFrame(rows)
-    dinas_cache.to_pickle(CACHE)
-    print(f'Cache gespeichert: {len(dinas_cache)} Positionen')
-
-def _norm(v):
-    s = re.sub(r'\D', '', str(v)).lstrip('0')
-    return s if s else str(v).strip()
-
-dinas_cache['_snr'] = dinas_cache['sendungs_nr'].astype(str).apply(_norm)
-pre['_snr'] = pre['Auftragsnummer'].astype(str).apply(_norm)
-
-# Drop stale DINAS-NK columns (wrong aggregated values) and re-join per shipment
+# PRE-Dinas-NK: bereits in der Quelldatei vorhanden (vorverarbeitete PDF-Daten)
 PRE_NK  = ['Dinas Fracht','Dinas Diesel','Dinas Maut/SSD','Dinas Ausfuhr',
            'Dinas Verzollung','Dinas Zoll Duty','Dinas Zollbetrag',
            'Dinas Sulphur','Dinas Nebenkostenpausch.','Dinas Redebit',
            'Dinas Sonstige','Dinas Gesamt']
-pre.drop(columns=[c for c in PRE_NK if c in pre.columns], inplace=True)
-
-DINAS_RENAME = {
-    'fracht': 'Dinas Fracht', 'diesel': 'Dinas Diesel', 'maut_ssd': 'Dinas Maut/SSD',
-    'ausfuhr': 'Dinas Ausfuhr', 'verzollung': 'Dinas Verzollung',
-    'zoll_duty': 'Dinas Zoll Duty', 'zoll_betrag': 'Dinas Zollbetrag',
-    'sulphur': 'Dinas Sulphur', 'neben_pausch': 'Dinas Nebenkostenpausch.',
-    'redebit': 'Dinas Redebit', 'sonstige': 'Dinas Sonstige',
-    'gesamtbetrag': 'Dinas Gesamt',
-}
-cache_nk = dinas_cache.rename(columns=DINAS_RENAME)[['_snr'] + list(DINAS_RENAME.values())].copy()
-pre = pre.merge(cache_nk, on='_snr', how='left')
-pre.drop(columns=['_snr'], inplace=True)
-
+for col in PRE_NK:
+    if col not in pre.columns: pre[col] = None
 for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
 matched_pre = pre['Dinas Fracht'].notna().sum()
-print(f'DINAS NK re-joined: {matched_pre}/{len(pre)} PRE Zeilen matched (sendungs_nr)')
+print(f'PRE Dinas-NK verfügbar: {matched_pre}/{len(pre)} Zeilen')
 
 # Filter PRE-Zeilen mit Fracht=0 (Zoll/NK-only Sendungen, nicht vergleichbar)
 zero_pre = pre[pre['Dinas Fracht'].fillna(-1) == 0]
 if len(zero_pre):
-    print(f'Filtere {len(zero_pre)} PRE Zeile(n) mit Dinas Fracht=0 '
-          f'(Zoll/NK-only, kein Frachtvergleich möglich):')
-    for _, z in zero_pre.iterrows():
-        print(f'  RN={z.get("Rechnungsnummer")}  Auftr={z.get("Auftragsnummer")}  '
-              f'Gesamt={z.get("Dinas Gesamt"):.2f} EUR  '
-              f'(Verzollung={z.get("Dinas Verzollung",0):.2f})')
+    print(f'Filtere {len(zero_pre)} PRE Zeile(n) mit Dinas Fracht=0')
 pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
 
 print('Konsolidiere Master/Sub-Sendungen...')
