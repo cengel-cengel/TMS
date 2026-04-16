@@ -1289,3 +1289,150 @@ def _lookup_fischer(row, tariff):
         'zone_matched': route,
         'min_price_tariff': np.nan
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Neue Loader: Helu (408244), Bitzer (406345), Hornschuch (490085)
+# Groz-Beckert: kein KNR in BI-Daten → nur NK-Glob-Pattern, kein LOADERS-Eintrag
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Globale Zone-Maps, die beim Laden befüllt werden
+HELU_ZONE_MAPS: dict = {}    # {'GB': {area_str: zone_str}, 'PL': {2digit_int: 'Zone N'}}
+BITZER_ZONE_MAPS: dict = {}  # {country_iso: {2digit_int: 'Zone N'}}
+
+_HELU_BASE    = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Helu/DLV')
+_BITZER_BASE  = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Bitzer/DLV/Bitzer Rottenburg/2026')
+_HORNSCHUCH_DLV = Path(
+    '/home/user/TMS/data/extracted/v1/Noerpel AI/Hornschuch/DLV/2025/'
+    '20250129_Erka_ContiTech Megatrans Deutsc.xlsx'
+)
+_GROZ_BASE    = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Groz Beckert/DLV')
+
+
+def _erka_zone_plz_map(raw) -> dict:
+    """Parst 'Zoneneinteilung'-Abschnitt → {2-stellige PLZ-Prefix (int): 'Zone N'}.
+    Zahlen >= 100 werden übersprungen (verhindert Konflikte bei 3-stelligen Bereichen)."""
+    zone_plz: dict = {}
+    in_sec = False
+    for _, row in raw.iterrows():
+        v0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+        if 'zoneneinteilung' in v0.lower():
+            in_sec = True
+            continue
+        if not in_sec:
+            continue
+        if v0 == '' and zone_plz:
+            break
+        m = re.match(r'Zone\s*(\d+)', v0, re.I)
+        if not m:
+            continue
+        zone_name = f'Zone {m.group(1)}'
+        for v in row.iloc[1:]:
+            if pd.isna(v):
+                continue
+            cell = str(v).strip()
+            if not cell or cell == '-':
+                continue
+            for token in re.split(r'[,\s]+', cell):
+                token = token.strip()
+                mr = re.match(r'^(\d+)\s*[-–]\s*(\d+)$', token)
+                ms = re.match(r'^(\d+)$', token)
+                if mr:
+                    for n in range(min(int(mr.group(1)), int(mr.group(2))),
+                                   max(int(mr.group(1)), int(mr.group(2))) + 1):
+                        if n < 100:
+                            zone_plz[n] = zone_name
+                elif ms:
+                    n = int(ms.group(1))
+                    if n < 100:
+                        zone_plz[n] = zone_name
+    return zone_plz
+
+
+def _parse_erka_bands(raw, header_idx: int, zone_cols: list, country: str, knr: str) -> list:
+    """Parst Gewichtsbandzeilen ab header_idx+1.
+    Unterstützt Helu-Format (Gewicht in col0, Zonen in col1+)
+    und Bitzer-Format ('bis' in col0, Gewicht in col1, Zonen in col2+, Einheit in letzter Spalte).
+    Gibt Liste von Dicts zurück (weight_to, zone, unit, price, country, pricing_basis, knr)."""
+    rows: list = []
+    if not zone_cols:
+        return rows
+    unit_col = max(ci for ci, _ in zone_cols) + 1
+
+    _STOP = ('zoneneinteilung', 'abfahrt', 'volumen', 'rundung', 'selbstk',
+             'profit', 'verkauf', 'postcode', 'laufzeit', 'komplett',
+             'maximale', 'maut:', 'diesel', 'versicher', 'gültig', 'angebot',
+             'frachtberech', 'mehrkosten')
+
+    for i in range(header_idx + 1, len(raw)):
+        row = raw.iloc[i]
+        cells = [str(v).strip() if pd.notna(v) else '' for v in row]
+        c0 = cells[0].lower() if cells else ''
+
+        if any(k in c0 for k in _STOP):
+            break
+
+        # Minimum-Zeile
+        is_min = any('minimum' in cells[j].lower() or 'm/m' in cells[j].lower()
+                     for j in range(min(3, len(cells))))
+        if is_min:
+            weight_to, unit = 100.0, 'per Sendung'
+        else:
+            # Gewicht aus col0 (Helu) oder col1 nach 'bis'/'ab' (Bitzer)
+            weight_str = ''
+            if c0 in ('bis', 'ab') and len(cells) > 1:
+                nums = re.findall(r'[\d.]+', cells[1].replace(' ', ''))
+                if nums:
+                    weight_str = nums[0]
+            elif c0 and c0 != '-':
+                nums = re.findall(r'[\d.]+', cells[0].replace(' ', ''))
+                if nums:
+                    weight_str = nums[0]
+            if not weight_str:
+                continue
+            try:
+                if '.' in weight_str:
+                    parts = weight_str.split('.')
+                    weight_to = (float(weight_str.replace('.', ''))
+                                 if len(parts[-1]) == 3
+                                 else float(weight_str))
+                else:
+                    weight_to = float(weight_str)
+            except ValueError:
+                continue
+            if weight_to <= 0:
+                continue
+
+            unit = 'per 100 kg'
+            if unit_col < len(cells):
+                u = cells[unit_col].lower()
+                if 'sendung' in u or 'pauschal' in u or 'lkw' in u:
+                    unit = 'per Sendung'
+            for j in range(min(3, len(cells))):
+                if 'pauschal' in cells[j].lower():
+                    unit = 'per Sendung'
+                    break
+                if 'per 100' in cells[j].lower():
+                    unit = 'per 100 kg'
+                    break
+
+        for ci, zone_key in zone_cols:
+            try:
+                price = float(row.iloc[ci])
+                if price > 0:
+                    rows.append({
+                        'weight_to': weight_to, 'zone': zone_key, 'unit': unit,
+                        'price': price, 'country': country,
+                        'pricing_basis': 'EUR', 'knr': knr,
+                    })
+            except (TypeError, ValueError, IndexError):
+                pass
+    return rows
+
+
+def load_groz_beckert():
+    """Groz-Beckert: kein KNR in den BI-Rohdaten → kein LOADERS-Eintrag.
+    Diese Funktion ist ein Platzhalter; gibt leeres DataFrame zurück."""
+    print("Groz-Beckert: nicht in BI-Daten, kein Tarif-Lookup möglich.")
+    return pd.DataFrame()
+# Hinweis: LOADERS-Eintrag für Groz-Beckert wird NICHT gesetzt.
