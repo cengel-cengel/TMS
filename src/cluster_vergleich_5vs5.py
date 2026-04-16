@@ -196,6 +196,58 @@ def build_bi_raw() -> pd.DataFrame:
         + df['pricing_basis'].fillna('unbekannt')
     )
 
+    # ── Dinas-Rechnungsdaten joinen (HERMA GB PRE) ────────────────────────────
+    # Join-Key:  BI Rechnungsnummer  ↔  Zahl aus Dinas-Dateiname (RECHNUNG0XXXXXXX.pdf)
+    # Sekundär:  BI Empfänger-PLZ (erstes Token) ↔  Dinas postcode-Spalte
+    # Columns:   fracht→nk_fracht, diesel→nk_diesel, lsz→nk_maut,
+    #            ausfuhr→nk_eust_zoll, ssd→nk_nebengebuehren, total_shipment→nk_erloes_dinas
+    _DINAS_FP = OUT_DIR / 'herma_dinas_gb_invoices.csv'
+    for _c in ['nk_fracht', 'nk_diesel', 'nk_maut', 'nk_eust_zoll', 'nk_nebengebuehren', 'nk_erloes_dinas']:
+        df[_c] = np.nan
+
+    if _DINAS_FP.exists():
+        _dinas = pd.read_csv(_DINAS_FP, sep=';')
+        # Rechnungsnummer aus Dateiname extrahieren: 'RECHNUNG03764345.pdf' → '03764345'
+        _dinas['_rn']      = _dinas['invoice'].str.extract(r'(\d+)', expand=False)
+        _dinas['_plz_key'] = _dinas['postcode'].astype(str).str.strip()
+        # Pro (Rechnung, PLZ) aggregieren → kein kartesisches Produkt beim Join
+        _dinas_agg = (
+            _dinas
+            .groupby(['_rn', '_plz_key'], as_index=False)
+            [['fracht', 'diesel', 'lsz', 'ausfuhr', 'ssd', 'total_shipment']]
+            .sum()
+        )
+        # BI-Seite normalisieren
+        _pre_mask = df['periode'] == 'PRE'
+        df['_rn']      = df['Rechnungsnummer'].astype(str).str.strip()
+        df['_plz_key'] = df['Empfänger PLZ'].str.strip().str.split().str[0]
+        # Left-join nur auf PRE-Zeilen
+        _df_pre  = df[_pre_mask].copy()
+        _merged  = _df_pre.merge(_dinas_agg,
+                                  left_on=['_rn', '_plz_key'],
+                                  right_on=['_rn', '_plz_key'],
+                                  how='left')
+        # Werte zurückschreiben (gleiche Länge dank left-join auf aggregiertem rechts)
+        df.loc[_pre_mask, 'nk_fracht']         = _merged['fracht'].values
+        df.loc[_pre_mask, 'nk_diesel']         = _merged['diesel'].values
+        df.loc[_pre_mask, 'nk_maut']           = _merged['lsz'].values
+        df.loc[_pre_mask, 'nk_eust_zoll']      = _merged['ausfuhr'].values
+        df.loc[_pre_mask, 'nk_nebengebuehren'] = _merged['ssd'].values
+        df.loc[_pre_mask, 'nk_erloes_dinas']   = _merged['total_shipment'].values
+        _n_filled = int(df.loc[_pre_mask, 'nk_fracht'].notna().sum())
+        print(f'    [Dinas] {_n_filled} PRE-Zeilen mit Dinas-IST-Kosten befüllt '
+              f'(von {int(_pre_mask.sum())} PRE gesamt)')
+        # Test-Ausgabe: 5 befüllte PRE-Zeilen
+        _sample = df[_pre_mask & df['nk_fracht'].notna()][
+            ['Rechnungsnummer', 'Auftragsnummer', 'Empfänger PLZ', 'Empfänger Land',
+             'Tonnage (eff.)', 'nk_fracht', 'nk_diesel', 'nk_maut',
+             'nk_eust_zoll', 'nk_nebengebuehren', 'nk_erloes_dinas']
+        ].head(5)
+        print(_sample.to_string(index=False))
+        df.drop(columns=['_rn', '_plz_key'], inplace=True)
+    else:
+        print(f'    [Dinas] Datei nicht gefunden: {_DINAS_FP}')
+
     # Nur Zeilen mit Tarif-Match
     df = df[df['soll_fracht'].notna()].copy()
     print(f'    {len(df):,} Zeilen mit Tarif-Match')
