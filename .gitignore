@@ -7,6 +7,9 @@ __pycache__/
 Fischerwerke/
 Herma/
 
+# Extracted ZIP contents — too large for git (2+ GB binaries)
+data/extracted/
+
 # Large data files anywhere in the repo
 **/*.pdf
 **/*.PDF
