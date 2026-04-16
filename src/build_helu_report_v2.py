@@ -67,6 +67,15 @@ for df in (pre, post):
     df['_gwb']   = df['Tonnage (eff.)'].apply(gew_band)
     df['_cl']    = df['_land'] + '|' + df['_plz2'] + '|' + df['_gwb']
 
+# Filter ungültige Rechnungsnummern (RN=0 → kein Vergleich möglich)
+for df, name in [(pre, 'PRE'), (post, 'POST')]:
+    bad = df['Rechnungsnummer'].apply(
+        lambda v: str(v).strip().rstrip('0').rstrip('.') in ('0', '', 'nan'))
+    if bad.sum():
+        print(f'Filtere {bad.sum()} {name} Zeile(n) mit RN=0: '
+              f'{df[bad]["Auftragsnummer"].tolist()}')
+        df.drop(index=df[bad].index, inplace=True)
+
 POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
            'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
 for c in POST_NK: post[c] = pd.to_numeric(post.get(c), errors='coerce')
@@ -257,6 +266,7 @@ N = len(HDR_COLS)  # 25
 EUR_COLS = {12,13,15,16,17,18,19,20,21,22,23,24}   # 1-based
 KG_COL   = 14   # Tonnage kg
 DATE_COL = 4    # Sendungsdatum
+STR_COLS = {2, 3}  # Auftrags-Nr, Rech.-Nr — als Text um E-Notation zu verhindern
 
 FILL_HDR  = fill('1F497D')
 FILL_CLU  = fill('2E75B6')
@@ -277,6 +287,10 @@ def write_row(ws, row, values, row_fill, is_ctrl=False):
     rf = FILL_CTRL if is_ctrl else row_fill
     for ci, v in enumerate(values, 1):
         if v is not None and isinstance(v, float) and math.isnan(v): v = None
+        # Auftrags-Nr / Rech.-Nr als Text (verhindert E-Notation bei großen Nummern)
+        if ci in STR_COLS and v is not None:
+            try: v = str(int(float(str(v))))
+            except: v = str(v)
         fmt = ('DD.MM.YYYY' if ci == DATE_COL else
                EUR_FMT if ci in EUR_COLS else None)
         al  = 'right' if ci in EUR_COLS or ci == KG_COL else 'left'
@@ -303,18 +317,20 @@ def build_main_sheet(ws):
         land, plz_p, gwband = (parts+['','',''])[:3]
         vplz  = str(cl.get('vplz2', ''))
 
-        pre_all  = pre[pre['_cl']==ckey]
-        post_all = post[post['_cl']==ckey]
-        pre_s    = pre_all.head(5)
-        post_s   = post_all.head(5)
+        pre_all   = pre[pre['_cl']==ckey]
+        post_all  = post[post['_cl']==ckey]
+        # Nur unterfakturierte POST-Zeilen: Eff. AX < Eff. Dinas (Cluster-Durchschnitt)
+        post_under = post_all[post_all['_eff_100kg'].fillna(float('inf')) < cl.avg_eff_d]
+        pre_s  = pre_all.head(5)
+        post_s = post_under.head(5)
 
-        # Kontroll-Paar
+        # Kontroll-Paar (aus gefilterten POST-Zeilen)
         ctrl_pi, ctrl_oi = None, None
         best = float('inf')
         for pi, pr in pre_all.iterrows():
             pr_kg = pr.get('Tonnage (eff.)')
             if pd.isna(pr_kg): continue
-            for oi, po in post_all.iterrows():
+            for oi, po in post_under.iterrows():
                 po_kg = po.get('Tonnage (eff.)')
                 if pd.isna(po_kg): continue
                 d = abs(float(pr_kg) - float(po_kg))
