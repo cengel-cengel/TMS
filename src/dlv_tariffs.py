@@ -5,7 +5,8 @@ import numpy as np
 from pathlib import Path
 
 TARIFF_CACHE = {}
-CHT_ZONE_MAPS = {}  # {country_iso: {plz_prefix_int: zone_name}}
+CHT_ZONE_MAPS = {}   # {country_iso: {plz_prefix_int: zone_name}}
+HERMA_PT_ZONE_MAP = {}  # {zone_num_int: [(plz_from, plz_to), ...]}
 
 def get_tariff(knr: str) -> pd.DataFrame:
     if knr in TARIFF_CACHE:
@@ -151,6 +152,274 @@ def load_herma():
 
         except Exception as e:
             print(f"  {sheet}: Fehler – {e}")
+
+    # --- Sheets mit 2-stelligem PLZ-Prefix: CH, FR ---
+    # Struktur: Bezeichnung | 2-st PLZ (int) | bis 50 kg | ...
+    for sheet in ['CH', 'FR']:
+        try:
+            raw = pd.read_excel(filepath, sheet_name=sheet, header=None)
+            header_row_idx = None
+            for i in range(min(10, len(raw))):
+                vals = [str(v).strip() for v in raw.iloc[i]
+                        if str(v).strip() not in ('nan', '')]
+                if any(re.search(r'bis\s+[\d.,]+\s*kg', v, re.I) for v in vals):
+                    header_row_idx = i; break
+            if header_row_idx is None:
+                print(f"  {sheet}: keine Header-Zeile, übersprungen"); continue
+
+            seen2: dict[str, int] = {}
+            hdrs = []
+            for ci, v in enumerate(raw.iloc[header_row_idx]):
+                s = str(v).strip() if str(v).strip() not in ('nan', '') else f'_c{ci}'
+                if s in seen2:
+                    seen2[s] += 1; s = f'{s}_{seen2[s]}'
+                else:
+                    seen2[s] = 0
+                hdrs.append(s)
+
+            data = raw.iloc[header_row_idx + 1:].copy()
+            data.columns = hdrs
+            data = data[data.iloc[:, 0].astype(str).str.contains('Preis', na=False, case=False)]
+
+            weight_cols = [c for c in data.columns if re.match(r'bis\s+[\d.,]+\s*kg', c, re.I)]
+            if not weight_cols:
+                print(f"  {sheet}: keine Gewichtsspalten"); continue
+
+            plz_col = hdrs[1]   # immer zweite Spalte: '2-st PLZ'
+            id_cols = [hdrs[0], plz_col]
+
+            melted = data.melt(id_vars=id_cols, value_vars=weight_cols,
+                               var_name='weight_band_raw', value_name='price')
+            melted.rename(columns={plz_col: 'Plz_prefix'}, inplace=True)
+            melted['Plz_prefix'] = pd.to_numeric(melted['Plz_prefix'], errors='coerce')
+            melted = melted[melted['Plz_prefix'].notna() & (melted['Plz_prefix'] > 0)]
+            melted['country']       = sheet
+            melted['pricing_basis'] = 'EUR/Sendung'
+            melted['knr']           = '423650'
+            melted['match_type']    = 'plz_2digit'
+            melted['price'] = pd.to_numeric(
+                melted['price'].astype(str).str.replace(',', '.'), errors='coerce')
+            melted = melted[melted['price'].notna() & (melted['price'] > 0)]
+            all_rows.append(melted)
+            print(f"  {sheet}: {len(melted)} Zeilen geladen")
+        except Exception as e:
+            print(f"  {sheet}: Fehler – {e}")
+
+    # --- IT: zwei Abschnitte mit unterschiedlichen Gewichtsbändern ---
+    # Struktur: Bezeichung | Plz (range '00-06') | [MM] | bis X kg | ...
+    try:
+        raw = pd.read_excel(filepath, sheet_name='IT', header=None)
+        it_rows = []
+        header_indices = []
+        for i in range(len(raw)):
+            vals = [str(v).strip() for v in raw.iloc[i]
+                    if str(v).strip() not in ('nan', '')]
+            has_plz = any(v.lower() in ('plz', 'bezeichung', 'bezeichnung') for v in vals)
+            has_wt  = any(re.search(r'bis\s+[\d.,]+\s*kg', v, re.I) for v in vals)
+            if has_plz and has_wt:
+                header_indices.append(i)
+
+        for hi, header_row_idx in enumerate(header_indices):
+            next_hi = header_indices[hi + 1] if hi + 1 < len(header_indices) else len(raw)
+
+            seen3: dict[str, int] = {}
+            hdrs = []
+            for ci, v in enumerate(raw.iloc[header_row_idx]):
+                s = str(v).strip() if str(v).strip() not in ('nan', '') else f'_c{ci}'
+                if s in seen3:
+                    seen3[s] += 1; s = f'{s}_{seen3[s]}'
+                else:
+                    seen3[s] = 0
+                hdrs.append(s)
+
+            data_slice = raw.iloc[header_row_idx + 1: next_hi].copy()
+            data_slice.columns = hdrs[:len(data_slice.columns)]
+            data_slice = data_slice[
+                data_slice.iloc[:, 0].astype(str).str.contains('Preis', na=False, case=False)]
+
+            weight_cols = [c for c in hdrs if re.match(r'bis\s+[\d.,]+\s*kg', c, re.I)
+                           and c in data_slice.columns]
+            if not weight_cols:
+                continue
+
+            plz_col = hdrs[1]   # 'Plz'
+            id_cols = [c for c in [hdrs[0], plz_col] if c in data_slice.columns]
+
+            melted = data_slice.melt(id_vars=id_cols, value_vars=weight_cols,
+                                     var_name='weight_band_raw', value_name='price')
+
+            def _parse_it_plz(s):
+                nums = re.findall(r'\d+', str(s))
+                if len(nums) == 1: return int(nums[0]), int(nums[0])
+                if len(nums) >= 2:  return int(nums[0]), int(nums[1])
+                return None, None
+
+            melted[['Von_int', 'Bis_int']] = melted[plz_col].apply(
+                lambda s: pd.Series(_parse_it_plz(s)))
+            melted = melted[melted['Von_int'].notna()]
+            melted['country']       = 'IT'
+            melted['pricing_basis'] = 'EUR/Sendung'
+            melted['knr']           = '423650'
+            melted['match_type']    = 'plz_2digit_range'
+            melted['price'] = pd.to_numeric(
+                melted['price'].astype(str).str.replace(',', '.'), errors='coerce')
+            melted = melted[melted['price'].notna() & (melted['price'] > 0)]
+            it_rows.append(melted)
+
+        if it_rows:
+            it_df = pd.concat(it_rows, ignore_index=True)
+            all_rows.append(it_df)
+            print(f"  IT: {len(it_df)} Zeilen geladen ({len(header_indices)} Abschnitte)")
+    except Exception as e:
+        import traceback
+        print(f"  IT: Fehler – {e}"); traceback.print_exc()
+
+    # --- GB: Bezeichnung | Postcode-Bereiche (kommagetrennt) | bis X kg | ... ---
+    try:
+        raw = pd.read_excel(filepath, sheet_name='GB', header=None)
+        header_row_idx = None
+        for i in range(min(10, len(raw))):
+            vals = [str(v).strip() for v in raw.iloc[i]
+                    if str(v).strip() not in ('nan', '')]
+            if any(re.search(r'bis\s+[\d.,]+\s*kg', v, re.I) for v in vals):
+                header_row_idx = i; break
+        if header_row_idx is not None:
+            seen4: dict[str, int] = {}
+            hdrs = []
+            for ci, v in enumerate(raw.iloc[header_row_idx]):
+                s = str(v).strip() if str(v).strip() not in ('nan', '') else f'_c{ci}'
+                if s in seen4:
+                    seen4[s] += 1; s = f'{s}_{seen4[s]}'
+                else:
+                    seen4[s] = 0
+                hdrs.append(s)
+            data = raw.iloc[header_row_idx + 1:].copy()
+            data.columns = hdrs
+            data = data[data.iloc[:, 0].astype(str).str.contains('Preis', na=False, case=False)]
+            weight_cols = [c for c in data.columns if re.match(r'bis\s+[\d.,]+\s*kg', c, re.I)]
+            if weight_cols:
+                area_col = hdrs[1]   # 'Bis' = area codes string
+                id_cols  = [hdrs[0], area_col]
+                melted = data.melt(id_vars=id_cols, value_vars=weight_cols,
+                                   var_name='weight_band_raw', value_name='price')
+                melted.rename(columns={area_col: 'GB_areas'}, inplace=True)
+                melted['country']       = 'GB'
+                melted['pricing_basis'] = 'EUR/Sendung'
+                melted['knr']           = '423650'
+                melted['match_type']    = 'gb_area'
+                melted['price'] = pd.to_numeric(
+                    melted['price'].astype(str).str.replace(',', '.'), errors='coerce')
+                melted = melted[melted['price'].notna() & (melted['price'] > 0)]
+                all_rows.append(melted)
+                print(f"  GB: {len(melted)} Zeilen geladen")
+    except Exception as e:
+        print(f"  GB: Fehler – {e}")
+
+    # --- IRL (→ 'IE'): Bezeichnung | Zone (county/city) | bis X kg | ... ---
+    try:
+        raw = pd.read_excel(filepath, sheet_name='IRL', header=None)
+        header_row_idx = None
+        for i in range(min(10, len(raw))):
+            vals = [str(v).strip() for v in raw.iloc[i]
+                    if str(v).strip() not in ('nan', '')]
+            if any(re.search(r'bis\s+[\d.,]+\s*kg', v, re.I) for v in vals):
+                header_row_idx = i; break
+        if header_row_idx is not None:
+            seen5: dict[str, int] = {}
+            hdrs = []
+            for ci, v in enumerate(raw.iloc[header_row_idx]):
+                s = str(v).strip() if str(v).strip() not in ('nan', '') else f'_c{ci}'
+                if s in seen5:
+                    seen5[s] += 1; s = f'{s}_{seen5[s]}'
+                else:
+                    seen5[s] = 0
+                hdrs.append(s)
+            data = raw.iloc[header_row_idx + 1:].copy()
+            data.columns = hdrs
+            data = data[data.iloc[:, 0].astype(str).str.contains('Preis', na=False, case=False)]
+            weight_cols = [c for c in data.columns if re.match(r'bis\s+[\d.,]+\s*kg', c, re.I)]
+            if weight_cols:
+                zone_col = hdrs[1]   # 'Zone' = county/city name
+                id_cols  = [hdrs[0], zone_col]
+                melted = data.melt(id_vars=id_cols, value_vars=weight_cols,
+                                   var_name='weight_band_raw', value_name='price')
+                melted.rename(columns={zone_col: 'IRL_county'}, inplace=True)
+                melted['country']       = 'IE'   # Empfänger Land = 'IE', not 'IRL'
+                melted['pricing_basis'] = 'EUR/Sendung'
+                melted['knr']           = '423650'
+                melted['match_type']    = 'irl_county'
+                melted['price'] = pd.to_numeric(
+                    melted['price'].astype(str).str.replace(',', '.'), errors='coerce')
+                melted = melted[melted['price'].notna() & (melted['price'] > 0)]
+                all_rows.append(melted)
+                print(f"  IRL (IE): {len(melted)} Zeilen geladen")
+    except Exception as e:
+        print(f"  IRL: Fehler – {e}")
+
+    # --- PT: Zone 1-5 + PLZ-Bereich-Mapping am Tabellenende ---
+    try:
+        raw = pd.read_excel(filepath, sheet_name='PT', header=None)
+        header_row_idx = None
+        for i in range(min(10, len(raw))):
+            vals = [str(v).strip() for v in raw.iloc[i]
+                    if str(v).strip() not in ('nan', '')]
+            if any(re.search(r'bis\s+[\d.,]+\s*kg', v, re.I) for v in vals):
+                header_row_idx = i; break
+        if header_row_idx is not None:
+            seen6: dict[str, int] = {}
+            hdrs = []
+            for ci, v in enumerate(raw.iloc[header_row_idx]):
+                s = str(v).strip() if str(v).strip() not in ('nan', '') else f'_c{ci}'
+                if s in seen6:
+                    seen6[s] += 1; s = f'{s}_{seen6[s]}'
+                else:
+                    seen6[s] = 0
+                hdrs.append(s)
+            data = raw.iloc[header_row_idx + 1:].copy()
+            data.columns = hdrs
+            price_data = data[
+                data.iloc[:, 0].astype(str).str.contains('Preis', na=False, case=False)].copy()
+            weight_cols = [c for c in data.columns if re.match(r'bis\s+[\d.,]+\s*kg', c, re.I)]
+            if weight_cols:
+                zone_col = hdrs[1]   # 'Zone'
+                id_cols  = [hdrs[0], zone_col]
+                melted = price_data.melt(id_vars=id_cols, value_vars=weight_cols,
+                                         var_name='weight_band_raw', value_name='price')
+                melted.rename(columns={zone_col: 'PT_zone'}, inplace=True)
+                melted['Zone_num'] = melted['PT_zone'].astype(str).str.extract(r'(\d+)')[0].astype(float)
+                melted['country']       = 'PT'
+                melted['pricing_basis'] = 'EUR/Sendung'
+                melted['knr']           = '423650'
+                melted['match_type']    = 'pt_zone'
+                melted['price'] = pd.to_numeric(
+                    melted['price'].astype(str).str.replace(',', '.'), errors='coerce')
+                melted = melted[melted['price'].notna() & (melted['price'] > 0)]
+                all_rows.append(melted)
+
+            # Zone→PLZ-Bereich Mapping aus den unteren Zeilen
+            for _, row in raw.iterrows():
+                val0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+                m = re.match(r'Zone\s*(\d+)', val0)
+                if not m:
+                    continue
+                zn = int(m.group(1))
+                ranges = []
+                for ci in range(1, len(row)):
+                    cell = str(row.iloc[ci]).strip() if pd.notna(row.iloc[ci]) else ''
+                    cell = cell.rstrip(';').strip()
+                    if not cell or cell == 'nan' or any(k in cell for k in ('Azoren', 'Madiera', 'Madeira')):
+                        continue
+                    nums = re.findall(r'\d+', cell)
+                    if len(nums) == 2:
+                        ranges.append((int(nums[0]), int(nums[1])))
+                    elif len(nums) == 1:
+                        ranges.append((int(nums[0]), int(nums[0])))
+                if ranges:
+                    HERMA_PT_ZONE_MAP[zn] = ranges
+            print(f"  PT: {len(melted) if weight_cols else 0} Zeilen, Zonen-PLZ-Mapping: {sorted(HERMA_PT_ZONE_MAP.keys())}")
+    except Exception as e:
+        import traceback
+        print(f"  PT: Fehler – {e}"); traceback.print_exc()
 
     result = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
     print(f"HERMA gesamt: {len(result)} Tarifzeilen")
@@ -548,9 +817,55 @@ def lookup_tariff_price(row):
     except Exception as e:
         return default
 
+def _eircode_to_county(eircode):
+    """Mapt irischen Eircode-Routing-Key auf County-Name (wie im HERMA IRL-Sheet)."""
+    # Alte 3-Buchstaben-Codes (DUB, KID, SLI, ...)
+    OLD_CODES = {
+        'DUB': 'Dublin',   'KID': 'Kildare',  'SLI': 'Sligo',
+        'COR': 'Cork',     'GAL': 'Gatway',   'LIM': 'Limerik',
+        'WEX': 'Wexford',  'WAT': 'Waterford','KIL': 'Kilkenny',
+        'CAR': 'Carlow',   'CAV': 'Cavan',    'CLA': 'Clare',
+        'DON': 'Donegal',  'KER': 'Kerry',    'LAO': 'Laois',
+        'LEI': 'Leitrim',  'LON': 'Longford', 'LOU': 'Louth',
+        'MAY': 'Mayo',     'MEA': 'Meath',    'MON': 'Monaghan',
+        'OFF': 'Offaly',   'ROS': 'Roscommon','TIP': 'Tipperary',
+        'WEM': 'Westmeath','WIC': 'Wicklow',
+    }
+    ec = str(eircode).strip().upper()
+    # 3-Letter old-style code?
+    m3 = re.match(r'^([A-Z]{3})$', ec)
+    if m3 and m3.group(1) in OLD_CODES:
+        return OLD_CODES[m3.group(1)]
+    # Prefix-match auf 3-Buchstaben
+    if len(ec) >= 3 and ec[:3] in OLD_CODES:
+        return OLD_CODES[ec[:3]]
+    # Neuer Eircode: Letter + 2 Digits (z.B. D01, T12, F93)
+    m_new = re.match(r'^([A-Z])(\d{2})', ec)
+    if not m_new:
+        return 'Dublin'
+    letter, num = m_new.group(1), int(m_new.group(2))
+    if letter == 'D': return 'Dublin'
+    if letter == 'A': return 'Wicklow'
+    if letter == 'C': return 'Cavan'
+    if letter == 'E': return 'Waterford'
+    if letter == 'F': return 'Donegal' if num >= 90 else 'Gatway'
+    if letter == 'H': return 'Monaghan'
+    if letter == 'K': return 'Kildare'
+    if letter == 'N': return 'Meath'
+    if letter == 'P': return 'Cork'
+    if letter == 'R': return 'Kilkenny'
+    if letter == 'T': return 'Cork'
+    if letter == 'V': return 'Kerry'
+    if letter == 'W': return 'Waterford'
+    if letter == 'X': return 'Wexford'
+    if letter == 'Y': return 'Wicklow'
+    return 'Dublin'
+
+
 def _lookup_herma(row, tariff):
     """HERMA: Preis pro Sendung. Abrechnungsgewicht = max(Tonnage, LDM*1500, Vol*300).
-    Lookup: country → Von/Bis PLZ-Bereich → Zone → Gewichtsband."""
+    Lookup: country → PLZ-Matching (Von/Bis, 2-digit-prefix, GB area, PT zone, IE county)
+            → Gewichtsband."""
 
     _nan = pd.Series({'soll_fracht': np.nan, 'pricing_basis': 'EUR/Sendung',
                       'weight_band_matched': '', 'zone_matched': '', 'min_price_tariff': np.nan})
@@ -561,31 +876,101 @@ def _lookup_herma(row, tariff):
     if pd.isna(gewicht) or gewicht <= 0:
         gewicht = row.get('Tonnage (eff.)', 0)
 
-    # 1. Filter auf Land (country = Sheet-Name, z.B. 'AT')
+    # 1. Filter auf Land
     t = tariff[tariff['country'] == country]
     if t.empty:
         return _nan
 
-    # 2. PLZ → Zone: Finde die Zeile wo plz_int zwischen Von und Bis liegt
-    try:
-        plz_int = int(''.join(filter(str.isdigit, plz[:5])))
-    except (ValueError, TypeError):
-        plz_int = 0
+    # 2. PLZ → Tarifzeilen filtern
+    if 'match_type' in t.columns:
+        # --- Neue Sheets (CH, FR, GB, IE, IT, PT) ---
+        mt = t['match_type'].iloc[0]
 
-    if 'Von' in t.columns and 'Bis' in t.columns:
-        t_von = pd.to_numeric(t['Von'], errors='coerce')
-        t_bis = pd.to_numeric(t['Bis'], errors='coerce')
-        t_zone = t[(t_von <= plz_int) & (t_bis >= plz_int)]
-    elif 'Von PLZ' in t.columns:
-        t_plz = pd.to_numeric(t['Von PLZ'], errors='coerce')
-        t_zone = t[t_plz == plz_int]
+        if mt == 'plz_2digit':           # CH, FR: 2-stelliger numerischer PLZ-Prefix
+            try:
+                prefix = int(''.join(filter(str.isdigit, plz[:2])))
+            except (ValueError, TypeError):
+                prefix = -1
+            t_zone = t[t['Plz_prefix'] == prefix]
+            if t_zone.empty:
+                t_zone = t
+            zone_label = str(prefix)
+
+        elif mt == 'plz_2digit_range':   # IT: PLZ-Bereich '00-06' → Von_int/Bis_int
+            try:
+                prefix = int(''.join(filter(str.isdigit, plz[:2])))
+            except (ValueError, TypeError):
+                prefix = -1
+            t_zone = t[(pd.to_numeric(t['Von_int'], errors='coerce') <= prefix) &
+                       (pd.to_numeric(t['Bis_int'], errors='coerce') >= prefix)]
+            if t_zone.empty:
+                t_zone = t
+            zone_label = str(prefix)
+
+        elif mt == 'gb_area':            # GB: führende Buchstaben aus PLZ
+            m = re.match(r'^([A-Z]{1,2})', plz.upper().strip())
+            area = m.group(1) if m else ''
+            def _area_match(areas_str):
+                return any(a.strip() == area
+                           for a in re.split(r'[,\s]+', str(areas_str)) if a.strip())
+            t_zone = t[t['GB_areas'].apply(_area_match)]
+            if t_zone.empty:
+                t_zone = t
+            zone_label = area
+
+        elif mt == 'irl_county':         # IE: Eircode-Routing-Key → County
+            county = _eircode_to_county(plz)
+            t_zone = t[t['IRL_county'].str.lower() == county.lower()]
+            if t_zone.empty:
+                t_zone = t[t['IRL_county'].str.lower() == 'dublin']
+            if t_zone.empty:
+                t_zone = t
+            zone_label = county
+
+        elif mt == 'pt_zone':            # PT: 4-stellige PLZ → Zone via HERMA_PT_ZONE_MAP
+            try:
+                plz4 = int(''.join(filter(str.isdigit, plz[:4])))
+            except (ValueError, TypeError):
+                plz4 = 0
+            zone_num = None
+            for zn, ranges in HERMA_PT_ZONE_MAP.items():
+                for (frm, to) in ranges:
+                    if frm <= plz4 <= to:
+                        zone_num = zn; break
+                if zone_num is not None:
+                    break
+            if zone_num is not None:
+                t_zone = t[pd.to_numeric(t['Zone_num'], errors='coerce') == zone_num]
+            else:
+                t_zone = t
+            zone_label = f'Zone {zone_num}' if zone_num else '?'
+
+        else:
+            t_zone = t
+            zone_label = ''
+
     else:
-        t_zone = pd.DataFrame()
+        # --- Bestehende Sheets (AT, ES, EE): Von/Bis PLZ-Bereich ---
+        try:
+            plz_int = int(''.join(filter(str.isdigit, plz[:5])))
+        except (ValueError, TypeError):
+            plz_int = 0
 
-    if t_zone.empty:
-        t_zone = t  # Fallback: alle Zeilen des Landes (ungenau)
+        if 'Von' in t.columns and 'Bis' in t.columns:
+            t_von = pd.to_numeric(t['Von'], errors='coerce')
+            t_bis = pd.to_numeric(t['Bis'], errors='coerce')
+            t_zone = t[(t_von <= plz_int) & (t_bis >= plz_int)]
+        elif 'Von PLZ' in t.columns:
+            t_plz = pd.to_numeric(t['Von PLZ'], errors='coerce')
+            t_zone = t[t_plz == plz_int]
+        else:
+            t_zone = pd.DataFrame()
 
-    # 3. Gewichtsband matchen: "bis 400 kg" → weight_limit 400
+        if t_zone.empty:
+            t_zone = t
+        zone_label = str(t_zone['Zone'].iloc[0]) if 'Zone' in t_zone.columns and not t_zone.empty else ''
+
+    # 3. Gewichtsband matchen
     t_zone = t_zone.copy()
     t_zone['weight_limit'] = (
         t_zone['weight_band_raw']
@@ -594,7 +979,6 @@ def _lookup_herma(row, tariff):
         .astype(float)
     )
     t_zone = t_zone.dropna(subset=['weight_limit', 'price'])
-
     if t_zone.empty:
         return _nan
 
@@ -604,13 +988,12 @@ def _lookup_herma(row, tariff):
     else:
         match = passend.loc[passend['weight_limit'].idxmin()]
 
-    zone = match.get('Zone', '')
     return pd.Series({
-        'soll_fracht':        float(match['price']),
-        'pricing_basis':      'EUR/Sendung',
+        'soll_fracht':         float(match['price']),
+        'pricing_basis':       'EUR/Sendung',
         'weight_band_matched': str(match['weight_band_raw']),
-        'zone_matched':       f'{country} Zone {zone}',
-        'min_price_tariff':   np.nan,
+        'zone_matched':        f'{country} {zone_label}',
+        'min_price_tariff':    np.nan,
     })
 
 def _lookup_geze(row, tariff):
