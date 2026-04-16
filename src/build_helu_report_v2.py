@@ -73,6 +73,10 @@ POST_NK = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
 for c in PRE_NK:  pre[c]  = pd.to_numeric(pre.get(c),  errors='coerce')
 for c in POST_NK: post[c] = pd.to_numeric(post.get(c), errors='coerce')
 
+# ── Eff. EUR/100kg pro Sendung ─────────────────────────────────────────────
+pre['_eff_100kg']  = pre['Dinas Fracht']  / pre['Tonnage (eff.)'] * 100
+post['_eff_100kg'] = post['AX Fracht']    / post['Tonnage (eff.)'] * 100
+
 # ── Tarif-Lookup für alle Zeilen ───────────────────────────────────────────
 print('Berechne Soll EUR via Tarif-Engine...')
 pre_lookup  = pre.apply(lambda r: _lookup_helu(r, tariff), axis=1)
@@ -114,11 +118,12 @@ print(f'Soll EUR final: PRE {pre["Soll EUR"].notna().sum()}/{len(pre)}, '
 pa = pre.groupby('_cl').agg(
     n_pre=('Dinas Gesamt','count'), avg_d=('Dinas Gesamt','mean'),
     avg_df=('Dinas Fracht','mean'), avg_dd=('Dinas Diesel','mean'),
-    avg_dm=('Dinas Maut/SSD','mean'), vplz2=('_vplz2','first')).reset_index()
+    avg_dm=('Dinas Maut/SSD','mean'), vplz2=('_vplz2','first'),
+    avg_eff_d=('_eff_100kg','mean'), avg_dlv=('_basispreis','mean')).reset_index()
 oa = post.groupby('_cl').agg(
     n_post=('AX Gesamt','count'), avg_ax=('AX Gesamt','mean'),
     avg_af=('AX Fracht','mean'), avg_ad=('AX Diesel','mean'),
-    avg_am=('AX Maut','mean')).reset_index()
+    avg_am=('AX Maut','mean'), avg_eff_ax=('_eff_100kg','mean')).reset_index()
 stats = pa.merge(oa, on='_cl', how='inner')
 stats = stats[stats['avg_ax'] < stats['avg_d']].copy()
 stats['delta'] = stats['avg_ax'] - stats['avg_d']
@@ -135,8 +140,21 @@ def abw_grund_cluster(r):
                      for k,v in sorted(neg.items(), key=lambda x:x[1])[:2])
 
 stats['abw_grund'] = stats.apply(abw_grund_cluster, axis=1)
+stats['delta_eff_pct'] = ((stats['avg_eff_ax'] - stats['avg_eff_d'])
+                           / stats['avg_eff_d'].replace(0, np.nan) * 100)
+# Nur Cluster mit >5% Eff.-Preis-Abweichung
+stats = stats[stats['delta_eff_pct'].abs() > 5].copy()
 stats = stats.sort_values('loss').reset_index(drop=True)
-print(f'Cluster: {len(stats)}, Sigma Verlust: {stats["loss"].sum():,.0f} EUR')
+print(f'Cluster (|ΔEff|>5%): {len(stats)}, Sigma Verlust: {stats["loss"].sum():,.0f} EUR')
+
+top5 = stats.reindex(stats['delta_eff_pct'].abs().nlargest(5).index)
+print('\nTop-5 Cluster nach Eff.-Preis-Abweichung:')
+for _, cl in top5.iterrows():
+    parts = cl['_cl'].split('|'); land, plz_p, gwband = (parts+['','',''])[:3]
+    dlv = cl.avg_dlv if not pd.isna(cl.avg_dlv) else float('nan')
+    print(f'  {land}|{plz_p}|{gwband}  '
+          f'Eff.Dinas={cl.avg_eff_d:.2f}  Eff.AX={cl.avg_eff_ax:.2f}  '
+          f'DLV={dlv:.2f}  Δ={cl.delta_eff_pct:+.1f}%')
 
 # ── NK-Mapping ─────────────────────────────────────────────────────────────
 def get_nk_alt(r):
@@ -172,17 +190,18 @@ THIN = Side(border_style='thin', color='BBBBBB')
 BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 EUR_FMT = '#,##0.00'
 
-# 23 Spalten (NK Summe, Abw. EUR, Abw. % entfernt; Basispreis hinzugefügt)
+# 24 Spalten
 HDR_COLS = ['System','Auftrags-Nr','Rech.-Nr','Kunde','Land','Empf.PLZ','Vers.PLZ',
             'Gew.band','Zone','Basis','Basispreis',
             'Tonnage kg','Soll EUR',
-            'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
+            'Fracht EUR','Eff. EUR/100kg','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
             'Erlöse','Abw. Grund']
-N = len(HDR_COLS)  # 23
+N = len(HDR_COLS)  # 24
 
-EUR_COLS = {11,12,13,14,15,16,17,18,19,20,21}   # 1-based
-KG_COL   = 10   # Basispreis (EUR/100kg number)
+# 11=Basispreis, 13=Soll EUR, 14=Fracht EUR, 15=Eff. EUR/100kg, 16-22=NK, 23=Erlöse
+EUR_COLS = {11,13,14,15,16,17,18,19,20,21,22,23}   # 1-based
+KG_COL   = 12   # Tonnage kg
 
 FILL_HDR  = fill('1F497D')
 FILL_CLU  = fill('2E75B6')
@@ -247,11 +266,14 @@ def build_main_sheet(ws):
 
         # Cluster-Header
         row += 1
+        dlv_str = f'{cl.avg_dlv:,.2f}' if not pd.isna(cl.avg_dlv) else 'n/a'
         lbl = (f'▶ {KNR}|{vplz}|{land}|{plz_p}|{gwband}|{BASIS}     '
                f'n_PRE={int(cl.n_pre)}  n_POST={int(cl.n_post)}  '
                f'Ø Dinas={cl.avg_d:,.2f} EUR  Ø AX={cl.avg_ax:,.2f} EUR  '
                f'Δ={cl.delta:,.2f} EUR ({cl.pct:+.1f}%)  '
-               f'est.Verlust={cl.loss:,.0f} EUR  |  {cl.abw_grund}')
+               f'est.Verlust={cl.loss:,.0f} EUR  |  '
+               f'Eff. Dinas={cl.avg_eff_d:,.2f} | Eff. AX={cl.avg_eff_ax:,.2f} | '
+               f'DLV={dlv_str} | ΔEff={cl.delta_eff_pct:+.1f}%  |  {cl.abw_grund}')
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=N)
         wc(ws, row, 1, lbl, FILL_CLU, fnt(bold=True, color='FFFFFF', size=10))
 
@@ -263,12 +285,13 @@ def build_main_sheet(ws):
             soll    = r.get('Soll EUR')
             zone    = r.get('_zone') or 'n/a'
             bp      = r.get('_basispreis')
+            eff     = r.get('_eff_100kg')
             is_ctrl = (r.name == ctrl_pi)
             vals = ['alt', r.get('Auftragsnummer'), r.get('Rechnungsnummer'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
                     gwband, zone, BASIS, bp,
                     r.get('Tonnage (eff.)'), soll,
-                    *nk,
+                    nk[0], eff, *nk[1:],
                     erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_ALT, is_ctrl)
 
@@ -280,18 +303,19 @@ def build_main_sheet(ws):
             soll    = r.get('Soll EUR')
             zone    = r.get('_zone') or 'n/a'
             bp      = r.get('_basispreis')
+            eff     = r.get('_eff_100kg')
             is_ctrl = (r.name == ctrl_oi)
             vals = ['neu', r.get('Auftragsnummer'), r.get('Rechnungsnummer'), KUNDE,
                     r.get('Empfänger Land'), r.get('Empfänger PLZ'), r.get('Versender PLZ'),
                     gwband, zone, BASIS, bp,
                     r.get('Tonnage (eff.)'), soll,
-                    *nk,
+                    nk[0], eff, *nk[1:],
                     erloese, abw_grund_row(nk, soll, erloese)]
             write_row(ws, row, vals, FILL_NEU, is_ctrl)
 
         row += 1  # Leerzeile
 
-    widths = [8,15,13,18,5,8,8,11,8,10,10, 9,10, 10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,13,18,5,8,8,11,8,10,10, 9,10, 10,10,9,9,9,9,9,9,9, 11,22]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
