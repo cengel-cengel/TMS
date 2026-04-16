@@ -1847,3 +1847,117 @@ def load_bitzer():
 
 
 LOADERS['406345'] = load_bitzer
+
+
+def load_hornschuch():
+    """Lädt Hornschuch Tarifdaten (KNR 490085) aus CT-SSL-WEI-P001 (MegaTrans-Format).
+
+    Struktur:
+      - Header-Zeile an Row-Index 7; Daten ab Row 8
+      - Filter: Origin Country='DE', Origin Cluster='74', In/Out='Outbound'
+      - Destination Cluster = PLZ-Prefix des Empfängers
+        * Länder mit Zonen '1'-'9'  (AT,BE,CH,GR,NL,SI,…): 1-stelliger PLZ-Prefix
+        * Länder mit Zonen '00'-'99' (IT,FR,ES,PL,DE,…):    2-stelliger PLZ-Prefix
+        * GB: Outward-Code (AB, AL, B, …)
+        * IE: Eircode-Routing-Key (D01, …)
+      - Preisspalten:
+        * col12: Minimum (€/Sendung) für < 50,01 kg
+        * col13-col36: €/kg für gewichtsbasierte Bänder
+
+    Gibt DataFrame zurück mit Spalten:
+      weight_to, zone (= Cluster-Wert), unit (per Sendung | per_kg),
+      price, country, pricing_basis, knr
+    """
+    if not _HORNSCHUCH_DLV.is_file():
+        print(f"Hornschuch DLV nicht gefunden: {_HORNSCHUCH_DLV}")
+        return pd.DataFrame()
+
+    try:
+        raw = pd.read_excel(_HORNSCHUCH_DLV, sheet_name='CT-SSL-WEI-P001', header=None)
+    except Exception as exc:
+        print(f"Hornschuch DLV Lesefehler: {exc}")
+        return pd.DataFrame()
+
+    hdr_row = raw.iloc[7]
+
+    # ── Gewichtsbänder aus Kopfzeile extrahieren (col 12-35) ─────────────────
+    # col36 = '24000 kg' ist FTL-Pauschale → wird weggelassen
+    # Ergebnis: [(col_idx, weight_to_kg, unit), …]
+    wt_bands: list = []
+    for ci in range(12, min(36, raw.shape[1])):
+        v = str(hdr_row.iloc[ci]).strip() if pd.notna(hdr_row.iloc[ci]) else ''
+        if not v or v == 'nan':
+            continue
+        if 'minimum' in v.lower():
+            # Minimum < 50,01 kg → Pauschale per Sendung
+            wt_bands.append((ci, 50.0, 'per Sendung'))
+        else:
+            # "A,BC - D,EF kg" oder "24000 kg" → obere Grenze
+            norm = v.replace(',', '.')
+            nums = re.findall(r'\d+\.?\d*', norm)
+            if not nums:
+                continue
+            try:
+                wt_bands.append((ci, float(nums[-1]), 'per_kg'))
+            except ValueError:
+                continue
+
+    if not wt_bands:
+        print("Hornschuch: Keine Gewichtsbänder gefunden")
+        return pd.DataFrame()
+
+    # ── Outbound-Zeilen filtern und Tarifzeilen aufbauen ─────────────────────
+    all_rows: list = []
+
+    for i in range(8, len(raw)):
+        row = raw.iloc[i]
+        # Columns by position (0-based):
+        # 5=Origin Country, 6=Origin Cluster, 9=Dest Country,
+        # 10=Dest Cluster, 11=In/Outbound
+
+        def cell(ci):
+            v = row.iloc[ci]
+            return str(v).strip() if pd.notna(v) else ''
+
+        if cell(5) != 'DE' or cell(6) != '74' or cell(11) != 'Outbound':
+            continue
+
+        dest_country = cell(9)
+        zone_cluster = cell(10)
+        if not dest_country or dest_country == 'nan':
+            continue
+        if not zone_cluster or zone_cluster == 'nan':
+            continue
+
+        for ci, wt, unit in wt_bands:
+            try:
+                price = float(row.iloc[ci])
+            except (TypeError, ValueError):
+                continue
+            if price <= 0 or price >= 9999:
+                continue
+            all_rows.append({
+                'weight_to':     wt,
+                'zone':          zone_cluster,   # = PLZ-Prefix (direkt verwendbar)
+                'unit':          unit,
+                'price':         price,
+                'country':       dest_country,
+                'pricing_basis': 'EUR/kg',
+                'knr':           '490085',
+            })
+
+    result = pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
+    if not result.empty:
+        countries = sorted(result['country'].unique().tolist())
+        n_zones = result.groupby('country')['zone'].nunique()
+        print(f"Hornschuch gesamt: {len(result)} Tarifzeilen, {len(countries)} Länder")
+        print(f"  Länder: {countries}")
+        for c in ['IT', 'PL', 'FR', 'ES', 'AT', 'PT']:
+            if c in n_zones.index:
+                print(f"  {c}: {n_zones[c]} Zonen/PLZ-Cluster")
+    else:
+        print("Hornschuch: keine Tarifzeilen geladen")
+    return result
+
+
+LOADERS['490085'] = load_hornschuch
