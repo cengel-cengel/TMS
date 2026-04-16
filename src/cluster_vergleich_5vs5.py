@@ -86,6 +86,7 @@ N_EACH     = 5     # Zeilen pro System pro Cluster
 DISPLAY_COLS = [
     'system',
     'Auftragsnummer',
+    'Rechnungsnummer',
     'Kunden Name',
     'Empfänger Land',
     'Empfänger PLZ',
@@ -113,6 +114,7 @@ DISPLAY_COLS = [
 COL_META = {
     'system':             ('System',       8),
     'Auftragsnummer':     ('Auftrags-Nr', 14),
+    'Rechnungsnummer':    ('Rech.-Nr',    14),
     'Kunden Name':        ('Kunde',       20),
     'Empfänger Land':     ('Land',         6),
     'Empfänger PLZ':      ('Empf.PLZ',    10),
@@ -287,6 +289,37 @@ def build_bi_raw() -> pd.DataFrame:
     # Nur Zeilen mit Tarif-Match
     df = df[df['soll_fracht'].notna()].copy()
     print(f'    {len(df):,} Zeilen mit Tarif-Match')
+
+    # ── FILTER 1: Keine Null-Erlöse ───────────────────────────────────────────
+    # POST: muss Erlöse Fracht != 0 haben
+    # PRE: behalten wenn nk_fracht befüllt (Dinas-Daten vorhanden), sonst gleiche Regel
+    n_before_f1 = df.groupby('Kunden Nr BK').size()
+    _erloes_fracht = pd.to_numeric(df['Erlöse Fracht'], errors='coerce')
+    erloes_ok  = _erloes_fracht.notna() & (_erloes_fracht != 0)
+    pre_nk_ok  = (df['periode'] == 'PRE') & (df['nk_fracht'].fillna(0) != 0)
+    df = df[erloes_ok | pre_nk_ok].copy()
+    n_after_f1 = df.groupby('Kunden Nr BK').size()
+    print(f'    Filter 1 (Null-Erlöse): {(n_before_f1 - n_after_f1.reindex(n_before_f1.index, fill_value=0)).sum():,} '
+          f'Zeilen entfernt → {len(df):,} verbleiben')
+    for _knr, _cname in CUSTOMERS.items():
+        _k = str(_knr)
+        _pre = int(n_before_f1.get(_k, 0))
+        _post = int(n_after_f1.get(_k, 0))
+        print(f'      {_cname:<22s}: {_pre:>5,} → {_post:>5,}  (−{_pre - _post:,})')
+
+    # ── FILTER 2: Rechnungsnummer muss vorhanden sein ─────────────────────────
+    n_before_f2 = df.groupby('Kunden Nr BK').size()
+    _rn = df['Rechnungsnummer'].astype(str).str.strip()
+    df = df[df['Rechnungsnummer'].notna() & (_rn != '') & (_rn != '0')].copy()
+    n_after_f2 = df.groupby('Kunden Nr BK').size()
+    print(f'    Filter 2 (Rechnungsnummer): {(n_before_f2 - n_after_f2.reindex(n_before_f2.index, fill_value=0)).sum():,} '
+          f'Zeilen entfernt → {len(df):,} verbleiben')
+    for _knr, _cname in CUSTOMERS.items():
+        _k = str(_knr)
+        _pre = int(n_before_f2.get(_k, 0))
+        _post = int(n_after_f2.get(_k, 0))
+        print(f'      {_cname:<22s}: {_pre:>5,} → {_post:>5,}  (−{_pre - _post:,})')
+
     return df
 
 
