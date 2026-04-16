@@ -321,6 +321,11 @@ def build_main_sheet(ws):
         post_all  = post[post['_cl']==ckey]
         # Nur unterfakturierte POST-Zeilen: AX Fracht < Ø Dinas Fracht im Cluster
         post_under = post_all[post_all['AX Fracht'].fillna(float('inf')) < cl.avg_df]
+        # Zusätzlich: Abw.-Grund-Filter — nur Zeilen behalten wo abw_grund_row != 'Überfakturierung'
+        post_under = post_under[[
+            abw_grund_row(get_nk_neu(r), r.get('Soll EUR'), r.get('AX Gesamt') or 0) != 'Überfakturierung'
+            for _, r in post_under.iterrows()
+        ]]
         # Cluster komplett raus wenn keine unterfakturierten POST-Zeilen
         if len(post_under) == 0:
             continue
