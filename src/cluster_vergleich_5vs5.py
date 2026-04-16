@@ -459,9 +459,12 @@ def _cluster_block(pre_rows: pd.DataFrame,
     POST: top-5 nach |abweichung_eur|; PRE: erste 5.
     """
     # ── POST ──────────────────────────────────────────────────────────────────
+    # Vergleich auf Fracht-Basis: Erlöse Fracht (AX) vs soll_fracht (DLV).
+    # Erloese_gesamt enthält Nebengebühren/Diesel/Maut, die nicht im DLV-Basistarif
+    # enthalten sind — das würde die Deltas systematisch verfälschen.
     post = post_rows.copy()
     post['abweichung_eur'] = (
-        pd.to_numeric(post['Erloese'], errors='coerce') - post['soll_fracht']
+        pd.to_numeric(post['Erlöse Fracht'], errors='coerce') - post['soll_fracht']
     )
     post['abweichung_pct'] = (
         post['abweichung_eur'] / post['soll_fracht'].replace(0, np.nan) * 100
