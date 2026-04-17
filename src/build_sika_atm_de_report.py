@@ -149,7 +149,7 @@ for df, name in [(pre,'PRE'),(post,'POST')]:
 for c in list(POST_RENAME.values()):
     if c in post.columns: post[c] = pd.to_numeric(post[c], errors='coerce')
 
-pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
+pre = pre[pre['Dinas Gesamt'].fillna(0) > 0].copy()
 print(f'PRE nach Filter: {len(pre)} Zeilen, POST: {len(post)} Zeilen')
 
 def add_empty_master_cols(df):
@@ -169,8 +169,8 @@ for df in (pre, post):
     df['_kb']    = df['Tonnage (eff.)'].apply(kg_band)
     df['_cl']    = df['_land'] + '|' + df['_plz2'] + '|' + df['_kb']
 
-pre['_eff']  = pre['Dinas Fracht']  / (pre['_bkg'].replace(0, np.nan) / 100)
-post['_eff'] = post['AX Fracht']    / (post['_bkg'].replace(0, np.nan) / 100)
+pre['_eff']  = pre['Dinas Gesamt']  / (pre['_bkg'].replace(0, np.nan) / 100)
+post['_eff'] = post['AX Gesamt']    / (post['_bkg'].replace(0, np.nan) / 100)
 
 print('Berechne Soll EUR...')
 pre['Soll EUR']  = pre.apply(
@@ -277,7 +277,7 @@ def build_main_sheet(ws):
         vplz = str(cl.get('vplz2',''))
         pre_all  = pre[pre['_cl']==ckey]
         post_all = post[post['_cl']==ckey]
-        post_under = post_all[post_all['AX Fracht'].fillna(float('inf')) < cl.avg_df]
+        post_under = post_all[post_all['AX Gesamt'].fillna(float('inf')) < cl.avg_d]
         post_under = post_under[[
             abw_grund_row(get_nk_neu(r), r.get('Soll EUR'), r.get('AX Gesamt') or 0) != 'Überfakturierung'
             for _, r in post_under.iterrows()
