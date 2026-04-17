@@ -338,6 +338,10 @@ def build_main_sheet(ws):
         ('Vergleich-Methode',
          'Komplettpreis \u2192 DINAS total_items vs BI Erloese  |  '
          'Standard \u2192 DINAS fracht vs BI Erl\u00f6se Fracht', False),
+        ('AX-Cluster-Validierung',
+         '\u26a0 POST-Accuracy ohne AX-Cluster-Validierung \u2014 ausgewiesene Unterfakturierungen '
+         'k\u00f6nnen Cluster-Artefakte sein und keine echten Abweichungen. Belastbare Zahlen '
+         'erst nach ERKA-Abrechnungsstrecken-Nachlieferung m\u00f6glich.', False),
     ]
     for ri, (label, val, is_hdr) in enumerate(dq_rows, 2):
         rf   = FILL_DQH if is_hdr else (FILL_DQW if '\u26a0' in (val or '') else FILL_DQ)

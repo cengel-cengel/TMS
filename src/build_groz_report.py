@@ -252,6 +252,10 @@ def build_main_sheet(ws):
          f'D) DINAS Multi-Row: {n_multi_rn}', False),
         ('Vergleich-Methode',
          'Groz-Beckert: DINAS-PDF direkt vs AX-BI (Leistungsdatum-Split 26.09.2025)', False),
+        ('AX-Cluster-Validierung',
+         '⚠ POST-Accuracy ohne AX-Cluster-Validierung — ausgewiesene Unterfakturierungen '
+         'können Cluster-Artefakte sein und keine echten Abweichungen. Belastbare Zahlen '
+         'erst nach ERKA-Abrechnungsstrecken-Nachlieferung möglich.', False),
     ]
     for ri, (label, val, is_hdr) in enumerate(dq_rows, 2):
         rf   = FILL_DQH if is_hdr else (FILL_DQW if '⚠' in (val or '') else FILL_DQ)
