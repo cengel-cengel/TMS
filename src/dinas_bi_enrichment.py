@@ -167,6 +167,17 @@ _AX_FIN_COLS = [
     'AX Lademittel', 'AX Peak', 'AX EUST/Zoll', 'AX Versicherung', 'AX Gesamt',
 ]
 
+# BI revenue columns summed across all cluster rows (master + subs) onto master.
+_BI_ERLOES_COLS = [
+    'Erlöse Fracht', 'Erlöse Diesel', 'Erlöse Maut', 'Erlöse Nebengebühr',
+    'Erlöse Lademittel', 'Erlöse Peak', 'Erlöse EUST Zoll',
+    'Erlöse Transportversicherung', 'Erloese',
+]
+
+# Physical shipment dimensions summed across cluster rows.
+# Gewicht excluded: Master.Abrechnungsgewicht is ERKA-authoritative (Regel A, 99.76%).
+_BI_PHYS_COLS = ['Lademeter', 'Stellplätze', 'Volumen']
+
 
 def consolidate_clusters_ax(ax_df):
     """
@@ -223,8 +234,15 @@ def enrich_post_ax_clusters(post_df, ax_df, fin_cols=None):
       _ist_master  – 'Ja' if AX-master, '' otherwise
 
     Returns (enriched_post_df, stats_dict).
+
+    Weight note (ERKA-UI verified, Cluster 00194384):
+      Master.Abrechnungsgewicht (col V) already contains the sum of all physical
+      weights in the cluster (Sub 213 kg + Master 9952 kg = AbrGew 10165 kg).
+      Master.Gewicht (col U) is only the master shipment's own physical weight.
+      → Use tonnage_ax = master_row['Abrechnungsgewicht'] for rate lookups.
     """
-    _FIN = fin_cols or _AX_FIN_COLS
+    _base = list(fin_cols or _AX_FIN_COLS)
+    _FIN  = _base + [c for c in _BI_ERLOES_COLS + _BI_PHYS_COLS if c not in _base]
 
     def _sid(v):
         try:
@@ -258,9 +276,15 @@ def enrich_post_ax_clusters(post_df, ax_df, fin_cols=None):
     post = post_df.copy()
     post['_auftr_s'] = post['Auftragsnummer'].apply(_sid)
     post['_ax_mstr'] = post['_auftr_s'].isin(master_auftrs)
-    # A sub row: has a cluster mapping as a sub AND is NOT a master
     post['_sub_cl']  = post['_auftr_s'].map(sub_auftr_to_cluster)
-    post['_ax_sub']  = post['_sub_cl'].notna() & ~post['_ax_mstr']
+    # Only drop a sub row if its cluster master is also present in post_df.
+    # Orphan subs (master missing from filtered BI data) are kept as standalone rows.
+    _master_clusters_in_post = {
+        master_auftr_to_cluster[a]
+        for a in post.loc[post['_ax_mstr'], '_auftr_s']
+        if a in master_auftr_to_cluster
+    }
+    post['_ax_sub']  = post['_sub_cl'].isin(_master_clusters_in_post) & ~post['_ax_mstr']
     # Cluster for masters comes from master lookup; for subs from sub lookup
     post['_ax_cl']   = post['_auftr_s'].map(master_auftr_to_cluster).where(
         post['_ax_mstr'], post['_sub_cl']
@@ -275,13 +299,50 @@ def enrich_post_ax_clusters(post_df, ax_df, fin_cols=None):
         post[c] = pd.to_numeric(post[c], errors='coerce')
 
     if n_subs_removed > 0 and present:
-        # Group subs by their cluster key (_sub_cl) and sum financials
-        sub_sums = post[post['_ax_sub']].groupby('_sub_cl')[present].sum()
-        msk = post['_ax_mstr']
-        for c in present:
-            # Map master's cluster key to the sub sums for that cluster
-            added = post.loc[msk, '_ax_cl'].map(sub_sums[c]).fillna(0)
-            post.loc[msk, c] = post.loc[msk, c].fillna(0) + added
+        # Identify dup-master clusters: clusters where >1 BI row has _ax_mstr=True.
+        # These arise when the source system assigned the same Auftragsnummer to
+        # distinct real shipments (data-quality artifact). Both rows must stay in
+        # output and each must carry its own value — not a shared cluster sum.
+        mstr_bi        = post[post['_ax_mstr']]
+        _dup_cl_mask   = mstr_bi['_ax_cl'].duplicated(keep=False)
+        _dup_clusters  = set(mstr_bi.loc[_dup_cl_mask, '_ax_cl'].dropna())
+
+        # Hard sanity: dup-master clusters must have zero subs. If a dup-master
+        # cluster had subs, additive fallback would add the sub sum to EVERY
+        # duplicate master row (double-counting) — a bug the global sum test
+        # would NOT catch (it's an intra-cluster redistribution error).
+        if _dup_clusters:
+            _sub_cl_counts = post[post['_ax_sub']].groupby('_sub_cl').size()
+            _dup_with_subs = {cl: int(_sub_cl_counts[cl])
+                              for cl in _dup_clusters if cl in _sub_cl_counts.index}
+            if _dup_with_subs:
+                raise AssertionError(
+                    f'STOP: dup-master cluster(s) have subs > 0 — '
+                    f'additive fallback would double-count sub contributions. '
+                    f'Clusters: {_dup_with_subs}'
+                )
+
+        _clean_clusters = ~post['_ax_cl'].isin(_dup_clusters)
+        _in_cluster     = (post['_ax_mstr'] | post['_ax_sub']) & _clean_clusters
+        msk             = post['_ax_mstr']
+
+        # Symmetric path: master[col] = sum(master + all subs in cluster, min_count=1).
+        # min_count=1 returns NaN if every value is NaN, rather than 0.
+        if _in_cluster.any():
+            cluster_sums = post[_in_cluster].groupby('_ax_cl')[present].sum(min_count=1)
+            msk_clean    = msk & _clean_clusters
+            for c in present:
+                post.loc[msk_clean, c] = post.loc[msk_clean, '_ax_cl'].map(cluster_sums[c])
+
+        # Additive fallback for dup-master clusters: master[col] += subs.sum().
+        # Verified safe only because subs == 0 for all dup-master clusters (see above).
+        if _dup_clusters:
+            msk_dup  = msk & post['_ax_cl'].isin(_dup_clusters)
+            sub_sums = post[post['_ax_sub'] & post['_ax_cl'].isin(_dup_clusters)
+                           ].groupby('_sub_cl')[present].sum(min_count=1)
+            for c in present:
+                added = post.loc[msk_dup, '_ax_cl'].map(sub_sums[c]).fillna(0)
+                post.loc[msk_dup, c] = post.loc[msk_dup, c].fillna(0) + added
 
     post['_master_nr']  = post.apply(
         lambda r: r['_auftr_s'] if r['_ax_mstr'] else None, axis=1)
@@ -297,14 +358,17 @@ def enrich_post_ax_clusters(post_df, ax_df, fin_cols=None):
     post.drop(columns=['_auftr_s', '_ax_cl', '_ax_mstr', '_ax_sub', '_sub_cl'],
               errors='ignore', inplace=True)
 
-    n_ax_clusters = ax['_cluster'].nunique()
+    n_ax_clusters    = ax['_cluster'].nunique()
+    n_dup_master_cl  = len(_dup_clusters) if n_subs_removed > 0 and present else 0
+    _dup_note        = f', {n_dup_master_cl} Dup-Master-Cluster (additiv)' if n_dup_master_cl else ''
     print(f'  AX-Cluster: {n_ax_clusters} Cluster, '
           f'{n_subs_removed} Subs entfernt → {len(post)} Rows verbleiben '
-          f'({n_unmatched} Post-Rows nicht in AX-Datei)')
+          f'({n_unmatched} Post-Rows nicht in AX-Datei{_dup_note})')
 
     return post, {
-        'n_ax_clusters':    n_ax_clusters,
-        'n_ax_subs':        n_subs_removed,
-        'n_ax_masters':     n_masters_found,
-        'n_post_unmatched': n_unmatched,
+        'n_ax_clusters':        n_ax_clusters,
+        'n_ax_subs':            n_subs_removed,
+        'n_ax_masters':         n_masters_found,
+        'n_post_unmatched':     n_unmatched,
+        'n_dup_master_clusters': n_dup_master_cl,
     }
