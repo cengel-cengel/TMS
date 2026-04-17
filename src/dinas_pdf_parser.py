@@ -52,6 +52,9 @@ STP_RE   = re.compile(r'^([\d,]+)\s+[Ss]tp\s*=\s*([\d.]+)\s+k', re.I)
 KG_ONLY_RE = re.compile(r'^([\d]+(?:\.\d{3})*)\s+kg$', re.I)
 # Volume: "0,02 cbm =", "0,34 cbm", "2,89 cbm"
 VOL_CBM_RE = re.compile(r'^([\d,]+)\s+cbm(?:\s*=|$|\s)', re.I)
+# Solo (ohne = kg): "2,00 stp", "0,40 ldm"
+STP_SOLO_RE = re.compile(r'^([\d,]+)\s+[Ss]tp$', re.I)
+LDM_SOLO_RE = re.compile(r'^([\d,]+)\s+[Ll][Dd][Mm]$', re.I)
 BETRAG   = 'Betrag'
 
 # Single-letter country codes used in DINAS → normalize to ISO 2-letter
@@ -194,12 +197,21 @@ def parse_one(path: str) -> list[dict]:
             label_buf = []
             continue
 
-        # ── Stellplätze: "5,000 Stp = 3000 k" ───────────────────────────
+        # ── Stellplätze: "5,000 Stp = 3000 k" (one-line) ───────────────
         m_stp = STP_RE.match(line)
         if m_stp:
             cur['stellplaetze'] = eur_to_float(m_stp.group(1))
             if cur['kg_rechnung'] is None:
                 cur['kg_rechnung'] = float(m_stp.group(2).replace('.', ''))
+            label_buf = []
+            continue
+        # zweizeilig: "1,000 Stp =" auf Zeile i, "600 k[g]" auf Zeile i+1
+        if re.match(r'^[\d,]+\s+[Ss]tp\s*=$', line):
+            cur['stellplaetze'] = eur_to_float(line.split()[0])
+            if i + 1 < len(body):
+                m_kg = re.match(r'^([\d.]+)\s+kg?$', body[i + 1], re.I)
+                if m_kg and cur['kg_rechnung'] is None:
+                    cur['kg_rechnung'] = float(m_kg.group(1).replace('.', ''))
             label_buf = []
             continue
 
@@ -227,6 +239,18 @@ def parse_one(path: str) -> list[dict]:
                 label_buf = []
                 continue
             cur['_await_vol_kg'] = False   # give up on next non-kg line
+
+        # ── Solo Stellplätze: "2,00 stp" (kein = kg) ────────────────────
+        if STP_SOLO_RE.match(line):
+            cur['stellplaetze'] = eur_to_float(STP_SOLO_RE.match(line).group(1))
+            label_buf = []
+            continue
+
+        # ── Solo LDM: "0,40 ldm" (kein = kg) ────────────────────────────
+        if LDM_SOLO_RE.match(line):
+            cur['ldm'] = eur_to_float(LDM_SOLO_RE.match(line).group(1))
+            label_buf = []
+            continue
 
         # ── LDM (case-insensitive, truncated k): "1,240 ldm = 1550 k" ───
         m_wt = LDM_RE.match(line)
