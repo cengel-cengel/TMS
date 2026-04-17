@@ -12,8 +12,8 @@ from dinas_pdf_parser import parse_one, flatten
 BI_PKL    = Path('output/bi_top20_data.pkl')
 NK_XLSX   = Path('data/extracted/v1/Noerpel AI/SIka/Nebenbedingungen DINAS/NK Sika.xlsx')
 DLV_XLSX  = Path('data/extracted/v1/Noerpel AI/SIka/DLV/SIKA Deutschland GmbH Stuttgart/2026/20260211_SIKA DE & SSC Export div. LKZ_Stellplatzofferte_2026.xlsx')
-DINAS_DIR = Path('data/extracted/v1/Noerpel AI/SIka/Rechnungen/Rechnungen DINAS')
-CACHE     = Path('output/dinas_cache_491063.pkl')
+DINAS_DIR = Path('data/extracted/sika_ssc/Dinas SSC')
+CACHE     = Path('output/dinas_cache_ssc_511241.pkl')
 OUT_XLSX  = Path('output/billing_report/ssc_dinas_vergleich.xlsx')
 OUT_XLSX.parent.mkdir(exist_ok=True)
 KNR, KUNDE, BASIS = 511241, 'Sika Supply Center GmbH', 'EUR/Stpl'
