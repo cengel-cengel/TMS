@@ -46,26 +46,38 @@ else:
     rows = [dinas_fix(pos) for p in pdfs for pos in parse_one(p)]
     pre  = pd.DataFrame(rows); pre.to_pickle(CACHE); print(f'DINAS: {len(pre)} rows cached')
 
-# AX: 3-line charge format (label / M-code / amount EUR)
-AX_C = {'fracht':['FRACHT','VEREINBARTE'],'diesel':['DIESEL','FLOATER'],
-         'maut':['MAUT','TOLL'],'verzollung':['VERZOLL','ZOLL'],'peak':['PEAK']}
-axcat = lambda l: next((c for c,ks in AX_C.items() if any(k in l.upper() for k in ks)),'sonstige')
-ax_rows = []
-for p in glob.glob(str(AX_DIR/'*.PDF')):
-    rn = Path(p).stem.split(' - ')[1].strip() if ' - ' in Path(p).stem else ''
-    ls = [l.strip() for pg in fitz.open(p) for l in pg.get_text().split('\n') if l.strip()]
-    leist=kg=land=plz=name=''; ch={}
-    for i,l in enumerate(ls):
-        m=re.match(r'(\d{2}\.\d{2}\.\d{4})\s*/\s*([\d.,]+)\s+kg',l)
-        if m: leist=m.group(1); kg=float(m.group(2).replace('.','').replace(',','.'))
-        if l.lower()=='nach:' and i+1<len(ls):
-            m2=re.match(r'([A-Z]{2})-(\S+)',ls[i+1])
-            if m2: land=m2.group(1); plz=m2.group(2).split()[0]
-        if 'mpf' in l and l.endswith(':') and i+1<len(ls): name=ls[i+1].split(',')[0]
-        m3=re.match(r'(-?[\d.,]+)\s+EUR$',l)
-        if m3 and i>=2: ch[axcat(ls[i-2])]=ch.get(axcat(ls[i-2]),0)+float(m3.group(1).replace('.','').replace(',','.'))
-    if ch: ax_rows.append({'rn':rn,'dat':leist,'land':land,'plz':plz,'name':name,'kg':kg,**ch,'ax_gesamt':sum(ch.values())})
-post = pd.DataFrame(ax_rows); print(f'AX: {len(post)} rows')
+# POST von vollem BI (KNRs 410912, 490527, 527410, 527373)
+_bi_cache = Path('output/bi_cache_groz_beckert.pkl')
+_groz_knrs = [410912, 490527, 527410, 527373]
+if not _bi_cache.exists():
+    print('Lade Groz-Beckert aus vollem BI...')
+    _bi_all = pd.read_excel(Path('data/bi_report/Tagesbericht.Einzeldaten.alle.VKA.5.xlsx'), header=0)
+    _bi_groz = _bi_all[_bi_all['Kunden Nr BK'].isin(_groz_knrs)].copy()
+    _bi_groz.to_pickle(_bi_cache)
+else:
+    _bi_groz = pd.read_pickle(_bi_cache)
+_bi_groz['Leistungsdatum'] = pd.to_datetime(_bi_groz['Leistungsdatum'], errors='coerce')
+_post_bi = _bi_groz[_bi_groz['Leistungsdatum'] >= pd.Timestamp('2025-09-26')].copy()
+
+def _bi_num(col):
+    return pd.to_numeric(_post_bi[col], errors='coerce').fillna(0) if col in _post_bi.columns else 0.0
+
+post = pd.DataFrame({
+    'rn':        _post_bi['Rechnungsnummer'].astype(str),
+    'dat':       _post_bi['Leistungsdatum'],
+    'land':      _post_bi['Empfänger Land'].astype(str).str.strip(),
+    'plz':       _post_bi['Empfänger PLZ'].astype(str).str.strip(),
+    'name':      _post_bi['Empfänger Name'].astype(str) if 'Empfänger Name' in _post_bi.columns else '',
+    'kg':        pd.to_numeric(_post_bi['Tonnage (eff.)'], errors='coerce'),
+    'fracht':    _bi_num('Erlöse Fracht'),
+    'diesel':    _bi_num('Erlöse Diesel'),
+    'maut':      _bi_num('Erlöse Maut'),
+    'peak':      _bi_num('Erlöse Peak'),
+    'sonstige':  _bi_num('Erlöse Nebengebühr'),
+    'verzollung':_bi_num('Erlöse EUST Zoll'),
+    'ax_gesamt': _bi_num('Erloese'),
+})
+print(f'AX (BI): {len(post)} rows')
 
 # ── Cluster-Setup ─────────────────────────────────────────────────────────────
 pre['_kg']  = pd.to_numeric(pre['kg_rechnung'], errors='coerce')
