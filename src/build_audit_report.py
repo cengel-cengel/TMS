@@ -18,8 +18,9 @@ from openpyxl.utils import get_column_letter
 OUT = Path('output/billing_report/00_audit_extraktion.xlsx')
 OUT.parent.mkdir(exist_ok=True)
 
-V1  = Path('data/extracted/v1/Noerpel AI')
-V2  = Path('data/extracted/v2')
+V1     = Path('data/extracted/v1/Noerpel AI')
+V2     = Path('data/extracted/v2')
+BI_XLSX = Path('data/bi_report/Tagesbericht.Einzeldaten.alle.VKA.5.xlsx')
 
 # ── Kunden-Konfiguration ────────────────────────────────────────────────────────
 # name, knr, source_xlsx, hdr, dinas_dir, ax_dir, cache_path
@@ -41,7 +42,8 @@ CUSTOMERS = [
      'output/dinas_cache_406035.pkl'),
     ('HERMA GmbH',               423650,
      'output/herma_dinas_vergleich.xlsx',        0,
-     None, None,
+     Path('data/extracted/bi/Herma/Herma Dinas/Herma'),
+     Path('data/extracted/bi/Herma/Herma AX/Herma AX'),
      'output/dinas_cache_423650.pkl'),
     ('Bitzer Kühlmaschinenbau',  406345,
      'output/bitzer_dinas_vergleich.xlsx',       2,
@@ -68,7 +70,7 @@ CUSTOMERS = [
      V2/'Fischer/Rechnungen/Rechnungen DINAS',
      V2/'Fischer/Rechnungen/Rechnungen AX',
      'output/dinas_cache_409480.pkl'),
-    ('Groz-Beckert KG',          None,
+    ('Groz-Beckert KG',          410912,
      None,                                       None,
      V1/'Groz Beckert/Rechnungen/Rechnungen DINAS',
      V1/'Groz Beckert/Rechnungen/Rechnungen AX',
@@ -158,8 +160,8 @@ for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path in CUSTOMERS:
         rec['DINAS extrahiert (Positionen)'] = 0
         rec['DINAS extrahiert (Rechnungen)'] = 0
 
-    # Implied failed (rough: PDFs - unique invoice numbers)
-    rec['DINAS fehlgeschlagen (ca.)'] = max(0, dinas_total - rec['DINAS extrahiert (Rechnungen)'])
+    # PDFs ohne extrahierbare Positionen (Deckblätter / 0-Pos)
+    rec['DINAS 0-Pos/Cover PDFs'] = max(0, dinas_total - rec['DINAS extrahiert (Rechnungen)'])
 
     # PRE sheet
     if hdr == 'bi_pkl' and src_xlsx and Path(src_xlsx).exists():
@@ -169,20 +171,31 @@ for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path in CUSTOMERS:
         post = load_sheet(src_xlsx, hdr, 'POST')
 
     # For Groz-Beckert: PRE from cache
-    if name == 'Groz-Beckert KG' and Path(cache_path).exists():
+    if name == 'Groz-Beckert KG' and cache_path and Path(cache_path).exists():
         pre_groz = pd.read_pickle(cache_path)
-        pre_rows = len(pre_groz)
-        # Map to standard-ish names for completeness
-        pre_groz = pre_groz.rename(columns={
+        pre = pre_groz.rename(columns={
             'empf_land': 'Empfänger Land', 'empf_plz': 'Empfänger PLZ',
             'kg_rechnung': 'Tonnage (eff.)', 'ldm': 'Lademeter',
             'leistungsdatum': 'Leistungsdatum',
             'fracht': 'Dinas Fracht', 'diesel': 'Dinas Diesel',
             'maut_ssd': 'Dinas Maut/SSD', 'gesamtbetrag': 'Dinas Gesamt',
         })
-        pre = pre_groz
-    else:
-        pre_rows = len(pre)
+        # POST from full BI (KNRs 410912, 490527, 527410, 527373)
+        _bi_groz_cache = Path('output/bi_cache_groz_beckert.pkl')
+        GROZ_KNRS = [410912, 490527, 527410, 527373]
+        if not _bi_groz_cache.exists():
+            print('  Lade Groz-Beckert aus vollem BI...')
+            _bi_all = pd.read_excel(BI_XLSX, header=0)
+            _bi_groz = _bi_all[_bi_all['Kunden Nr BK'].isin(GROZ_KNRS)].copy()
+            _bi_groz.to_pickle(_bi_groz_cache)
+        else:
+            _bi_groz = pd.read_pickle(_bi_groz_cache)
+        _bi_groz['Leistungsdatum'] = pd.to_datetime(_bi_groz['Leistungsdatum'], errors='coerce')
+        post = _bi_groz[_bi_groz['Leistungsdatum'] >= pd.Timestamp('2025-09-26')].rename(columns={
+            'Erlöse Fracht': 'AX Fracht', 'Erlöse Diesel': 'AX Diesel',
+            'Erlöse Maut': 'AX Maut', 'Erlöse Nebengebühr': 'AX Nebengebühr',
+            'Erloese': 'AX Gesamt',
+        })
 
     rec['PRE Sendungen'] = len(pre)
     rec['POST Sendungen'] = len(post)
