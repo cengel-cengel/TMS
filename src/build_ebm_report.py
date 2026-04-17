@@ -17,9 +17,10 @@ from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0, 'src')
 from dlv_tariffs import load_ebm, _lookup_ebm
 from dinas_pdf_parser import parse_one, flatten
-from dinas_bi_enrichment import enrich_customer_bi
+from dinas_bi_enrichment import enrich_customer_bi, enrich_post_ax_clusters
 
-SRC_XLSX    = Path('/home/user/TMS/output/ebm_dinas_vergleich.xlsx')
+SRC_XLSX     = Path('/home/user/TMS/output/ebm_dinas_vergleich.xlsx')
+AX_STRECKEN  = Path('/home/user/TMS/Abrechnungsstrecken.xlsx')
 CLUSTER_XLS = Path('/home/user/TMS/output/cluster_vergleich/410844_EBM-Papst_Mulfingen_GmbH___Co__KG_cluster.xlsx')
 NK_XLSX     = None  # EBM hat keine separate NK-Datei
 DINAS_DIR   = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/EBM/Rechnungen/Rechnungen DINAS')
@@ -45,56 +46,10 @@ def norm_id(v):
     try: return str(int(float(str(v))))
     except: return str(v).strip()
 
-# ── Master/Sub-Konsolidierung ──────────────────────────────────────────────
-_ms_map_cache = None
-
-def norm_ms(v):
-    try: return str(int(float(str(v).strip())))
-    except: return str(v).strip()
-
-def _get_ms_map():
-    global _ms_map_cache
-    if _ms_map_cache is not None: return _ms_map_cache
-    _bi = pd.read_pickle(Path('output/bi_top20_data.pkl'))['df']
-    _bi = _bi[['Auftragsnummer','Mastersendung','Unterauftrag']].copy()
-    _bi['_aid'] = _bi['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
-    _bi['_ms']  = _bi['Mastersendung'].apply(lambda v: norm_ms(v) if pd.notna(v) else '')
-    _ms_map_cache = _bi.drop_duplicates('_aid').set_index('_aid')[['_ms','Unterauftrag']]
-    return _ms_map_cache
-
-def enrich_master_sub(df):
-    fin_cols = ['AX Fracht','AX Diesel','AX Maut','AX Nebengebühr',
-                'AX Lademittel','AX Peak','AX EUST/Zoll','AX Versicherung','AX Gesamt']
-    msmap = _get_ms_map()
-    df = df.copy()
-    aid = df['Auftragsnummer'].astype(str).str.strip().apply(norm_ms)
-    ms  = aid.map(msmap['_ms']).fillna('')
-    ua  = aid.map(msmap['Unterauftrag'])
-    df['_is_master']  = (ms.values == aid.values) & (ms.values != '')
-    df['_is_sub']     = (ms.values != '') & ~df['_is_master']
-    df['_ms_ref']     = ms.values
-    df['_unterauftr'] = ua.values
-    subs = df[df['_is_sub']]
-    if len(subs) > 0:
-        present = [c for c in fin_cols if c in df.columns]
-        for c in present: df[c] = pd.to_numeric(df[c], errors='coerce')
-        ssums = subs.groupby('_ms_ref')[present].sum()
-        for c in present:
-            msk = df['_is_master']
-            df.loc[msk, c] = df.loc[msk,'_ms_ref'].map(ssums[c]).fillna(df.loc[msk,c])
-    df['_master_nr']  = ms.where(ms != '', None).values
-    df['_sub_nrs']    = df.apply(
-        lambda r: str(r['_unterauftr']) if r['_is_master'] and pd.notna(r['_unterauftr']) else None, axis=1)
-    df['_n_subs']     = df['_sub_nrs'].apply(lambda v: len(v.split(',')) if isinstance(v, str) and v else 0)
-    df['_ist_master'] = df['_is_master'].map({True:'Ja', False:''})
-    n_sub = df['_is_sub'].sum()
-    df = df[~df['_is_sub']].copy()
-    print(f'  Master/Sub: {n_sub} Subs entfernt, {df["_is_master"].sum()} Masters angereichert')
-    return df
-
 def add_empty_master_cols(df):
     df = df.copy()
-    for c in ('_master_nr','_sub_nrs','_ist_master'): df[c] = None
+    for c in ('_master_nr', '_sub_nrs', '_ist_master'):
+        df[c] = None
     df['_n_subs'] = 0
     return df
 
@@ -198,8 +153,10 @@ _flag_mr  = _tmp['flag_multi_rn_dinas'].fillna(False).to_dict()
 del _tmp
 
 
-print('Konsolidiere Master/Sub-Sendungen...')
-post = enrich_master_sub(post)
+print('Konsolidiere AX-Cluster (Abrechnungsstrecken)...')
+_ax_raw   = pd.read_excel(AX_STRECKEN)
+_ax_kunde = _ax_raw[_ax_raw['Kontonummer'] == KNR].copy()
+post, _ax_stats = enrich_post_ax_clusters(post, _ax_kunde)
 pre  = add_empty_master_cols(pre)
 
 # ── Eff. EUR/100kg pro Sendung ─────────────────────────────────────────────
@@ -402,6 +359,10 @@ def build_main_sheet(ws):
         ('Vergleich-Methode',
          'Komplettpreis \u2192 DINAS total_items vs BI Erloese  |  '
          'Standard \u2192 DINAS fracht vs BI Erl\u00f6se Fracht', False),
+        ('AX-Cluster-Konsolidierung (Abrechnungsstrecken)',
+         f'aktiv: ja  |  {_ax_stats["n_ax_clusters"]} Cluster  |  '
+         f'{_ax_stats["n_ax_subs"]} Sub-Rows entfernt  |  '
+         f'{_ax_stats["n_post_unmatched"]} POST-Rows nicht in AX-Datei', False),
     ]
     for ri, (label, val, is_hdr) in enumerate(dq_rows, 2):
         rf   = FILL_DQH if is_hdr else (FILL_DQW if '\u26a0' in (val or '') else FILL_DQ)

@@ -154,3 +154,157 @@ def enrich_customer_bi(df_bi: pd.DataFrame, df_dinas: pd.DataFrame,
     }
 
     return merged, dinas_net, stats
+
+
+# ── AX-side cluster consolidation (POST) ─────────────────────────────────────
+# STRICTLY SEPARATE from the DINAS PRE-side master logic above.
+# DINAS uses 'Mastersendung' from the DINAS transport system.
+# AX uses 'Zusammengefasst in' + 'Hauptabrechnungsstrecke' from the AX billing system.
+# These two keys are numerically and semantically incompatible — do not mix them.
+
+_AX_FIN_COLS = [
+    'AX Fracht', 'AX Diesel', 'AX Maut', 'AX Nebengebühr',
+    'AX Lademittel', 'AX Peak', 'AX EUST/Zoll', 'AX Versicherung', 'AX Gesamt',
+]
+
+
+def consolidate_clusters_ax(ax_df):
+    """
+    Reduce a raw Abrechnungsstrecken DataFrame to one row per billing cluster.
+
+    Keeps only Hauptabrechnungsstrecke == 'Ja' rows (the master/Hauptabrechnung).
+    Master.AbrGew == sum(all physical Gewicht in cluster) in 99.8 % of cases;
+    the rare exception is a contractual minimum weight (e.g. Cyprus route).
+
+    Returns (masters_df, stats_dict).
+    """
+    ZI  = 'Zusammengefasst in'
+    HAB = 'Hauptabrechnungsstrecke'
+
+    n_total    = len(ax_df)
+    n_clusters = ax_df[ZI].nunique()
+
+    masters    = ax_df[ax_df[HAB] == 'Ja'].copy()
+    master_keys = set(masters[ZI].dropna())
+    all_keys    = set(ax_df[ZI].dropna())
+    no_master   = all_keys - master_keys
+
+    if no_master:
+        print(f'  ⚠ {len(no_master)} Cluster ohne Hauptabrechnungsstrecke=Ja → gedroppt')
+
+    assert len(masters) == n_clusters - len(no_master), (
+        f'Sanity: {len(masters)} master rows != {n_clusters - len(no_master)} expected'
+    )
+
+    stats = {
+        'n_rows_total':         n_total,
+        'n_clusters':           n_clusters,
+        'n_masters':            len(masters),
+        'n_subs':               n_total - len(masters),
+        'n_clusters_no_master': len(no_master),
+    }
+    return masters, stats
+
+
+def enrich_post_ax_clusters(post_df, ax_df, fin_cols=None):
+    """
+    Consolidate AX billing sub-shipments in post_df using Abrechnungsstrecken cluster keys.
+
+    For each cluster in ax_df:
+      - Master row (Hauptabrechnungsstrecke == 'Ja'): keeps its row, receives summed
+        financials from all sub-rows in the same cluster.
+      - Sub rows: financial columns accumulated onto master, then dropped.
+      - Singleton clusters (no subs): pass through unchanged.
+
+    Adds to each remaining post row:
+      _master_nr   – own Auftragsnummer if AX-master, else None
+      _sub_nrs     – comma-separated sub Auftragsnummern (master only)
+      _n_subs      – count of accumulated sub rows
+      _ist_master  – 'Ja' if AX-master, '' otherwise
+
+    Returns (enriched_post_df, stats_dict).
+    """
+    _FIN = fin_cols or _AX_FIN_COLS
+
+    def _sid(v):
+        try:
+            return str(int(float(str(v).strip())))
+        except Exception:
+            return str(v).strip()
+
+    ax = ax_df[['Zusammengefasst in', 'Hauptabrechnungsstrecke',
+                'Auftragsnummer', 'Abrechnungsgewicht']].copy()
+    ax['_auftr']   = ax['Auftragsnummer'].apply(_sid)
+    ax['_cluster'] = ax['Zusammengefasst in'].apply(_sid)
+    ax['_is_mstr'] = ax['Hauptabrechnungsstrecke'] == 'Ja'
+
+    mstr_rows = ax[ax['_is_mstr']]
+    sub_rows  = ax[~ax['_is_mstr']]
+
+    # Set-based: an auftr is a master if it EVER appears with Haupt=Ja.
+    # This handles the edge case where the same auftr appears in multiple AX rows.
+    master_auftrs = set(mstr_rows['_auftr'])
+
+    # Cluster lookups: master's auftr → cluster (used to accumulate sub sums onto master).
+    # Sub's auftr → cluster (used to group sub financials for summation).
+    master_auftr_to_cluster = dict(zip(mstr_rows['_auftr'], mstr_rows['_cluster']))
+    sub_auftr_to_cluster    = dict(zip(sub_rows['_auftr'],  sub_rows['_cluster']))
+    cluster_to_abrg         = dict(zip(mstr_rows['_cluster'], mstr_rows['Abrechnungsgewicht']))
+
+    cluster_to_sub_auftr = (
+        sub_rows.groupby('_cluster')['_auftr'].apply(list).to_dict()
+    )
+
+    post = post_df.copy()
+    post['_auftr_s'] = post['Auftragsnummer'].apply(_sid)
+    post['_ax_mstr'] = post['_auftr_s'].isin(master_auftrs)
+    # A sub row: has a cluster mapping as a sub AND is NOT a master
+    post['_sub_cl']  = post['_auftr_s'].map(sub_auftr_to_cluster)
+    post['_ax_sub']  = post['_sub_cl'].notna() & ~post['_ax_mstr']
+    # Cluster for masters comes from master lookup; for subs from sub lookup
+    post['_ax_cl']   = post['_auftr_s'].map(master_auftr_to_cluster).where(
+        post['_ax_mstr'], post['_sub_cl']
+    )
+
+    n_subs_removed = int(post['_ax_sub'].sum())
+    n_masters_found = int(post['_ax_mstr'].sum())
+    n_unmatched     = int(post['_ax_cl'].isna().sum())
+
+    present = [c for c in _FIN if c in post.columns]
+    for c in present:
+        post[c] = pd.to_numeric(post[c], errors='coerce')
+
+    if n_subs_removed > 0 and present:
+        # Group subs by their cluster key (_sub_cl) and sum financials
+        sub_sums = post[post['_ax_sub']].groupby('_sub_cl')[present].sum()
+        msk = post['_ax_mstr']
+        for c in present:
+            # Map master's cluster key to the sub sums for that cluster
+            added = post.loc[msk, '_ax_cl'].map(sub_sums[c]).fillna(0)
+            post.loc[msk, c] = post.loc[msk, c].fillna(0) + added
+
+    post['_master_nr']  = post.apply(
+        lambda r: r['_auftr_s'] if r['_ax_mstr'] else None, axis=1)
+    post['_sub_nrs']    = post.apply(
+        lambda r: ', '.join(cluster_to_sub_auftr.get(str(r['_ax_cl']), []))
+        if r['_ax_mstr'] else None, axis=1)
+    post['_n_subs']     = post['_sub_nrs'].apply(
+        lambda v: len(v.split(',')) if isinstance(v, str) and v else 0)
+    post['_ist_master'] = post['_ax_mstr'].map({True: 'Ja', False: ''})
+    post['_ax_abrg']    = post['_ax_cl'].map(cluster_to_abrg)
+
+    post = post[~post['_ax_sub']].copy()
+    post.drop(columns=['_auftr_s', '_ax_cl', '_ax_mstr', '_ax_sub', '_sub_cl'],
+              errors='ignore', inplace=True)
+
+    n_ax_clusters = ax['_cluster'].nunique()
+    print(f'  AX-Cluster: {n_ax_clusters} Cluster, '
+          f'{n_subs_removed} Subs entfernt → {len(post)} Rows verbleiben '
+          f'({n_unmatched} Post-Rows nicht in AX-Datei)')
+
+    return post, {
+        'n_ax_clusters':    n_ax_clusters,
+        'n_ax_subs':        n_subs_removed,
+        'n_ax_masters':     n_masters_found,
+        'n_post_unmatched': n_unmatched,
+    }
