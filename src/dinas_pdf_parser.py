@@ -561,13 +561,17 @@ def parse_differenz(path: str) -> list[dict]:
 
 
 # ── Alle PDFs eines Verzeichnisses parsen ─────────────────────────────────
-# Keywords that identify third-party billing formats — not the direct customer's invoice
+# Keywords that identify non-invoice documents or third-party billing formats.
+# PDFs matching ANY of these are explicitly skipped (not counted as parse failures).
 _EXPLICIT_SKIP_KW = (
-    'B O R D E R O',       # Bordero-Belastung (billed to freight partner)
-    'A-META-ABRECHNUNG',   # A-META Abrechnung (old ERKA billing system)
-    'A-META-Abrechnung',   # case variant
-    'Stornobeleg',         # cancellation note
+    'B O R D E R O',            # Bordero-Belastung (billed to freight partner)
+    'A-META-ABRECHNUNG',        # A-META Abrechnung (old ERKA billing system)
+    'A-META-Abrechnung',        # case variant
+    'Stornobeleg',              # cancellation note
     'S T O R N O B E L E G',
+    'VERBRINGUNGSNACHWEIS',     # customs export declaration — no invoice amounts
+    'Umsatzsteuerzwecke',       # VAT-exemption certificate (Spediteurbescheinigung)
+    'Bord#',                    # columnar GUTSCHRIFT to freight partner (TRANSDANUBIA etc.)
 )
 
 
