@@ -166,15 +166,45 @@ for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
 print(f'DINAS re-joined: {pre["Dinas Fracht"].notna().sum()}/{len(pre)} PRE')
 pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
 
-# ── Stellplätze: PRE = ceil(Dinas LDM / 0.4), POST = direkt aus BI ────────
+# ── Stellplätze ────────────────────────────────────────────────────────────
+def _stpl_from_ldm(ldm):
+    return max(1, math.ceil(float(ldm) / 0.4))
+
+def _stpl_inverse(gesamt, rates):
+    """Back-calculate n_stpl from billed amount using closest rate."""
+    gesamt = float(gesamt or 0)
+    if gesamt <= 0: return 1
+    best_n, best_d = 1, float('inf')
+    for n, r in rates.items():
+        if abs(r - gesamt) < best_d:
+            best_d = abs(r - gesamt)
+            best_n = n
+    return best_n
+
 def _pre_stpl(r):
+    # 1) DINAS LDM from cache
     for col in ('Dinas LDM', 'Lademeter'):
         v = pd.to_numeric(r.get(col), errors='coerce')
         if pd.notna(v) and v > 0:
-            return max(1, math.ceil(v / 0.4))
+            return _stpl_from_ldm(v)
+    # 2) Back-calculate from Dinas Gesamt (assumes DINAS billed per DLV)
+    gesamt = pd.to_numeric(r.get('Dinas Gesamt'), errors='coerce')
+    if pd.notna(gesamt) and gesamt > 0:
+        return _stpl_inverse(gesamt, rates_2025)
     return 1
-pre['_stpl']  = pre.apply(_pre_stpl, axis=1)
-post['_stpl'] = pd.to_numeric(post['Stellplätze'], errors='coerce').fillna(1).clip(lower=1)
+
+pre['_stpl'] = pre.apply(_pre_stpl, axis=1)
+
+def _post_stpl(r):
+    stpl = pd.to_numeric(r.get('Stellplätze'), errors='coerce')
+    if pd.notna(stpl) and stpl > 0:
+        return max(1, int(math.ceil(stpl)))
+    ldm = pd.to_numeric(r.get('Lademeter'), errors='coerce')
+    if pd.notna(ldm) and ldm > 0:
+        return _stpl_from_ldm(ldm)
+    return 1
+
+post['_stpl'] = post.apply(_post_stpl, axis=1)
 
 print('Konsolidiere Master/Sub-Sendungen...')
 post = enrich_master_sub(post)
