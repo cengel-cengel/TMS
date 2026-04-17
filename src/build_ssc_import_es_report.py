@@ -11,7 +11,8 @@ from dinas_pdf_parser import parse_one, flatten
 
 BI_PKL    = Path('output/bi_top20_data.pkl')
 NK_XLSX   = Path('data/extracted/v1/Noerpel AI/SIka/Nebenbedingungen DINAS/NK Sika.xlsx')
-DLV_XLSX  = Path('data/extracted/v1/Noerpel AI/SIka/DLV/SIKA Deutschland GmbH Stuttgart/2026/20260211_SIKA DE & SSC Export div. LKZ_Stellplatzofferte_2026.xlsx')
+IMPORT_DLV_2025 = Path('data/extracted/v1/Noerpel AI/SIka/DLV/SIKA Deutschland GmbH Stuttgart/2025/20250109_Sika Supply_Import Spanien und Italien 2025.xlsx')
+IMPORT_DLV_2026 = Path('data/extracted/v1/Noerpel AI/SIka/DLV/SIKA Deutschland GmbH Stuttgart/2026/20251216_Sika Supply_Import Spanien und Italien 2026.xlsx')
 DINAS_DIR = Path('data/extracted/sika_ssc/Dinas SSC')
 CACHE     = Path('output/dinas_cache_ssc_511241.pkl')
 OUT_XLSX  = Path('output/billing_report/ssc_import_es_vollanalyse.xlsx')
@@ -27,41 +28,21 @@ def stpl_band(n):
         if n <= b: return f'bis {b} Stpl'
     return 'ueber 33 Stpl'
 
-# ── DLV Sika Stellplatz-Tarif ──────────────────────────────────────────────
-def load_sika_dlv():
-    df = pd.read_excel(DLV_XLSX, sheet_name='Sika Export Rates 2025', header=None)
-    hdr = df.iloc[12]
-    col_map = {int(float(v)): i for i, v in enumerate(hdr)
-               if not pd.isna(v) and str(v).replace('.0','').strip().isdigit()}
-    rows = []
-    for _, r in df.iloc[13:77].iterrows():
-        land = str(r.iloc[0]).strip() if not pd.isna(r.iloc[0]) else ''
-        zk   = str(r.iloc[1]).strip() if not pd.isna(r.iloc[1]) else ''
-        if not land or land in ('nan','') or 'Rates' in land: break
-        prices = {}
-        for n, ci in col_map.items():
-            v = r.iloc[ci]
-            if pd.isna(v): continue
-            try: prices[n] = float(v)
-            except (ValueError, TypeError): pass
-        if not prices: continue
-        prefixes = []
-        for p in zk.replace(' ', '').split(','):
-            p = re.sub(r'xxx', '', p)
-            if '-' in p: p = p.split('-', 1)[1]
-            prefixes.append(p.upper())
-        rows.append((land, prefixes, prices))
-    return rows
+# ── DLV Import Spanien → DE (Stellplatz-Festpreis, single route) ──────────
+def _load_import_rates(path):
+    df = pd.read_excel(path, sheet_name=0, header=None)
+    rates = {}
+    for _, r in df.iloc[16:55].iterrows():
+        n = r.iloc[0]; price = r.iloc[2]
+        if pd.isna(n) or pd.isna(price): continue
+        try: rates[int(float(n))] = float(price)
+        except (ValueError, TypeError): pass
+    return rates
 
-def lookup_sika(dlv, land, plz, n_stpl):
-    plz = str(plz).strip().upper()
-    for row_land, prefixes, prices in dlv:
-        if row_land != land: continue
-        for pfx in prefixes:
-            if plz.startswith(pfx):
-                n = max(1, min(max(prices), int(math.ceil(float(n_stpl)))))
-                return prices.get(n)
-    return None
+def lookup_import_es(rates_2025, rates_2026, leistungsdatum, n_stpl):
+    rates = rates_2026 if pd.Timestamp(leistungsdatum) >= pd.Timestamp('2025-09-26') else rates_2025
+    n = max(1, min(n_stpl, max(rates)))
+    return rates.get(n)
 
 # ── Master/Sub-Konsolidierung ──────────────────────────────────────────────
 _ms_map_cache = None
@@ -116,9 +97,10 @@ def add_empty_master_cols(df):
     df['_n_subs'] = 0
     return df
 
-print('Lade Sika DLV...')
-dlv = load_sika_dlv()
-print(f'DLV: {len(dlv)} Routen')
+print('Lade Import-ES DLV...')
+rates_2025 = _load_import_rates(IMPORT_DLV_2025)
+rates_2026 = _load_import_rates(IMPORT_DLV_2026)
+print(f'Import DLV: 2025={len(rates_2025)} Stpl-Stufen, 2026={len(rates_2026)} Stpl-Stufen')
 
 # ── Daten laden aus BI-Pickle (KNR 511241, nur Export) ────────────────────
 _bi = pd.read_pickle(BI_PKL)['df']
@@ -175,6 +157,7 @@ DINAS_RENAME = {
     'zoll_duty':'Dinas Zoll Duty', 'zoll_betrag':'Dinas Zollbetrag',
     'sulphur':'Dinas Sulphur', 'neben_pausch':'Dinas Nebenkostenpausch.',
     'redebit':'Dinas Redebit', 'sonstige':'Dinas Sonstige', 'gesamtbetrag':'Dinas Gesamt',
+    'ldm':'Dinas LDM',
 }
 cache_nk = dinas_cache.rename(columns=DINAS_RENAME)[['_snr']+list(DINAS_RENAME.values())].copy()
 pre = pre.merge(cache_nk, on='_snr', how='left')
@@ -183,9 +166,14 @@ for c in PRE_NK: pre[c] = pd.to_numeric(pre.get(c), errors='coerce')
 print(f'DINAS re-joined: {pre["Dinas Fracht"].notna().sum()}/{len(pre)} PRE')
 pre = pre[pre['Dinas Fracht'].fillna(0) > 0].copy()
 
-# ── Stellplätze: abgeleitet aus LDM für PRE, direkt für POST ───────────────
-pre['_stpl']  = pre['Lademeter'].apply(
-    lambda x: max(1, math.ceil(float(x)/0.4)) if pd.notna(x) and float(x) > 0 else 1)
+# ── Stellplätze: PRE = ceil(Dinas LDM / 0.4), POST = direkt aus BI ────────
+def _pre_stpl(r):
+    for col in ('Dinas LDM', 'Lademeter'):
+        v = pd.to_numeric(r.get(col), errors='coerce')
+        if pd.notna(v) and v > 0:
+            return max(1, math.ceil(v / 0.4))
+    return 1
+pre['_stpl']  = pre.apply(_pre_stpl, axis=1)
 post['_stpl'] = pd.to_numeric(post['Stellplätze'], errors='coerce').fillna(1).clip(lower=1)
 
 print('Konsolidiere Master/Sub-Sendungen...')
@@ -202,10 +190,12 @@ for df in (pre, post):
 pre['_eff']  = pre['Dinas Fracht']  / pre['_stpl']
 post['_eff'] = post['AX Fracht']    / post['_stpl']
 
-# ── Soll EUR via DLV ───────────────────────────────────────────────────────
-print('Berechne Soll EUR...')
-pre['Soll EUR']  = pre.apply( lambda r: lookup_sika(dlv, r['_land'], r['Empfänger PLZ'], r['_stpl']), axis=1)
-post['Soll EUR'] = post.apply(lambda r: lookup_sika(dlv, r['_land'], r['Empfänger PLZ'], r['_stpl']), axis=1)
+# ── Soll EUR via Import-ES DLV ─────────────────────────────────────────────
+print('Berechne Soll EUR (Import ES DLV)...')
+pre['Soll EUR']  = pre.apply(
+    lambda r: lookup_import_es(rates_2025, rates_2026, r['Leistungsdatum'], int(r['_stpl'])), axis=1)
+post['Soll EUR'] = post.apply(
+    lambda r: lookup_import_es(rates_2025, rates_2026, r['Leistungsdatum'], int(r['_stpl'])), axis=1)
 print(f'Soll EUR: PRE {pre["Soll EUR"].notna().sum()}/{len(pre)}, POST {post["Soll EUR"].notna().sum()}/{len(post)}')
 
 # ── Cluster-Statistiken ────────────────────────────────────────────────────
