@@ -10,6 +10,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0,'src')
 from dinas_pdf_parser import parse_one, flatten
+from dinas_bi_enrichment import enrich_customer_bi
 
 DINAS_DIR = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Groz Beckert/Rechnungen/Rechnungen DINAS')
 AX_DIR    = Path('/home/user/TMS/data/extracted/v1/Noerpel AI/Groz Beckert/Rechnungen/Rechnungen AX')
@@ -128,6 +129,19 @@ print(f'Cluster (|ΔEff|>5%): {len(stats)}, Sigma Verlust: {stats["loss"].sum():
 KUNDE = 'Groz-Beckert KG'
 BASIS = 'EUR/100kg'
 
+# ── BI-Enrichment: Coverage stats (Groz uses pre=DINAS, no KNR constant) ─────
+print('\n── BI-Enrichment (Groz) ─────────────────────────────────────────────────')
+_bi_groz['periode'] = _bi_groz['Leistungsdatum'].apply(
+    lambda d: 'POST' if pd.notna(d) and d >= pd.Timestamp('2025-09-26') else 'PRE')
+_bi_enriched, _dinas_net, _enrich_stats = enrich_customer_bi(_bi_groz, pre)
+s = _enrich_stats
+_tmp = _bi_enriched.drop_duplicates('_snr').set_index('_snr')
+_flag_kp  = _tmp['flag_komplettpreis'].to_dict()
+_flag_sp  = _tmp['flag_bi_split'].to_dict()
+_flag_dvp = _tmp['dinas_vs_bi_diff_pct'].to_dict()
+_flag_mr  = _tmp['flag_multi_rn_dinas'].fillna(False).to_dict()
+del _tmp
+
 # ── NK-Mapping ─────────────────────────────────────────────────────────────────
 def get_nk_alt(r):
     fracht  = r.get('fracht') or 0
@@ -163,10 +177,11 @@ HDR_COLS = ['System','Auftrags-Nr','Master-Nr','Sub-Nr(n)','Anzahl Subs','Ist Ma
             'Eff. Preis','Tonnage kg','Stellplätze','Lademeter','Volumen','Soll EUR',
             'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
-            'Erlöse','Abw. Grund']
+            'Erlöse','Abw. Grund',
+            'Komplettpreis','BI-Split','DINAS vs BI %','DINAS Multi-Row']
 N = len(HDR_COLS)
 EUR_COLS  = {17,18,23,24,25,26,27,28,29,30,31,32}
-NUM_RIGHT = {5,16,19,20,21,22}
+NUM_RIGHT = {5,16,19,20,21,22, 36}
 DATE_COL  = 8
 STR_COLS  = {2,3,7}
 
@@ -199,15 +214,59 @@ def write_row(ws, row, values, row_fill, is_ctrl=False):
 # ── Sheet 1: Groz-Beckert ──────────────────────────────────────────────────────
 def build_main_sheet(ws):
     ws.title = 'Groz-Beckert (PDF-only Vergleich)'
-    ws.freeze_panes = 'A3'
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=N)
     wc(ws,1,1, f'Groz-Beckert KG — Dinas PRE vs AX POST (PDF-only)  |  '
                f'Cluster: {len(stats)}  |  Sigma Verlust: {stats["loss"].sum():,.0f} EUR',
        FILL_HDR, fnt(bold=True, color='FFFFFF', size=12), 'center')
-    for ci, h in enumerate(HDR_COLS, 1):
-        wc(ws, 2, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
 
-    row = 2
+    # ── DQ block + PDF-Coverage ───────────────────────────────────────────
+    n_pre_bi   = len(_bi_groz[_bi_groz['periode'] == 'PRE'])
+    n_post_bi  = len(_bi_groz[_bi_groz['periode'] == 'POST'])
+    n_matched  = s['n_dinas_matched']
+    n_multi_rn = s.get('n_multi_rn_dinas', 0)
+    n_acc_base = s.get('n_acc_base', n_matched)
+    n_ok       = s['n_within_5pct']
+    n_sp       = s['n_split_snrs']
+    n_gus      = s['n_gutschrift_solo']
+    cov_pct    = n_matched / n_pre_bi * 100 if n_pre_bi else 0
+    cov_warn   = '  ⚠ Coverage < 50% — Accuracy auf Stichprobe!' if cov_pct < 50 else ''
+    FILL_DQ  = fill('F2F2F2')
+    FILL_DQH = fill('D9D9D9')
+    FILL_DQW = fill('FFF2CC')
+    dq_rows = [
+        ('Datenqualität — PDF-Coverage + Accuracy-Basis', None, True),
+        ('PRE-Sendungen gesamt (aus bi_raw)', f'{n_pre_bi}  (POST: {n_post_bi})', False),
+        ('davon mit DINAS-PDF-Match',
+         f'{n_matched} / {n_pre_bi} ({cov_pct:.0f}%){cov_warn}', False),
+        ('davon nach Multi-Row-Ausschluss vergleichbar', f'{n_acc_base}', False),
+        ('davon im ±5%-Band',
+         (f'{n_ok} / {n_acc_base} ({n_ok/n_acc_base*100:.0f}% der Acc.-Basis)  ← Basis-Accuracy'
+          if n_acc_base else '–'), False),
+        ('Ausschluss-Gründe',
+         f'A) Kein DINAS-Match: {n_pre_bi - n_matched}  |  '
+         f'B) Sammelposten: {n_sp} ({s["pct_split"]:.0f}%)  |  '
+         f'C) Solo-Gutschriften: {n_gus}  |  '
+         f'D) DINAS Multi-Row: {n_multi_rn}', False),
+        ('Vergleich-Methode',
+         'Groz-Beckert: DINAS-PDF direkt vs AX-BI (Leistungsdatum-Split 26.09.2025)', False),
+    ]
+    for ri, (label, val, is_hdr) in enumerate(dq_rows, 2):
+        rf   = FILL_DQH if is_hdr else (FILL_DQW if '⚠' in (val or '') else FILL_DQ)
+        fn_l = fnt(bold=is_hdr, size=9)
+        fn_v = fnt(bold=False, size=9, italic=True)
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=N//2)
+        wc(ws, ri, 1, label, rf, fn_l, 'left')
+        if val:
+            ws.merge_cells(start_row=ri, start_column=N//2+1, end_row=ri, end_column=N)
+            wc(ws, ri, N//2+1, val, rf, fn_v, 'left')
+    DQ_ROWS = len(dq_rows) + 1
+    ws.freeze_panes = f'A{DQ_ROWS + 2}'
+    HDR_ROW = DQ_ROWS + 1
+
+    for ci, h in enumerate(HDR_COLS, 1):
+        wc(ws, HDR_ROW, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
+
+    row = HDR_ROW
     for _, cl in stats.iterrows():
         ckey  = cl['_cl']
         parts = ckey.split('|')
@@ -241,6 +300,7 @@ def build_main_sheet(ws):
             kg      = r.get('_kg')
             billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             eff = r.get('_eff_d')
+            _sk = str(r.get('sendungs_nr', ''))
             vals = ['alt', r.get('sendungs_nr'),
                     None, None, 0, '',
                     r.get('rechnung_nr'), r.get('leistungsdatum'), KUNDE,
@@ -248,7 +308,11 @@ def build_main_sheet(ws):
                     gwband, 'n/a', BASIS, billing_kg, None, eff,
                     kg, None, r.get('ldm'), None, soll,
                     *nk,
-                    erloese, abw_grund_row(nk, soll, erloese)]
+                    erloese, abw_grund_row(nk, soll, erloese),
+                    'JA' if _flag_kp.get(_sk, False) else '',
+                    'JA' if _flag_sp.get(_sk, False) else '',
+                    _flag_dvp.get(_sk, None),
+                    'JA' if _flag_mr.get(_sk, False) else '']
             write_row(ws, row, vals, FILL_ALT)
 
         for _, r in post_s.iterrows():
@@ -259,6 +323,7 @@ def build_main_sheet(ws):
             kg      = r.get('_kg')
             billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             eff = r.get('_eff_ax')
+            _sk = str(r.get('rn', ''))
             vals = ['neu', r.get('rn'),
                     None, None, 0, '',
                     r.get('rn'), r.get('dat'), KUNDE,
@@ -266,16 +331,17 @@ def build_main_sheet(ws):
                     gwband, 'n/a', BASIS, billing_kg, None, eff,
                     kg, None, None, None, soll,
                     *nk,
-                    erloese, abw_grund_row(nk, soll, erloese)]
+                    erloese, abw_grund_row(nk, soll, erloese),
+                    '', 'JA' if _flag_sp.get(_sk, False) else '', None, None]
             write_row(ws, row, vals, FILL_NEU)
 
         row += 1
 
-    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22, 12,12,10,12]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
-    ws.row_dimensions[2].height = 18
+    ws.row_dimensions[HDR_ROW].height = 18
     return row
 
 # ── Sheet 2: NK_Konditionen ────────────────────────────────────────────────────

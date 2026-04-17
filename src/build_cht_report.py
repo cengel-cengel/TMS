@@ -387,38 +387,42 @@ def build_main_sheet(ws):
                f'Cluster: {len(stats)}  |  Sigma Verlust: {stats["loss"].sum():,.0f} EUR',
        FILL_HDR, fnt(bold=True, color='FFFFFF', size=12), 'center')
 
-    # ── Rows 2–7: Datenqualitäts-Block ────────────────────────────────────────
+    # ── Rows 2–8: Datenqualitäts-Block (PDF-Coverage + Accuracy-Basis) ──────────
     s      = _enrich_stats
     n_pre  = len(_cht_bi[_cht_bi['periode'] == 'PRE'])
     n_post = len(_cht_bi[_cht_bi['periode'] == 'POST'])
-    n_tot  = n_pre + n_post
     n_matched   = s['n_dinas_matched']
     n_multi_rn  = s.get('n_multi_rn_dinas', 0)
     n_acc_base  = s.get('n_acc_base', n_matched)
     n_ok        = s['n_within_5pct']
-    n_kp   = s['n_komplettpreis']
     n_sp   = s['n_split_snrs']
     n_gus  = s['n_gutschrift_solo']
+    cov_pct  = n_matched / n_pre * 100 if n_pre else 0
+    cov_warn = '  ⚠ Coverage < 50% — Accuracy auf Stichprobe!' if cov_pct < 50 else ''
 
     FILL_DQ  = fill('F2F2F2')
     FILL_DQH = fill('D9D9D9')
+    FILL_DQW = fill('FFF2CC')
 
     dq_rows = [
-        ('Datenqualität — Accuracy-Basis (Sheet "Accuracy_PRE")', None, True),
-        (f'Gesamt SNRs (PRE+POST)',                  f'{n_tot}', False),
-        (f'davon vergleichbar (DINAS-Match, PRE)',   f'{n_matched} / {n_pre} ({n_matched/n_pre*100:.0f}%)', False),
-        (f'davon im ±5%-Band (ex. DINAS Multi-Row)',
-         f'{n_ok} / {n_acc_base} ({n_ok/n_acc_base*100:.0f}% der Acc.-Basis)  ← Basis-Accuracy', False),
-        (f'Ausschluss-Gründe:',
-         f'A) Kein DINAS-Match: {n_pre - n_matched} SNRs  |  '
-         f'B) Sammelposten (strukturell, nicht ausgeschlossen): {n_sp} SNRs ({s["pct_split"]:.0f}%)  |  '
+        ('Datenqualität — PDF-Coverage + Accuracy-Basis', None, True),
+        ('PRE-Sendungen gesamt (aus bi_raw)', f'{n_pre}  (POST: {n_post})', False),
+        ('davon mit DINAS-PDF-Match',
+         f'{n_matched} / {n_pre} ({cov_pct:.0f}%){cov_warn}', False),
+        ('davon nach Multi-Row-Ausschluss vergleichbar', f'{n_acc_base}', False),
+        ('davon im ±5%-Band',
+         (f'{n_ok} / {n_acc_base} ({n_ok/n_acc_base*100:.0f}% der Acc.-Basis)  ← Basis-Accuracy'
+          if n_acc_base else '–'), False),
+        ('Ausschluss-Gründe',
+         f'A) Kein DINAS-Match: {n_pre - n_matched}  |  '
+         f'B) Sammelposten (nicht ausgeschl.): {n_sp} ({s["pct_split"]:.0f}%)  |  '
          f'C) Solo-Gutschriften: {n_gus}  |  '
-         f'D) DINAS Multi-Row: {n_multi_rn} SNRs (aus ±5%-Basis ausgeschlossen)', False),
-        (f'Vergleich-Methode',
-         f'Komplettpreis → DINAS total_items vs BI Erloese  |  Standard → DINAS fracht vs BI Erlöse Fracht', False),
+         f'D) DINAS Multi-Row: {n_multi_rn} (aus ±5%-Basis ausgeschl.)', False),
+        ('Vergleich-Methode',
+         'Komplettpreis → DINAS total_items vs BI Erloese  |  Standard → DINAS fracht vs BI Erlöse Fracht', False),
     ]
     for ri, (label, val, is_hdr) in enumerate(dq_rows, 2):
-        rf = FILL_DQH if is_hdr else FILL_DQ
+        rf   = FILL_DQH if is_hdr else (FILL_DQW if '⚠' in (val or '') else FILL_DQ)
         fn_l = fnt(bold=is_hdr, size=9)
         fn_v = fnt(bold=False, size=9, italic=True)
         ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=N//2)
@@ -543,7 +547,7 @@ def build_main_sheet(ws):
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
-    ws.row_dimensions[2].height = 18
+    ws.row_dimensions[HDR_ROW].height = 18
     return row
 
 # ── Sheet 2: NK_Konditionen ───────────────────────────────────────────────
