@@ -15,6 +15,8 @@ Unterstützte Formate:
      → werden übersprungen (kein DATE_POS-Muster)
 
 Output: pd.DataFrame mit einer Zeile pro Sendungsposition
+Physikalische Felder (direkt aus PDF):
+  ldm, kg_rechnung, stellplaetze, volumen, leistungsdatum
 """
 
 import re
@@ -39,9 +41,24 @@ EUR_RE   = re.compile(r'^(-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2})\s+EUR$')
 CODE_RE  = re.compile(r'^\d{3,5}$')           # Kostenstellen-Codes (0102, 0500 …)
 DATE_POS = re.compile(r'^(\d+)\)\s+(\d{2}\.\d{2}\.\d{2})$')  # "1) 15.08.25"
 SEND_RE  = re.compile(r'^\((\d+)\)$')                          # "(32939529)"
-DEST_RE  = re.compile(r'^([A-Z]{2})-(\S+)')                    # "GB-LE671 ELLISTOWN"
-LDM_RE   = re.compile(r'([\d,]+)\s+ldm\s*=\s*([\d.]+)\s+kg')  # "0,40 ldm = 600 kg"
+# 1-2 letter country codes: GB-LE671, I-42017 (single), F-12100, E-46930
+DEST_RE  = re.compile(r'^([A-Z]{1,2})-(\S+)')
+# LDM/Stp lines: case-insensitive, trailing 'g' optional (PDF truncation)
+#   "0,40 ldm = 600 kg", "1,240 ldm = 1550 k", "13,60 Ldm = 6145 kg"
+LDM_RE   = re.compile(r'^([\d,]+)\s+[Ll][Dd][Mm]\s*=\s*([\d.]+)\s+kg?$')
+#   "5,000 Stp = 3000 k", "2,500 Stp = 1500 k"
+STP_RE   = re.compile(r'^([\d,]+)\s+[Ss]tp\s*=\s*([\d.]+)\s+k', re.I)
+# Standalone kg: "1147 kg", "582 kg", "20.393 kg"
+KG_ONLY_RE = re.compile(r'^([\d]+(?:\.\d{3})*)\s+kg$', re.I)
+# Volume: "0,02 cbm =", "0,34 cbm", "2,89 cbm"
+VOL_CBM_RE = re.compile(r'^([\d,]+)\s+cbm(?:\s*=|$|\s)', re.I)
 BETRAG   = 'Betrag'
+
+# Single-letter country codes used in DINAS → normalize to ISO 2-letter
+_COUNTRY_NORM = {
+    'F': 'FR', 'I': 'IT', 'E': 'ES', 'L': 'LU', 'B': 'BE',
+    'A': 'AT', 'P': 'PT', 'N': 'NL', 'S': 'SE', 'D': 'DE',
+}
 
 # Zeilen-Präfixe, die NICHT als Label-Inhalt gezählt werden
 SKIP_PREFIXES = (
@@ -127,6 +144,9 @@ def parse_one(path: str) -> list[dict]:
             'empf_plz'       : '',
             'ldm'            : None,
             'kg_rechnung'    : None,
+            'stellplaetze'   : None,
+            'volumen'        : None,
+            '_await_vol_kg'  : False,  # after "N cbm =" grab next line as kg
             '_items'         : [],
         }
 
@@ -165,15 +185,50 @@ def parse_one(path: str) -> list[dict]:
                 cur['gesamtbetrag'] = eur_to_float(EUR_RE.match(line).group(1))
             continue
 
-        # ── Empfänger-Land/PLZ "GB-LE671 ELLISTOWN" ──────────────────────
+        # ── Empfänger-Land/PLZ "GB-LE671 ..." or "I-42017 ..." ───────────
         m_dest = DEST_RE.match(line)
         if m_dest and not cur['empf_land']:
-            cur['empf_land'] = m_dest.group(1)
+            raw_land = m_dest.group(1)
+            cur['empf_land'] = _COUNTRY_NORM.get(raw_land, raw_land)
             cur['empf_plz']  = m_dest.group(2).split()[0]
             label_buf = []
             continue
 
-        # ── Gewicht / LDM (kann eine oder zwei Zeilen sein) ───────────────
+        # ── Stellplätze: "5,000 Stp = 3000 k" ───────────────────────────
+        m_stp = STP_RE.match(line)
+        if m_stp:
+            cur['stellplaetze'] = eur_to_float(m_stp.group(1))
+            if cur['kg_rechnung'] is None:
+                cur['kg_rechnung'] = float(m_stp.group(2).replace('.', ''))
+            label_buf = []
+            continue
+
+        # ── Volumen: "0,02 cbm =" oder "0,34 cbm" ────────────────────────
+        m_vol = VOL_CBM_RE.match(line)
+        if m_vol:
+            cur['volumen'] = eur_to_float(m_vol.group(1))
+            # same-line kg after "=": "0,02 cbm = 5 kg"
+            m_vol_kg = re.search(r'=\s*([\d]+(?:\.\d+)?)\s+kg?$', line, re.I)
+            if m_vol_kg and cur['kg_rechnung'] is None:
+                cur['kg_rechnung'] = float(m_vol_kg.group(1).replace('.', ''))
+                cur['_await_vol_kg'] = False
+            elif '=' in line:
+                cur['_await_vol_kg'] = True   # next line = billing kg
+            label_buf = []
+            continue
+
+        # ── await: kg line following "N cbm =" ───────────────────────────
+        if cur['_await_vol_kg']:
+            m_vkg = KG_ONLY_RE.match(line)
+            if m_vkg:
+                if cur['kg_rechnung'] is None:
+                    cur['kg_rechnung'] = float(m_vkg.group(1).replace('.', ''))
+                cur['_await_vol_kg'] = False
+                label_buf = []
+                continue
+            cur['_await_vol_kg'] = False   # give up on next non-kg line
+
+        # ── LDM (case-insensitive, truncated k): "1,240 ldm = 1550 k" ───
         m_wt = LDM_RE.match(line)
         if m_wt:
             cur['ldm']         = eur_to_float(m_wt.group(1))
@@ -181,16 +236,21 @@ def parse_one(path: str) -> list[dict]:
             label_buf = []
             continue
         # zweizeilig: "0,40 ldm =" auf Zeile i, "600 kg" auf Zeile i+1
-        if re.match(r'^[\d,]+\s+ldm\s*=$', line):
+        if re.match(r'^[\d,]+\s+[Ll][Dd][Mm]\s*=$', line):
             if i + 1 < len(body):
                 next_l = body[i + 1]
-                m_kg   = re.match(r'^([\d.]+)\s+kg$', next_l)
+                m_kg   = re.match(r'^([\d.]+)\s+kg?$', next_l, re.I)
                 if m_kg:
                     cur['ldm']         = eur_to_float(line.split()[0])
                     cur['kg_rechnung'] = float(m_kg.group(1).replace('.', ''))
             label_buf = []
             continue
-        if re.match(r'^[\d.]+\s+kg$', line) and cur['ldm'] is not None:
+
+        # ── Standalone kg (first occurrence wins) ────────────────────────
+        m_kg = KG_ONLY_RE.match(line)
+        if m_kg:
+            if cur['kg_rechnung'] is None:
+                cur['kg_rechnung'] = float(m_kg.group(1).replace('.', ''))
             label_buf = []
             continue
 
@@ -225,7 +285,8 @@ def parse_one(path: str) -> list[dict]:
 
 # ── Positions-Dict → flache Zeile ─────────────────────────────────────────
 def flatten(pos: dict) -> dict:
-    row = {k: v for k, v in pos.items() if k != '_items'}
+    _skip = {'_items', '_await_vol_kg'}
+    row = {k: v for k, v in pos.items() if k not in _skip}
     # Kategorien null-initialisieren
     all_cats = list(CATS) + ['sonstige']
     for cat in all_cats:
@@ -273,6 +334,8 @@ def parse_directory(pdf_dir: str | Path, verbose: bool = True) -> pd.DataFrame:
     df['sendungs_nr']  = df['sendungs_nr'].astype(str)
     df['ldm']          = pd.to_numeric(df['ldm'],          errors='coerce')
     df['kg_rechnung']  = pd.to_numeric(df['kg_rechnung'],  errors='coerce')
+    df['stellplaetze'] = pd.to_numeric(df['stellplaetze'], errors='coerce')
+    df['volumen']      = pd.to_numeric(df['volumen'],      errors='coerce')
     df['gesamtbetrag'] = pd.to_numeric(df['gesamtbetrag'], errors='coerce')
     return df
 
