@@ -73,6 +73,12 @@ CUSTOMERS = [
      V1/'Groz Beckert/Rechnungen/Rechnungen DINAS',
      V1/'Groz Beckert/Rechnungen/Rechnungen AX',
      'output/dinas_cache_groz_beckert.pkl'),
+    ('Sika Automotive AG',       527406,
+     'output/bi_cache_sika_527406.pkl',          'bi_pkl',
+     None, None, None),
+    ('Sika Automotive DE',       '413276+493163',
+     'output/bi_cache_sika_atm_de.pkl',          'bi_pkl',
+     None, None, None),
 ]
 
 # ── Felder die geprüft werden ────────────────────────────────────────────────
@@ -96,6 +102,19 @@ def count_pdfs(d):
     if d is None or not Path(d).exists():
         return 0
     return len(glob.glob(str(Path(d) / '*.pdf')) + glob.glob(str(Path(d) / '*.PDF')))
+
+def _load_bi_pkl_for_audit(pkl_path):
+    _bi = pd.read_pickle(pkl_path)
+    _bi['Leistungsdatum'] = pd.to_datetime(_bi['Leistungsdatum'], errors='coerce')
+    _mig = pd.Timestamp('2025-09-26')
+    pre  = _bi[_bi['Leistungsdatum'] < _mig].copy().rename(columns={
+        'Erlöse Fracht':'Dinas Fracht','Erlöse Diesel':'Dinas Diesel',
+        'Erlöse Maut':'Dinas Maut/SSD','Erloese':'Dinas Gesamt'})
+    post = _bi[_bi['Leistungsdatum'] >= _mig].copy().rename(columns={
+        'Erlöse Fracht':'AX Fracht','Erlöse Diesel':'AX Diesel',
+        'Erlöse Maut':'AX Maut','Erlöse Nebengebühr':'AX Nebengebühr',
+        'Erloese':'AX Gesamt'})
+    return pre, post
 
 def load_sheet(xlsx_path, hdr, keyword):
     """Load the first sheet whose name contains keyword."""
@@ -127,7 +146,7 @@ for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path in CUSTOMERS:
 
     # DINAS cache
     cache_rows = 0
-    if Path(cache_path).exists():
+    if cache_path and Path(cache_path).exists():
         cache_df = pd.read_pickle(cache_path)
         cache_rows = len(cache_df)
         # Unique Rechnungsnummern = approx extracted PDFs
@@ -143,8 +162,11 @@ for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path in CUSTOMERS:
     rec['DINAS fehlgeschlagen (ca.)'] = max(0, dinas_total - rec['DINAS extrahiert (Rechnungen)'])
 
     # PRE sheet
-    pre = load_sheet(src_xlsx, hdr, 'PRE')
-    post = load_sheet(src_xlsx, hdr, 'POST')
+    if hdr == 'bi_pkl' and src_xlsx and Path(src_xlsx).exists():
+        pre, post = _load_bi_pkl_for_audit(src_xlsx)
+    else:
+        pre = load_sheet(src_xlsx, hdr, 'PRE')
+        post = load_sheet(src_xlsx, hdr, 'POST')
 
     # For Groz-Beckert: PRE from cache
     if name == 'Groz-Beckert KG' and Path(cache_path).exists():
