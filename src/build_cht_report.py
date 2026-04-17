@@ -5,6 +5,7 @@ build_cht_report.py
 Erstellt output/billing_report/cht_dinas_vergleich.xlsx:
   Sheet 1 "CHT Germany GmbH" — 33-Spalten Cluster-Vergleich (alt/neu, ▶-Header)
   Sheet 2 "NK_Konditionen"   — NK CHT.xlsx kopiert
+  Sheet 3 "Accuracy_PRE"     — Per-SNR DINAS vs BI-Erloese (Komplettpreis-Fix)
 """
 
 import glob as _glob, math, re
@@ -17,6 +18,7 @@ from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0, 'src')
 from dlv_tariffs import load_cht, _lookup_cht
 from dinas_pdf_parser import parse_one, flatten
+from dinas_bi_enrichment import enrich_customer_bi
 
 SRC_XLSX    = Path('/home/user/TMS/output/cht_dinas_vergleich.xlsx')
 CLUSTER_XLS = Path('/home/user/TMS/output/cluster_vergleich/486073_CHT_Germany_GmbH_cluster.xlsx')
@@ -142,14 +144,45 @@ else:
     dinas_cache.to_pickle(CACHE)
     print(f'Cache gespeichert: {len(dinas_cache)} Positionen')
 
+# ── BI-Enrichment: Komplettpreis / Sammelposten / Gutschrift-Netting ─────────
+print('\n── BI-Enrichment ──────────────────────────────────────────────────────')
+_bi_raw = pd.read_pickle(Path('output/bi_top20_data.pkl'))['df']
+_cht_bi = _bi_raw[_bi_raw['Kunden Nr BK'] == KNR].copy()
+
+# Run all three enrichments; returns (bi_enriched, dinas_net, stats)
+_bi_enriched, _dinas_net, _enrich_stats = enrich_customer_bi(_cht_bi, dinas_cache)
+
+s = _enrich_stats
+print(f'  A) Komplettpreis (Erlöse Fracht=0, Erloese>0):')
+print(f'     PRE+POST: {s["n_komplettpreis"]} / {s["n_snrs"]} SNRs ({s["pct_komplettpreis"]:.1f}%)')
+print(f'  B) Sammelposten (RN → mehrere SNRs):')
+print(f'     {s["n_split_snrs"]} / {s["n_snrs"]} SNRs ({s["pct_split"]:.1f}%) in {s["n_split_rns"]} Sammelrechnungen')
+print(f'     → Sammelrechnungen sind für CHT strukturell normal (nicht ausgeschlossen)')
+print(f'  C) Gutschriften:')
+print(f'     {s["n_gutschrift_solo"]} Solo-Gutschriften (kein Rechnung-Match) → Flag "Korrekturbuchung"')
+print(f'  Accuracy (PRE-only, DINAS vs erloese_fracht_effektiv):')
+print(f'     DINAS-Matches: {s["n_dinas_matched"]} / {len(_cht_bi[_cht_bi["periode"]=="PRE"])} PRE-Rows')
+print(f'     davon ±5%:  {s["n_within_5pct"]} ({s["pct_within_5pct"]:.1f}%)')
+print(f'     [Alt: Erlöse Fracht roh = 0 für 99.7% PRE → 0% vergleichbar]')
+print()
+
+# Prepare lookup tables for per-row flags in main sheet
 def _norm(v):
     s = re.sub(r'\D', '', str(v)).lstrip('0')
     return s if s else str(v).strip()
+
+# Per-SNR enriched flags (use PRE+POST bi_enriched) — dicts for fast row-level lookup
+_tmp = _bi_enriched.drop_duplicates('_snr').set_index('_snr')
+_flag_kp  = _tmp['flag_komplettpreis'].to_dict()      # snr → bool
+_flag_sp  = _tmp['flag_bi_split'].to_dict()           # snr → bool
+_flag_dvp = _tmp['dinas_vs_bi_diff_pct'].to_dict()    # snr → float|NaN
+del _tmp
 
 dinas_cache['_snr'] = dinas_cache['sendungs_nr'].astype(str).apply(_norm)
 pre['_snr'] = pre['Auftragsnummer'].astype(str).apply(_norm)
 
 # Drop stale DINAS-NK columns (wrong aggregated values) and re-join per shipment
+# Use netted DINAS values so Gutschriften are subtracted from their Rechnung SNR
 PRE_NK  = ['Dinas Fracht','Dinas Diesel','Dinas Maut/SSD','Dinas Ausfuhr',
            'Dinas Verzollung','Dinas Zoll Duty','Dinas Zollbetrag',
            'Dinas Sulphur','Dinas Nebenkostenpausch.','Dinas Redebit',
@@ -306,11 +339,12 @@ HDR_COLS = ['System','Auftrags-Nr','Master-Nr','Sub-Nr(n)','Anzahl Subs','Ist Ma
             'Eff. Preis','Tonnage kg','Stellplätze','Lademeter','Volumen','Soll EUR',
             'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
-            'Erlöse','Abw. Grund']
-N = len(HDR_COLS)  # 33
+            'Erlöse','Abw. Grund',
+            'Komplettpreis','BI-Split','DINAS vs BI %']
+N = len(HDR_COLS)  # 36
 
 EUR_COLS  = {17,18,23,24,25,26,27,28,29,30,31,32}  # 1-based
-NUM_RIGHT = {5, 16, 19, 20, 21, 22}  # Anzahl Subs, Basis Menge, Tonnage kg, Stellplätze, Lademeter, Volumen
+NUM_RIGHT = {5, 16, 19, 20, 21, 22, 36}             # + DINAS vs BI %
 DATE_COL  = 8
 STR_COLS  = {2, 3, 7}  # Auftrags-Nr, Master-Nr, Rech.-Nr
 
@@ -415,6 +449,10 @@ def build_main_sheet(ws):
             kg      = r.get('Tonnage (eff.)')
             billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             is_ctrl = (r.name == ctrl_pi)
+            snr_key = _norm(str(r.get('Auftragsnummer', '')))
+            kp_flag = 'JA' if _flag_kp.get(snr_key, False) else ''
+            sp_flag = 'JA' if _flag_sp.get(snr_key, False) else ''
+            dv_pct  = _flag_dvp.get(snr_key, None)
             vals = ['alt', r.get('Auftragsnummer'),
                     r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
                     r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
@@ -422,7 +460,8 @@ def build_main_sheet(ws):
                     gwband, zone, BASIS, billing_kg, bp, eff,
                     kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk,
-                    erloese, abw_grund_row(nk, soll, erloese)]
+                    erloese, abw_grund_row(nk, soll, erloese),
+                    kp_flag, sp_flag, dv_pct]
             write_row(ws, row, vals, FILL_ALT, is_ctrl)
 
         # neu (AX POST)
@@ -437,6 +476,8 @@ def build_main_sheet(ws):
             kg      = r.get('Tonnage (eff.)')
             billing_kg = math.ceil(float(kg)/100)*100 if pd.notna(kg) and float(kg) > 0 else None
             is_ctrl = (r.name == ctrl_oi)
+            snr_key = _norm(str(r.get('Auftragsnummer', '')))
+            sp_flag = 'JA' if _flag_sp.get(snr_key, False) else ''
             vals = ['neu', r.get('Auftragsnummer'),
                     r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
                     r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
@@ -444,12 +485,14 @@ def build_main_sheet(ws):
                     gwband, zone, BASIS, billing_kg, bp, eff,
                     kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk,
-                    erloese, abw_grund_row(nk, soll, erloese)]
+                    erloese, abw_grund_row(nk, soll, erloese),
+                    '', sp_flag, None]
             write_row(ws, row, vals, FILL_NEU, is_ctrl)
 
         row += 1  # Leerzeile
 
-    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22]
+    widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22,
+              10, 8, 10]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
@@ -467,11 +510,112 @@ def build_nk_sheet(ws):
     for ci in range(1, (nk_ws.max_column or 19) + 1):
         ws.column_dimensions[get_column_letter(ci)].width = 22
 
+# ── Sheet 3: Accuracy_PRE ────────────────────────────────────────────────────
+def build_accuracy_sheet(ws):
+    ws.title = 'Accuracy_PRE'
+    ws.freeze_panes = 'A3'
+
+    # Build comparison table from already-enriched BI (PRE, DINAS-matched rows only)
+    # _bi_enriched already has netto_fracht / diff_pct from enrich_customer_bi()
+    _cht_pre = _bi_enriched[_bi_enriched['periode'] == 'PRE'].copy()
+    # Add rechnung_nr + n_rows from dinas_net (not in _bi_enriched)
+    _rn_lkp = _dinas_net.set_index('_snr')[['rechnung_nr', 'n_rows']].to_dict('index')
+    _cht_pre['rechnung_nr_dinas'] = _cht_pre['_snr'].map(
+        lambda s: _rn_lkp.get(s, {}).get('rechnung_nr', ''))
+    _cht_pre['n_dinas_rows'] = _cht_pre['_snr'].map(
+        lambda s: _rn_lkp.get(s, {}).get('n_rows', None))
+    acc = _cht_pre[_cht_pre['netto_fracht'].notna()].copy()
+    acc['diff_eur'] = (acc['netto_fracht'] - acc['erloese_fracht_effektiv']).round(2)
+    eff = acc['erloese_fracht_effektiv'].abs().replace(0, float('nan'))
+    acc['diff_pct'] = (acc.get('dinas_vs_bi_diff_pct') if 'dinas_vs_bi_diff_pct' in acc.columns
+                       else (acc['diff_eur'] / eff * 100)).round(1)
+    acc = acc.sort_values('diff_pct', key=abs, ascending=False).reset_index(drop=True)
+
+    # Summary header (row 1)
+    n_tot  = len(acc)
+    n_ok   = int((acc['diff_pct'].abs() <= 5).sum())
+    n_big  = int((acc['diff_pct'].abs() > 10).sum())
+    n_kp   = int(acc['flag_komplettpreis'].sum())
+    n_sp   = int(acc['flag_bi_split'].sum())
+    n_gus  = int(acc['flag_gutschrift_solo'].fillna(False).sum())
+
+    summary = (f'CHT Germany GmbH ({KNR}) — PRE Accuracy: DINAS Netto-Fracht vs BI Erloese_effektiv  |  '
+               f'Rows: {n_tot}  |  ±5%: {n_ok} ({n_ok/n_tot*100:.0f}%)  |  '
+               f'>10% Abw.: {n_big}  |  Komplettpreis: {n_kp}  |  '
+               f'Sammelposten: {n_sp}  |  Solo-Gutschrift: {n_gus}  |  '
+               f'[Alt ohne Komplettpreis-Fix: 0 vergleichbar]')
+    ACC_COLS = ['Auftrags-Nr','Rech.-Nr DINAS','Rech.-Nr BI','Datum',
+                'Land','Empf.PLZ','Tonnage kg',
+                'DINAS Netto','BI Erloese_eff','Diff EUR','Diff %',
+                'Komplettpreis','BI-Split','Solo-Gutschrift','Abw. Klasse']
+    NA = len(ACC_COLS)
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NA)
+    wc(ws, 1, 1, summary, FILL_HDR, fnt(bold=True, color='FFFFFF', size=10), 'left')
+    for ci, h in enumerate(ACC_COLS, 1):
+        wc(ws, 2, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
+
+    FILL_OK   = fill('E2EFDA')   # green  ±5%
+    FILL_WARN = fill('FFEB9C')   # yellow 5–10%
+    FILL_BAD  = fill('FFC7CE')   # red    >10%
+
+    EUR_ACC = {8, 9, 10}
+    PCT_ACC = {11}
+
+    def abw_klasse(pct):
+        if pd.isna(pct): return 'n/a'
+        a = abs(pct)
+        if a <= 5:  return '±5%'
+        if a <= 10: return '5-10%'
+        return '>10%'
+
+    rnum = 2
+    for _, r in acc.iterrows():
+        rnum += 1
+        pct  = r['diff_pct']
+        rf   = FILL_OK if pd.notna(pct) and abs(pct) <= 5 else (
+               FILL_WARN if pd.notna(pct) and abs(pct) <= 10 else FILL_BAD)
+        vals = [
+            r.get('Auftragsnummer'),
+            r.get('rechnung_nr_dinas') or '',
+            r.get('Rechnungsnummer') or '',
+            r.get('Leistungsdatum') or r.get('Sendungsdatum') or '',
+            r.get('Empfänger Land') or '',
+            r.get('Empfänger PLZ') or '',
+            r.get('Tonnage (eff.)'),
+            r.get('netto_fracht'),
+            r.get('erloese_fracht_effektiv'),
+            r.get('diff_eur'),
+            pct,
+            'JA' if r.get('flag_komplettpreis') else '',
+            'JA' if r.get('flag_bi_split') else '',
+            'JA' if r.get('flag_gutschrift_solo') else '',
+            abw_klasse(pct),
+        ]
+        for ci, v in enumerate(vals, 1):
+            if isinstance(v, float) and math.isnan(v): v = None
+            fmt = EUR_FMT if ci in EUR_ACC else ('#,##0.0"%"' if ci in PCT_ACC else None)
+            al  = 'right' if ci in EUR_ACC or ci in PCT_ACC else 'left'
+            if ci in {1, 2, 3} and v is not None:
+                try: v = str(int(float(str(v))))
+                except: v = str(v)
+            wc(ws, rnum, ci, v, rf, fnt(size=9), al, fmt, BRD)
+
+    col_widths = [15, 14, 14, 12, 6, 8, 10, 12, 12, 10, 8, 10, 8, 12, 10]
+    for ci, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.row_dimensions[1].height = 18
+    ws.row_dimensions[2].height = 16
+    return rnum
+
+
 # ── Schreiben ──────────────────────────────────────────────────────────────
 wb = Workbook()
-last_row = build_main_sheet(wb.active)
+last_row  = build_main_sheet(wb.active)
 build_nk_sheet(wb.create_sheet('NK_Konditionen'))
+acc_rows  = build_accuracy_sheet(wb.create_sheet('Accuracy_PRE'))
 wb.save(OUT_XLSX)
 print(f'\nGespeichert: {OUT_XLSX}')
 print(f'  Sheet "CHT Germany GmbH":  {last_row} Zeilen')
 print(f'  Sheet "NK_Konditionen":    NK CHT.xlsx kopiert')
+print(f'  Sheet "Accuracy_PRE":      {acc_rows-2} Rows (DINAS vs BI Accuracy)')
