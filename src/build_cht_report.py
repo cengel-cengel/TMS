@@ -160,10 +160,10 @@ print(f'     {s["n_split_snrs"]} / {s["n_snrs"]} SNRs ({s["pct_split"]:.1f}%) in
 print(f'     → Sammelrechnungen sind für CHT strukturell normal (nicht ausgeschlossen)')
 print(f'  C) Gutschriften:')
 print(f'     {s["n_gutschrift_solo"]} Solo-Gutschriften (kein Rechnung-Match) → Flag "Korrekturbuchung"')
-print(f'  Accuracy (PRE-only, DINAS vs erloese_fracht_effektiv):')
+print(f'  Accuracy (PRE-only, DINAS-Total vs erloese_fracht_effektiv, Komplettpreis-Fix):')
 print(f'     DINAS-Matches: {s["n_dinas_matched"]} / {len(_cht_bi[_cht_bi["periode"]=="PRE"])} PRE-Rows')
 print(f'     davon ±5%:  {s["n_within_5pct"]} ({s["pct_within_5pct"]:.1f}%)')
-print(f'     [Alt: Erlöse Fracht roh = 0 für 99.7% PRE → 0% vergleichbar]')
+print(f'     [Alt via DINAS-Fracht: 61/98 ±5% (62%) | Fix via DINAS-Total: {s["n_within_5pct"]}/98 ±5%]')
 print()
 
 # Prepare lookup tables for per-row flags in main sheet
@@ -379,17 +379,58 @@ def write_row(ws, row, values, row_fill, is_ctrl=False):
 # ── Sheet 1: CHT Germany GmbH ─────────────────────────────────────────────
 def build_main_sheet(ws):
     ws.title = 'CHT Germany GmbH'
-    ws.freeze_panes = 'A3'
 
+    # ── Row 1: Titel ──────────────────────────────────────────────────────────
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=N)
     wc(ws,1,1, f'CHT Germany GmbH ({KNR}) — Dinas PRE vs AX POST  |  '
                f'Cluster: {len(stats)}  |  Sigma Verlust: {stats["loss"].sum():,.0f} EUR',
        FILL_HDR, fnt(bold=True, color='FFFFFF', size=12), 'center')
 
-    for ci, h in enumerate(HDR_COLS, 1):
-        wc(ws, 2, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
+    # ── Rows 2–7: Datenqualitäts-Block ────────────────────────────────────────
+    s      = _enrich_stats
+    n_pre  = len(_cht_bi[_cht_bi['periode'] == 'PRE'])
+    n_post = len(_cht_bi[_cht_bi['periode'] == 'POST'])
+    n_tot  = n_pre + n_post
+    n_matched = s['n_dinas_matched']
+    n_ok      = s['n_within_5pct']
+    n_kp   = s['n_komplettpreis']
+    n_sp   = s['n_split_snrs']
+    n_gus  = s['n_gutschrift_solo']
 
-    row = 2
+    FILL_DQ  = fill('F2F2F2')
+    FILL_DQH = fill('D9D9D9')
+
+    dq_rows = [
+        ('Datenqualität — Accuracy-Basis (Sheet "Accuracy_PRE")', None, True),
+        (f'Gesamt SNRs (PRE+POST)',                  f'{n_tot}',                         False),
+        (f'davon vergleichbar (DINAS-Match, PRE)',   f'{n_matched} / {n_pre} ({n_matched/n_pre*100:.0f}%)', False),
+        (f'davon im ±5%-Band',                       f'{n_ok} / {n_matched} ({n_ok/n_matched*100:.0f}%)  ← Basis-Accuracy', False),
+        (f'Ausschluss-Gründe:',
+         f'A) Komplettpreis ohne DINAS-Match: {n_pre - n_matched} SNRs  |  '
+         f'B) Sammelposten (strukturell, nicht ausgeschlossen): {n_sp} SNRs ({s["pct_split"]:.0f}%)  |  '
+         f'C) Solo-Gutschriften: {n_gus}', False),
+        (f'Vergleich-Methode',
+         f'Komplettpreis → DINAS total_items vs BI Erloese  |  Standard → DINAS fracht vs BI Erlöse Fracht', False),
+    ]
+    for ri, (label, val, is_hdr) in enumerate(dq_rows, 2):
+        rf = FILL_DQH if is_hdr else FILL_DQ
+        fn_l = fnt(bold=is_hdr, size=9)
+        fn_v = fnt(bold=False, size=9, italic=True)
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=N//2)
+        wc(ws, ri, 1, label, rf, fn_l, 'left')
+        if val:
+            ws.merge_cells(start_row=ri, start_column=N//2+1, end_row=ri, end_column=N)
+            wc(ws, ri, N//2+1, val, rf, fn_v, 'left')
+
+    DQ_ROWS = len(dq_rows) + 1   # rows used by DQ block (1-based end)
+    ws.freeze_panes = f'A{DQ_ROWS + 2}'
+
+    # ── Column headers ────────────────────────────────────────────────────────
+    HDR_ROW = DQ_ROWS + 1
+    for ci, h in enumerate(HDR_COLS, 1):
+        wc(ws, HDR_ROW, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
+
+    row = HDR_ROW
 
     for _, cl in stats.iterrows():
         ckey  = cl['_cl']
@@ -524,11 +565,10 @@ def build_accuracy_sheet(ws):
         lambda s: _rn_lkp.get(s, {}).get('rechnung_nr', ''))
     _cht_pre['n_dinas_rows'] = _cht_pre['_snr'].map(
         lambda s: _rn_lkp.get(s, {}).get('n_rows', None))
-    acc = _cht_pre[_cht_pre['netto_fracht'].notna()].copy()
-    acc['diff_eur'] = (acc['netto_fracht'] - acc['erloese_fracht_effektiv']).round(2)
-    eff = acc['erloese_fracht_effektiv'].abs().replace(0, float('nan'))
-    acc['diff_pct'] = (acc.get('dinas_vs_bi_diff_pct') if 'dinas_vs_bi_diff_pct' in acc.columns
-                       else (acc['diff_eur'] / eff * 100)).round(1)
+    # Use dinas_netto_compare (total for Komplettpreis, fracht for others)
+    acc = _cht_pre[_cht_pre['dinas_netto_compare'].notna()].copy()
+    acc['diff_eur'] = acc['dinas_vs_bi_diff_eur'].round(2)
+    acc['diff_pct'] = acc['dinas_vs_bi_diff_pct'].round(1)
     acc = acc.sort_values('diff_pct', key=abs, ascending=False).reset_index(drop=True)
 
     # Summary header (row 1)
@@ -539,14 +579,14 @@ def build_accuracy_sheet(ws):
     n_sp   = int(acc['flag_bi_split'].sum())
     n_gus  = int(acc['flag_gutschrift_solo'].fillna(False).sum())
 
-    summary = (f'CHT Germany GmbH ({KNR}) — PRE Accuracy: DINAS Netto-Fracht vs BI Erloese_effektiv  |  '
+    summary = (f'CHT Germany GmbH ({KNR}) — PRE Accuracy: DINAS Total (Komplettpreis-Fix) vs BI Erloese_effektiv  |  '
                f'Rows: {n_tot}  |  ±5%: {n_ok} ({n_ok/n_tot*100:.0f}%)  |  '
                f'>10% Abw.: {n_big}  |  Komplettpreis: {n_kp}  |  '
                f'Sammelposten: {n_sp}  |  Solo-Gutschrift: {n_gus}  |  '
                f'[Alt ohne Komplettpreis-Fix: 0 vergleichbar]')
     ACC_COLS = ['Auftrags-Nr','Rech.-Nr DINAS','Rech.-Nr BI','Datum',
                 'Land','Empf.PLZ','Tonnage kg',
-                'DINAS Netto','BI Erloese_eff','Diff EUR','Diff %',
+                'DINAS Total/Fracht','BI Erloese_eff','Diff EUR','Diff %',
                 'Komplettpreis','BI-Split','Solo-Gutschrift','Abw. Klasse']
     NA = len(ACC_COLS)
 
@@ -583,7 +623,7 @@ def build_accuracy_sheet(ws):
             r.get('Empfänger Land') or '',
             r.get('Empfänger PLZ') or '',
             r.get('Tonnage (eff.)'),
-            r.get('netto_fracht'),
+            r.get('dinas_netto_compare'),
             r.get('erloese_fracht_effektiv'),
             r.get('diff_eur'),
             pct,
