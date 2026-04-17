@@ -256,8 +256,8 @@ def abw_grund_row(nk, soll, erloese):
 
 # ── Styles ─────────────────────────────────────────────────────────────────
 def fill(h): return PatternFill('solid', fgColor=h)
-def fnt(bold=False, color='000000', size=9):
-    return Font(bold=bold, color=color, size=size)
+def fnt(bold=False, color='000000', size=9, italic=False):
+    return Font(bold=bold, color=color, size=size, italic=italic)
 THIN = Side(border_style='thin', color='BBBBBB')
 BRD  = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 EUR_FMT = '#,##0.00'
@@ -307,10 +307,13 @@ def build_main_sheet(ws):
     # ── DQ block + PDF-Coverage ───────────────────────────────────────────
     n_pre_bi   = len(_cust_bi[_cust_bi['periode'] == 'PRE'])
     n_post_bi  = len(_cust_bi[_cust_bi['periode'] == 'POST'])
-    n_matched  = s['n_dinas_matched']
-    n_multi_rn = s.get('n_multi_rn_dinas', 0)
-    n_acc_base = s.get('n_acc_base', n_matched)
-    n_ok       = s['n_within_5pct']
+    _pre_enr   = _bi_enriched[_bi_enriched['periode'] == 'PRE']
+    _has_m     = _pre_enr['dinas_netto_compare'].notna()
+    _is_mr     = _pre_enr['flag_multi_rn_dinas'].fillna(False)
+    n_matched  = int(_has_m.sum())
+    n_multi_rn = int((_has_m & _is_mr).sum())
+    n_acc_base = n_matched - n_multi_rn
+    n_ok       = int((_pre_enr.loc[_has_m & ~_is_mr, 'dinas_vs_bi_diff_pct'].abs() <= 5).sum())
     n_sp       = s['n_split_snrs']
     n_gus      = s['n_gutschrift_solo']
     cov_pct    = n_matched / n_pre_bi * 100 if n_pre_bi else 0
@@ -350,7 +353,7 @@ def build_main_sheet(ws):
     HDR_ROW = DQ_ROWS + 1
     for ci, h in enumerate(HDR_COLS, 1):
         wc(ws,HDR_ROW,ci,h,FILL_HDR,fnt(bold=True,color='FFFFFF',size=9),'center',brd=BRD)
-    row = 2
+    row = HDR_ROW
     for _, cl in stats.iterrows():
         ckey = cl['_cl']; parts = ckey.split('|')
         land, plz_p, sb = (parts+['','',''])[:3]

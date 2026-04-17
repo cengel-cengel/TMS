@@ -222,10 +222,13 @@ def build_main_sheet(ws):
     # ── DQ block + PDF-Coverage ───────────────────────────────────────────
     n_pre_bi   = len(_bi_groz[_bi_groz['periode'] == 'PRE'])
     n_post_bi  = len(_bi_groz[_bi_groz['periode'] == 'POST'])
-    n_matched  = s['n_dinas_matched']
-    n_multi_rn = s.get('n_multi_rn_dinas', 0)
-    n_acc_base = s.get('n_acc_base', n_matched)
-    n_ok       = s['n_within_5pct']
+    _pre_enr   = _bi_enriched[_bi_enriched['periode'] == 'PRE']
+    _has_m     = _pre_enr['dinas_netto_compare'].notna()
+    _is_mr     = _pre_enr['flag_multi_rn_dinas'].fillna(False)
+    n_matched  = int(_has_m.sum())
+    n_multi_rn = int((_has_m & _is_mr).sum())
+    n_acc_base = n_matched - n_multi_rn
+    n_ok       = int((_pre_enr.loc[_has_m & ~_is_mr, 'dinas_vs_bi_diff_pct'].abs() <= 5).sum())
     n_sp       = s['n_split_snrs']
     n_gus      = s['n_gutschrift_solo']
     cov_pct    = n_matched / n_pre_bi * 100 if n_pre_bi else 0
@@ -355,11 +358,95 @@ def build_nk_sheet(ws):
     for ci in range(1, (nk_ws.max_column or 19) + 1):
         ws.column_dimensions[get_column_letter(ci)].width = 22
 
+# ── Sheet 3: Accuracy_PRE ─────────────────────────────────────────────────────
+def build_accuracy_sheet(ws):
+    ws.title = 'Accuracy_PRE'
+    ws.freeze_panes = 'A3'
+    _pre = _bi_enriched[_bi_enriched['periode'] == 'PRE'].copy()
+    _rn_lkp = _dinas_net.set_index('_snr')[['rechnung_nr', 'n_rows']].to_dict('index')
+    _pre['rechnung_nr_dinas'] = _pre['_snr'].map(
+        lambda s_: _rn_lkp.get(s_, {}).get('rechnung_nr', ''))
+    _pre['n_dinas_rows'] = _pre['_snr'].map(
+        lambda s_: _rn_lkp.get(s_, {}).get('n_rows', None))
+    acc = _pre[_pre['dinas_netto_compare'].notna()].copy()
+    acc['diff_eur'] = acc['dinas_vs_bi_diff_eur'].round(2)
+    acc['diff_pct'] = acc['dinas_vs_bi_diff_pct'].round(1)
+    acc = acc.sort_values('diff_pct', key=abs, ascending=False).reset_index(drop=True)
+    n_tot     = len(acc)
+    _is_multi = acc['flag_multi_rn_dinas'].fillna(False).astype(bool)
+    n_multi   = int(_is_multi.sum())
+    n_acc     = n_tot - n_multi
+    n_ok_a    = int((acc.loc[~_is_multi, 'diff_pct'].abs() <= 5).sum()) if n_acc else 0
+    n_big_a   = int((acc.loc[~_is_multi, 'diff_pct'].abs() > 10).sum()) if n_acc else 0
+    n_kp      = int(acc['flag_komplettpreis'].sum())
+    n_sp_a    = int(acc['flag_bi_split'].sum())
+    n_gus_a   = int(acc['flag_gutschrift_solo'].fillna(False).sum())
+    summary = (f'Groz-Beckert KG (multi-KNR) — PRE Accuracy: DINAS Total vs BI Erloese_effektiv  |  '
+               f'Rows: {n_tot}  |  Multi-Row (ausgeschl.): {n_multi}  |  Acc.-Basis: {n_acc}  |  '
+               f'±5%: {n_ok_a} ({n_ok_a/n_acc*100:.0f}% der Basis)  |  >10% Abw.: {n_big_a}  |  '
+               f'Komplettpreis: {n_kp}  |  Sammelposten: {n_sp_a}  |  Solo-Gutschrift: {n_gus_a}')
+    ACC_COLS = ['Auftrags-Nr','Rech.-Nr DINAS','Rech.-Nr BI','Datum',
+                'Land','Empf.PLZ','Tonnage kg',
+                'DINAS Total/Fracht','BI Erloese_eff','Diff EUR','Diff %',
+                'Komplettpreis','BI-Split','Solo-Gutschrift','Multi-Row DINAS','Abw. Klasse']
+    NA = len(ACC_COLS)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NA)
+    wc(ws, 1, 1, summary, FILL_HDR, fnt(bold=True, color='FFFFFF', size=10), 'left')
+    for ci, h in enumerate(ACC_COLS, 1):
+        wc(ws, 2, ci, h, FILL_HDR, fnt(bold=True, color='FFFFFF', size=9), 'center', brd=BRD)
+    FILL_OK   = fill('E2EFDA')
+    FILL_WARN = fill('FFEB9C')
+    FILL_BAD  = fill('FFC7CE')
+    FILL_MROW = fill('FFCC99')
+    EUR_ACC = {8, 9, 10}; PCT_ACC = {11}
+    def abw_klasse(pct):
+        if pd.isna(pct): return 'n/a'
+        a = abs(pct)
+        if a <= 5:  return '±5%'
+        if a <= 10: return '5-10%'
+        return '>10%'
+    rnum = 2
+    for _, r in acc.iterrows():
+        rnum += 1
+        pct   = r['diff_pct']
+        is_mr = bool(r.get('flag_multi_rn_dinas', False))
+        rf    = FILL_MROW if is_mr else (
+                FILL_OK   if pd.notna(pct) and abs(pct) <= 5 else (
+                FILL_WARN if pd.notna(pct) and abs(pct) <= 10 else FILL_BAD))
+        vals = [
+            r.get('Auftragsnummer'), r.get('rechnung_nr_dinas') or '',
+            r.get('Rechnungsnummer') or '', r.get('Leistungsdatum') or '',
+            r.get('Empfänger Land') or '', r.get('Empfänger PLZ') or '',
+            r.get('Tonnage (eff.)'), r.get('dinas_netto_compare'),
+            r.get('erloese_fracht_effektiv'), r.get('diff_eur'), pct,
+            'JA' if r.get('flag_komplettpreis') else '',
+            'JA' if r.get('flag_bi_split') else '',
+            'JA' if r.get('flag_gutschrift_solo') else '',
+            'JA' if is_mr else '',
+            abw_klasse(pct) if not is_mr else 'Multi-Row',
+        ]
+        for ci, v in enumerate(vals, 1):
+            if isinstance(v, float) and math.isnan(v): v = None
+            fmt = EUR_FMT if ci in EUR_ACC else ('#,##0.0"%"' if ci in PCT_ACC else None)
+            al  = 'right' if ci in EUR_ACC or ci in PCT_ACC else 'left'
+            if ci in {1, 2, 3} and v is not None:
+                try: v = str(int(float(str(v))))
+                except: v = str(v)
+            wc(ws, rnum, ci, v, rf, fnt(size=9), al, fmt, BRD)
+    col_widths = [15, 14, 14, 12, 6, 8, 10, 12, 12, 10, 8, 10, 8, 12, 12, 10]
+    for ci, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.row_dimensions[1].height = 18
+    ws.row_dimensions[2].height = 16
+    return rnum
+
 # ── Schreiben ──────────────────────────────────────────────────────────────────
 wb = Workbook()
 last_row = build_main_sheet(wb.active)
 build_nk_sheet(wb.create_sheet('NK_Konditionen'))
+acc_rows = build_accuracy_sheet(wb.create_sheet('Accuracy_PRE'))
 wb.save(OUT)
 print(f'\nGespeichert: {OUT}')
 print(f'  Sheet "Groz-Beckert (PDF-only Vergleich)": {last_row} Zeilen')
 print(f'  Sheet "NK_Konditionen": NK Groz.xlsx kopiert')
+print(f'  Sheet "Accuracy_PRE":   {acc_rows-2} Rows')

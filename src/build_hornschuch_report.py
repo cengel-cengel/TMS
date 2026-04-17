@@ -375,10 +375,13 @@ def build_main_sheet(ws):
     # ── Rows 2–8: Datenqualitäts-Block (PDF-Coverage + Accuracy-Basis) ──────────
     n_pre  = len(_hn_bi[_hn_bi['periode'] == 'PRE'])
     n_post = len(_hn_bi[_hn_bi['periode'] == 'POST'])
-    n_matched   = s['n_dinas_matched']
-    n_multi_rn  = s.get('n_multi_rn_dinas', 0)
-    n_acc_base  = s.get('n_acc_base', n_matched)
-    n_ok        = s['n_within_5pct']
+    _pre_enr   = _bi_enriched[_bi_enriched['periode'] == 'PRE']
+    _has_m     = _pre_enr['dinas_netto_compare'].notna()
+    _is_mr     = _pre_enr['flag_multi_rn_dinas'].fillna(False)
+    n_matched  = int(_has_m.sum())
+    n_multi_rn = int((_has_m & _is_mr).sum())
+    n_acc_base = n_matched - n_multi_rn
+    n_ok       = int((_pre_enr.loc[_has_m & ~_is_mr, 'dinas_vs_bi_diff_pct'].abs() <= 5).sum())
     n_sp   = s['n_split_snrs']
     n_gus  = s['n_gutschrift_solo']
     cov_pct  = n_matched / n_pre * 100 if n_pre else 0
