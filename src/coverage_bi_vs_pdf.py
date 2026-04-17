@@ -66,73 +66,57 @@ for knrs, name, dc_path, bi_cache in CUSTOMERS:
     pre = get_bi_pre(knrs, bi_cache)
     dc  = pd.read_pickle(dc_path)
 
-    # Normalize join keys
-    bi_snr  = pre['Auftragsnummer'].astype(str).apply(_norm)   # Sendungsnummer
-    bi_rnr  = pre['Rechnungsnummer'].astype(str).apply(_norm)  # Rechnungsnummer
+    # Normalize join keys — Sendungsebene
+    bi_snr  = pre['Auftragsnummer'].astype(str).apply(_norm)
     pdf_snr = dc['sendungs_nr'].astype(str).apply(_norm)
-    pdf_rnr = dc['rechnung_nr'].astype(str).apply(_norm)
 
-    # Sets for matching
+    # Sets
     bi_snr_set  = set(bi_snr)  - {'', '0', 'nan'}
-    bi_rnr_set  = set(bi_rnr)  - {'', '0', 'nan'}
     pdf_snr_set = set(pdf_snr) - {'', '0', 'nan'}
-    pdf_rnr_set = set(pdf_rnr) - {'', '0', 'nan'}
 
     # Counts
-    bi_pre_rows   = len(pre)
-    bi_uniq_rnr   = len(bi_rnr_set)
-    pdf_rechnungen = len(pdf_rnr_set)
-    pdf_positionen = len(dc)
+    bi_sendungen    = len(bi_snr_set)
+    pdf_sendungen   = len(pdf_snr_set)
+    pdf_positionen  = len(dc)
 
-    # Matches
-    match_snr = len(bi_snr_set & pdf_snr_set)
-    match_rnr = len(bi_rnr_set & pdf_rnr_set)
+    # Matches at Sendungsebene
+    matches = len(bi_snr_set & pdf_snr_set)
 
-    # BI rows matched (any row whose Auftragsnummer OR Rechnungsnummer hits)
-    bi_matched_mask = bi_snr.isin(pdf_snr_set) | bi_rnr.isin(pdf_rnr_set)
-    bi_matched_rows = bi_matched_mask.sum()
-    bi_unmatched_rows = bi_pre_rows - bi_matched_rows
-
-    # PDF rows unmatched (sendungs_nr not in BI, rechnung_nr not in BI)
-    pdf_unmatched_rows = (~(pdf_snr.isin(bi_snr_set) | pdf_rnr.isin(bi_rnr_set))).sum()
+    # Unmatched
+    bi_ohne_pdf   = bi_sendungen - matches
+    pdf_ohne_bi   = pdf_sendungen - matches
 
     # Coverage %
-    bi_cov_pct  = bi_matched_rows / bi_pre_rows * 100 if bi_pre_rows else 0
-    pdf_cov_pct = (pdf_positionen - pdf_unmatched_rows) / pdf_positionen * 100 if pdf_positionen else 0
+    bi_cov_pct  = matches / bi_sendungen  * 100 if bi_sendungen  else 0
+    pdf_cov_pct = matches / pdf_sendungen * 100 if pdf_sendungen else 0
 
     # Anmerkung
-    avg_bi_per_rnr  = bi_pre_rows / bi_uniq_rnr if bi_uniq_rnr else 0
-    avg_pdf_per_rnr = pdf_positionen / pdf_rechnungen if pdf_rechnungen else 0
-    if avg_bi_per_rnr > 5 and avg_pdf_per_rnr < 3:
-        note = f'BI {avg_bi_per_rnr:.0f} Zeilen/RechNr, PDF {avg_pdf_per_rnr:.1f} Pos/RechNr → PDF ist aggregiert'
-    elif avg_bi_per_rnr < 3 and avg_pdf_per_rnr > 5:
-        note = f'PDF {avg_pdf_per_rnr:.0f} Pos/RechNr, BI {avg_bi_per_rnr:.1f} Zeilen/RechNr → PDF granularer'
-    elif pdf_rechnungen > bi_uniq_rnr * 1.3:
-        note = f'PDF hat {pdf_rechnungen - bi_uniq_rnr} mehr RechNr als BI → PDFs ohne BI-Eintrag'
-    elif bi_uniq_rnr > pdf_rechnungen * 1.3:
-        note = f'BI hat {bi_uniq_rnr - pdf_rechnungen} mehr RechNr als PDF → fehlende PDFs'
+    avg_pos_per_snr = pdf_positionen / pdf_sendungen if pdf_sendungen else 0
+    if bi_sendungen > pdf_sendungen * 1.3:
+        note = f'{bi_sendungen - pdf_sendungen} mehr BI-Sendungen als PDF-Sendungen → fehlende PDFs'
+    elif pdf_sendungen > bi_sendungen * 1.3:
+        note = f'{pdf_sendungen - bi_sendungen} mehr PDF-Sendungen als BI-Sendungen → PDFs aus anderen Perioden/Kunden'
     else:
-        note = f'BI {avg_bi_per_rnr:.1f} Zeilen/RechNr, PDF {avg_pdf_per_rnr:.1f} Pos/RechNr'
+        note = f'Ø {avg_pos_per_snr:.1f} PDF-Positionen/Sendung'
+    if avg_pos_per_snr > 3:
+        note += f'; PDF sehr granular ({avg_pos_per_snr:.1f} Pos/Sendung)'
 
     knr_str = '+'.join(str(k) for k in knrs)
     results.append({
-        'Kunde':             name,
-        'KNR':               knr_str,
-        'BI PRE-Zeilen':     bi_pre_rows,
-        'BI uni. RechNr':    bi_uniq_rnr,
-        'PDF Rechnungen':    pdf_rechnungen,
-        'PDF Positionen':    pdf_positionen,
-        'Matches (RechNr)':  match_rnr,
-        'Matches (SendNr)':  match_snr,
-        'BI-Zeilen mit Match': bi_matched_rows,
-        'BI ohne PDF (abs)': bi_unmatched_rows,
-        'BI ohne PDF (%)':   round(100 - bi_cov_pct, 1),
-        'PDF ohne BI (abs)': pdf_unmatched_rows,
-        'PDF ohne BI (%)':   round(100 - pdf_cov_pct, 1),
-        'Anmerkung':         note,
+        'Kunde':               name,
+        'KNR':                 knr_str,
+        'BI PRE-Sendungen':    bi_sendungen,
+        'PDF Sendungen':       pdf_sendungen,
+        'PDF Positionen':      pdf_positionen,
+        'Matches':             matches,
+        'BI ohne PDF (abs)':   bi_ohne_pdf,
+        'BI ohne PDF (%)':     round(100 - bi_cov_pct, 1),
+        'PDF ohne BI (abs)':   pdf_ohne_bi,
+        'PDF ohne BI (%)':     round(100 - pdf_cov_pct, 1),
+        'Anmerkung':           note,
     })
-    print(f'  {name}: BI={bi_pre_rows} PRE, PDF={pdf_positionen} Pos/{pdf_rechnungen} Rechnungen, '
-          f'Match(RNR)={match_rnr}/{bi_uniq_rnr} ({match_rnr/bi_uniq_rnr*100:.0f}%)')
+    print(f'  {name}: BI={bi_sendungen} Sendungen, PDF={pdf_sendungen} Sendungen/{pdf_positionen} Pos, '
+          f'Match={matches} ({bi_cov_pct:.0f}% BI, {pdf_cov_pct:.0f}% PDF)')
 
 # ── Excel output ─────────────────────────────────────────────────────────────
 COLS = list(results[0].keys())
@@ -147,18 +131,16 @@ FNT_HDR = Font(bold=True, color='FFFFFF', size=9)
 FNT_REG = Font(size=9)
 
 WIDTHS = {
-    'Kunde': 26, 'KNR': 18, 'BI PRE-Zeilen': 13, 'BI uni. RechNr': 13,
-    'PDF Rechnungen': 14, 'PDF Positionen': 14,
-    'Matches (RechNr)': 15, 'Matches (SendNr)': 15,
-    'BI-Zeilen mit Match': 17,
+    'Kunde': 26, 'KNR': 18,
+    'BI PRE-Sendungen': 15, 'PDF Sendungen': 13, 'PDF Positionen': 14,
+    'Matches': 12,
     'BI ohne PDF (abs)': 15, 'BI ohne PDF (%)': 14,
     'PDF ohne BI (abs)': 15, 'PDF ohne BI (%)': 14,
-    'Anmerkung': 55,
+    'Anmerkung': 58,
 }
 PCT_COLS = {'BI ohne PDF (%)', 'PDF ohne BI (%)'}
 NUM_COLS = {
-    'BI PRE-Zeilen', 'BI uni. RechNr', 'PDF Rechnungen', 'PDF Positionen',
-    'Matches (RechNr)', 'Matches (SendNr)', 'BI-Zeilen mit Match',
+    'BI PRE-Sendungen', 'PDF Sendungen', 'PDF Positionen', 'Matches',
     'BI ohne PDF (abs)', 'PDF ohne BI (abs)',
 }
 
