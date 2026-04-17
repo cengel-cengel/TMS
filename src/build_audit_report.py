@@ -29,63 +29,71 @@ CUSTOMERS = [
      'output/helu_dinas_vergleich.xlsx',        2,
      V1/'Helu/Rechnungen/Rechnungen DINAS',
      V1/'Helu/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_408244.pkl'),
+     'output/dinas_cache_408244.pkl', None),
     ('Sika Dtl. CH AG & Co KG',  491063,
      'output/sika_dinas_vergleich.xlsx',         2,
      V1/'SIka/Rechnungen/Rechnungen DINAS',
      V1/'SIka/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_491063.pkl'),
+     'output/dinas_cache_491063.pkl', None),
     ('Sika Supply Center GmbH',  511241,
      'output/ssc_dinas_vergleich.xlsx',           2,
      Path('data/extracted/sika_ssc/Dinas SSC'),
      None,
-     'output/dinas_cache_ssc_511241.pkl'),
+     'output/dinas_cache_ssc_511241.pkl', None),
     ('GEZE GmbH',                406035,
      'output/geze_dinas_vergleich.xlsx',         2,
      V1/'GEZE/Rechnungen/Rechnungen DINAS',
      V1/'GEZE/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_406035.pkl'),
+     'output/dinas_cache_406035.pkl', None),
     ('HERMA GmbH',               423650,
      'output/herma_dinas_vergleich.xlsx',        0,
      Path('data/extracted/bi/Herma/Herma Dinas/Herma'),
      Path('data/extracted/bi/Herma/Herma AX/Herma AX'),
-     'output/dinas_cache_423650.pkl'),
+     'output/dinas_cache_423650.pkl',
+     {  # HERMA uses short column names; map to standard audit names
+         'pre':  {'Land': 'Empfänger Land', 'PLZ': 'Empfänger PLZ',
+                  'Tonnage kg': 'Tonnage (eff.)', 'LDM': 'Lademeter',
+                  'Diesel': 'Dinas Diesel', 'Maut/SSD': 'Dinas Maut/SSD'},
+         'post': {'Land': 'Empfänger Land', 'PLZ': 'Empfänger PLZ',
+                  'Tonnage kg': 'Tonnage (eff.)', 'LDM': 'Lademeter',
+                  'Diesel': 'AX Diesel', 'Maut': 'AX Maut', 'Neben': 'AX Nebengebühr'},
+     }),
     ('Bitzer Kühlmaschinenbau',  406345,
      'output/bitzer_dinas_vergleich.xlsx',       2,
      V1/'Bitzer/Rechnungen/Rechnungen DINAS',
      V1/'Bitzer/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_406345.pkl'),
+     'output/dinas_cache_406345.pkl', None),
     ('CHT Germany GmbH',         486073,
      'output/cht_dinas_vergleich.xlsx',          2,
      V1/'CHT/Rechnungen/Rechnungen DINAS',
      V1/'CHT/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_486073.pkl'),
+     'output/dinas_cache_486073.pkl', None),
     ('Konrad Hornschuch GmbH',   490085,
      'output/hornschuch_dinas_vergleich.xlsx',   2,
      V1/'Hornschuch/Rechnungen/Rechnungen DINAS',
      V1/'Hornschuch/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_490085.pkl'),
+     'output/dinas_cache_490085.pkl', None),
     ('EBM-Papst Mulfingen',      410844,
      'output/ebm_dinas_vergleich.xlsx',          2,
      V1/'EBM/Rechnungen/Rechnungen DINAS',
      V1/'EBM/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_410844.pkl'),
+     'output/dinas_cache_410844.pkl', None),
     ('Fischerwerke GmbH & Co KG',409480,
      'output/fischerwerke_dinas_vergleich.xlsx', 2,
      V2/'Fischer/Rechnungen/Rechnungen DINAS',
      V2/'Fischer/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_409480.pkl'),
+     'output/dinas_cache_409480.pkl', None),
     ('Groz-Beckert KG',          410912,
      None,                                       None,
      V1/'Groz Beckert/Rechnungen/Rechnungen DINAS',
      V1/'Groz Beckert/Rechnungen/Rechnungen AX',
-     'output/dinas_cache_groz_beckert.pkl'),
+     'output/dinas_cache_groz_beckert.pkl', None),
     ('Sika Automotive AG',       527406,
      'output/bi_cache_sika_527406.pkl',          'bi_pkl',
-     None, None, None),
+     None, None, None, None),
     ('Sika Automotive DE',       '413276+493163',
      'output/bi_cache_sika_atm_de.pkl',          'bi_pkl',
-     None, None, None),
+     None, None, None, None),
 ]
 
 # ── Felder die geprüft werden ────────────────────────────────────────────────
@@ -141,7 +149,7 @@ def load_sheet(xlsx_path, hdr, keyword):
 results = []
 detail_sheets = {}
 
-for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path in CUSTOMERS:
+for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path, col_map in CUSTOMERS:
     print(f'\n--- {name} ---')
     rec = {'Kunde': name, 'KNR': str(knr) if knr else 'n/a'}
 
@@ -174,6 +182,11 @@ for name, knr, src_xlsx, hdr, dinas_dir, ax_dir, cache_path in CUSTOMERS:
     else:
         pre = load_sheet(src_xlsx, hdr, 'PRE')
         post = load_sheet(src_xlsx, hdr, 'POST')
+    if col_map:
+        if 'pre' in col_map and not pre.empty:
+            pre = pre.rename(columns=col_map['pre'])
+        if 'post' in col_map and not post.empty:
+            post = post.rename(columns=col_map['post'])
 
     # For Groz-Beckert: PRE from cache
     if name == 'Groz-Beckert KG' and cache_path and Path(cache_path).exists():
