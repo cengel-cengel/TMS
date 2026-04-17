@@ -64,21 +64,25 @@ def net_dinas_fracht(df_cache: pd.DataFrame) -> pd.DataFrame:
     Sums fracht AND total_items (all categories) per SNR.
 
     Returns DataFrame with columns:
-      sendungs_nr, rechnung_nr, netto_fracht, netto_total, n_rows,
+      sendungs_nr, rechnung_nr, netto_fracht, netto_total, n_rows, n_distinct_rn,
       flag_gutschrift_solo  – True when only negative-fracht rows exist (no paired Rechnung)
+      flag_multi_rn_dinas   – True when n_rows > 1 (re-invoicing / supplemental artifact)
 
     netto_total = sum(total_items): used for Komplettpreis comparison
     netto_fracht = sum(fracht):     used for non-Komplettpreis (BI has fracht breakdown)
+    flag_multi_rn_dinas rows are shown in reports but excluded from ±5% accuracy counts.
     """
     grp = df_cache.groupby('sendungs_nr', as_index=False).agg(
-        rechnung_nr= ('rechnung_nr',  'first'),
-        netto_fracht=('fracht',       'sum'),
-        netto_total= ('total_items',  'sum'),
-        n_rows=      ('fracht',       'count'),
-        max_fracht=  ('fracht',       'max'),
-        min_fracht=  ('fracht',       'min'),
+        rechnung_nr=   ('rechnung_nr',  'first'),
+        netto_fracht=  ('fracht',       'sum'),
+        netto_total=   ('total_items',  'sum'),
+        n_rows=        ('fracht',       'count'),
+        n_distinct_rn= ('rechnung_nr',  'nunique'),
+        max_fracht=    ('fracht',       'max'),
+        min_fracht=    ('fracht',       'min'),
     )
     grp['flag_gutschrift_solo'] = (grp['max_fracht'] <= 0) & (grp['min_fracht'] < 0)
+    grp['flag_multi_rn_dinas']  = grp['n_rows'] > 1
     grp['netto_fracht'] = grp['netto_fracht'].round(4)
     grp['netto_total']  = grp['netto_total'].round(4)
     return grp
@@ -114,9 +118,11 @@ def enrich_customer_bi(df_bi: pd.DataFrame, df_dinas: pd.DataFrame,
 
     # Merge to compute per-row accuracy
     merged = bi_e.merge(
-        dinas_net[['_snr', 'netto_fracht', 'netto_total', 'flag_gutschrift_solo']],
+        dinas_net[['_snr', 'netto_fracht', 'netto_total',
+                   'flag_gutschrift_solo', 'flag_multi_rn_dinas']],
         on='_snr', how='left'
     )
+    merged['flag_multi_rn_dinas'] = merged['flag_multi_rn_dinas'].fillna(False).astype(bool)
     # Choose comparison basis: total for Komplettpreis, fracht otherwise
     merged['dinas_netto_compare'] = merged['netto_total'].where(
         merged['flag_komplettpreis'], merged['netto_fracht'])
@@ -125,8 +131,13 @@ def enrich_customer_bi(df_bi: pd.DataFrame, df_dinas: pd.DataFrame,
     merged['dinas_vs_bi_diff_pct'] = (merged['dinas_vs_bi_diff_eur'] / eff * 100).round(2)
 
     sp = sammelposten_stats(bi_e)
-    n_matched   = merged['dinas_netto_compare'].notna().sum()
-    n_within_5  = (merged['dinas_vs_bi_diff_pct'].abs() <= 5).sum()
+    _has_match  = merged['dinas_netto_compare'].notna()
+    _is_multi   = merged['flag_multi_rn_dinas']
+    n_matched   = int(_has_match.sum())
+    n_multi_rn  = int((_has_match & _is_multi).sum())
+    _acc_base   = _has_match & ~_is_multi
+    n_acc_base  = int(_acc_base.sum())
+    n_within_5  = int((merged.loc[_acc_base, 'dinas_vs_bi_diff_pct'].abs() <= 5).sum())
     n_solo_gut  = int(dinas_net['flag_gutschrift_solo'].sum())
     n_kp        = int(bi_e['flag_komplettpreis'].sum())
 
@@ -134,9 +145,11 @@ def enrich_customer_bi(df_bi: pd.DataFrame, df_dinas: pd.DataFrame,
         **sp,
         'n_komplettpreis':   n_kp,
         'pct_komplettpreis': round(n_kp / len(bi_e) * 100, 1) if len(bi_e) else 0,
-        'n_dinas_matched':   int(n_matched),
-        'n_within_5pct':     int(n_within_5),
-        'pct_within_5pct':   round(n_within_5 / n_matched * 100, 1) if n_matched else 0.0,
+        'n_dinas_matched':   n_matched,
+        'n_multi_rn_dinas':  n_multi_rn,
+        'n_acc_base':        n_acc_base,
+        'n_within_5pct':     n_within_5,
+        'pct_within_5pct':   round(n_within_5 / n_acc_base * 100, 1) if n_acc_base else 0.0,
         'n_gutschrift_solo': n_solo_gut,
     }
 

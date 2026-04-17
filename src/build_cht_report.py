@@ -173,9 +173,10 @@ def _norm(v):
 
 # Per-SNR enriched flags (use PRE+POST bi_enriched) — dicts for fast row-level lookup
 _tmp = _bi_enriched.drop_duplicates('_snr').set_index('_snr')
-_flag_kp  = _tmp['flag_komplettpreis'].to_dict()      # snr → bool
-_flag_sp  = _tmp['flag_bi_split'].to_dict()           # snr → bool
-_flag_dvp = _tmp['dinas_vs_bi_diff_pct'].to_dict()    # snr → float|NaN
+_flag_kp  = _tmp['flag_komplettpreis'].to_dict()
+_flag_sp  = _tmp['flag_bi_split'].to_dict()
+_flag_dvp = _tmp['dinas_vs_bi_diff_pct'].to_dict()
+_flag_mr  = _tmp['flag_multi_rn_dinas'].fillna(False).to_dict()
 del _tmp
 
 dinas_cache['_snr'] = dinas_cache['sendungs_nr'].astype(str).apply(_norm)
@@ -340,8 +341,8 @@ HDR_COLS = ['System','Auftrags-Nr','Master-Nr','Sub-Nr(n)','Anzahl Subs','Ist Ma
             'Fracht EUR','Diesel EUR','Maut EUR','Lademittel','Peak EUR',
             'Neben EUR','EUST Zoll','Versich.',
             'Erlöse','Abw. Grund',
-            'Komplettpreis','BI-Split','DINAS vs BI %']
-N = len(HDR_COLS)  # 36
+            'Komplettpreis','BI-Split','DINAS vs BI %','DINAS Multi-Row']
+N = len(HDR_COLS)  # 37
 
 EUR_COLS  = {17,18,23,24,25,26,27,28,29,30,31,32}  # 1-based
 NUM_RIGHT = {5, 16, 19, 20, 21, 22, 36}             # + DINAS vs BI %
@@ -391,8 +392,10 @@ def build_main_sheet(ws):
     n_pre  = len(_cht_bi[_cht_bi['periode'] == 'PRE'])
     n_post = len(_cht_bi[_cht_bi['periode'] == 'POST'])
     n_tot  = n_pre + n_post
-    n_matched = s['n_dinas_matched']
-    n_ok      = s['n_within_5pct']
+    n_matched   = s['n_dinas_matched']
+    n_multi_rn  = s.get('n_multi_rn_dinas', 0)
+    n_acc_base  = s.get('n_acc_base', n_matched)
+    n_ok        = s['n_within_5pct']
     n_kp   = s['n_komplettpreis']
     n_sp   = s['n_split_snrs']
     n_gus  = s['n_gutschrift_solo']
@@ -402,13 +405,15 @@ def build_main_sheet(ws):
 
     dq_rows = [
         ('Datenqualität — Accuracy-Basis (Sheet "Accuracy_PRE")', None, True),
-        (f'Gesamt SNRs (PRE+POST)',                  f'{n_tot}',                         False),
+        (f'Gesamt SNRs (PRE+POST)',                  f'{n_tot}', False),
         (f'davon vergleichbar (DINAS-Match, PRE)',   f'{n_matched} / {n_pre} ({n_matched/n_pre*100:.0f}%)', False),
-        (f'davon im ±5%-Band',                       f'{n_ok} / {n_matched} ({n_ok/n_matched*100:.0f}%)  ← Basis-Accuracy', False),
+        (f'davon im ±5%-Band (ex. DINAS Multi-Row)',
+         f'{n_ok} / {n_acc_base} ({n_ok/n_acc_base*100:.0f}% der Acc.-Basis)  ← Basis-Accuracy', False),
         (f'Ausschluss-Gründe:',
-         f'A) Komplettpreis ohne DINAS-Match: {n_pre - n_matched} SNRs  |  '
+         f'A) Kein DINAS-Match: {n_pre - n_matched} SNRs  |  '
          f'B) Sammelposten (strukturell, nicht ausgeschlossen): {n_sp} SNRs ({s["pct_split"]:.0f}%)  |  '
-         f'C) Solo-Gutschriften: {n_gus}', False),
+         f'C) Solo-Gutschriften: {n_gus}  |  '
+         f'D) DINAS Multi-Row: {n_multi_rn} SNRs (aus ±5%-Basis ausgeschlossen)', False),
         (f'Vergleich-Methode',
          f'Komplettpreis → DINAS total_items vs BI Erloese  |  Standard → DINAS fracht vs BI Erlöse Fracht', False),
     ]
@@ -494,6 +499,7 @@ def build_main_sheet(ws):
             kp_flag = 'JA' if _flag_kp.get(snr_key, False) else ''
             sp_flag = 'JA' if _flag_sp.get(snr_key, False) else ''
             dv_pct  = _flag_dvp.get(snr_key, None)
+            mr_flag = 'JA' if _flag_mr.get(snr_key, False) else ''
             vals = ['alt', r.get('Auftragsnummer'),
                     r.get('_master_nr'), r.get('_sub_nrs'), int(r.get('_n_subs') or 0), r.get('_ist_master') or '',
                     r.get('Rechnungsnummer'), r.get('Leistungsdatum'), KUNDE,
@@ -502,7 +508,7 @@ def build_main_sheet(ws):
                     kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk,
                     erloese, abw_grund_row(nk, soll, erloese),
-                    kp_flag, sp_flag, dv_pct]
+                    kp_flag, sp_flag, dv_pct, mr_flag]
             write_row(ws, row, vals, FILL_ALT, is_ctrl)
 
         # neu (AX POST)
@@ -527,13 +533,13 @@ def build_main_sheet(ws):
                     kg, r.get('Stellplätze'), r.get('Lademeter'), r.get('Volumen'), soll,
                     *nk,
                     erloese, abw_grund_row(nk, soll, erloese),
-                    '', sp_flag, None]
+                    '', sp_flag, None, None]
             write_row(ws, row, vals, FILL_NEU, is_ctrl)
 
         row += 1  # Leerzeile
 
     widths = [8,15,16,30,8,9, 13,12,18,5,8,8, 11,8,10, 9,10,10, 9,9,9,9, 10, 10,9,9,9,9,9,9,9, 11,22,
-              10, 8, 10]
+              10, 8, 10, 12]
     for ci, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 20
@@ -572,22 +578,24 @@ def build_accuracy_sheet(ws):
     acc = acc.sort_values('diff_pct', key=abs, ascending=False).reset_index(drop=True)
 
     # Summary header (row 1)
-    n_tot  = len(acc)
-    n_ok   = int((acc['diff_pct'].abs() <= 5).sum())
-    n_big  = int((acc['diff_pct'].abs() > 10).sum())
-    n_kp   = int(acc['flag_komplettpreis'].sum())
-    n_sp   = int(acc['flag_bi_split'].sum())
-    n_gus  = int(acc['flag_gutschrift_solo'].fillna(False).sum())
+    n_tot     = len(acc)
+    _is_multi = acc['flag_multi_rn_dinas'].fillna(False).astype(bool)
+    n_multi   = int(_is_multi.sum())
+    n_acc     = n_tot - n_multi
+    n_ok      = int((acc.loc[~_is_multi, 'diff_pct'].abs() <= 5).sum())
+    n_big     = int((acc.loc[~_is_multi, 'diff_pct'].abs() > 10).sum())
+    n_kp      = int(acc['flag_komplettpreis'].sum())
+    n_sp      = int(acc['flag_bi_split'].sum())
+    n_gus     = int(acc['flag_gutschrift_solo'].fillna(False).sum())
 
     summary = (f'CHT Germany GmbH ({KNR}) — PRE Accuracy: DINAS Total (Komplettpreis-Fix) vs BI Erloese_effektiv  |  '
-               f'Rows: {n_tot}  |  ±5%: {n_ok} ({n_ok/n_tot*100:.0f}%)  |  '
-               f'>10% Abw.: {n_big}  |  Komplettpreis: {n_kp}  |  '
-               f'Sammelposten: {n_sp}  |  Solo-Gutschrift: {n_gus}  |  '
-               f'[Alt ohne Komplettpreis-Fix: 0 vergleichbar]')
+               f'Rows: {n_tot}  |  Multi-Row (ausgeschl.): {n_multi}  |  Acc.-Basis: {n_acc}  |  '
+               f'±5%: {n_ok} ({n_ok/n_acc*100:.0f}% der Basis)  |  >10% Abw.: {n_big}  |  '
+               f'Komplettpreis: {n_kp}  |  Sammelposten: {n_sp}  |  Solo-Gutschrift: {n_gus}')
     ACC_COLS = ['Auftrags-Nr','Rech.-Nr DINAS','Rech.-Nr BI','Datum',
                 'Land','Empf.PLZ','Tonnage kg',
                 'DINAS Total/Fracht','BI Erloese_eff','Diff EUR','Diff %',
-                'Komplettpreis','BI-Split','Solo-Gutschrift','Abw. Klasse']
+                'Komplettpreis','BI-Split','Solo-Gutschrift','Multi-Row DINAS','Abw. Klasse']
     NA = len(ACC_COLS)
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NA)
@@ -598,6 +606,7 @@ def build_accuracy_sheet(ws):
     FILL_OK   = fill('E2EFDA')   # green  ±5%
     FILL_WARN = fill('FFEB9C')   # yellow 5–10%
     FILL_BAD  = fill('FFC7CE')   # red    >10%
+    FILL_MROW = fill('FFCC99')   # orange DINAS Multi-Row (excluded)
 
     EUR_ACC = {8, 9, 10}
     PCT_ACC = {11}
@@ -612,9 +621,11 @@ def build_accuracy_sheet(ws):
     rnum = 2
     for _, r in acc.iterrows():
         rnum += 1
-        pct  = r['diff_pct']
-        rf   = FILL_OK if pd.notna(pct) and abs(pct) <= 5 else (
-               FILL_WARN if pd.notna(pct) and abs(pct) <= 10 else FILL_BAD)
+        pct    = r['diff_pct']
+        is_mr  = bool(r.get('flag_multi_rn_dinas', False))
+        rf     = FILL_MROW if is_mr else (
+                 FILL_OK   if pd.notna(pct) and abs(pct) <= 5 else (
+                 FILL_WARN if pd.notna(pct) and abs(pct) <= 10 else FILL_BAD))
         vals = [
             r.get('Auftragsnummer'),
             r.get('rechnung_nr_dinas') or '',
@@ -630,7 +641,8 @@ def build_accuracy_sheet(ws):
             'JA' if r.get('flag_komplettpreis') else '',
             'JA' if r.get('flag_bi_split') else '',
             'JA' if r.get('flag_gutschrift_solo') else '',
-            abw_klasse(pct),
+            'JA' if is_mr else '',
+            abw_klasse(pct) if not is_mr else 'Multi-Row',
         ]
         for ci, v in enumerate(vals, 1):
             if isinstance(v, float) and math.isnan(v): v = None
@@ -641,7 +653,7 @@ def build_accuracy_sheet(ws):
                 except: v = str(v)
             wc(ws, rnum, ci, v, rf, fnt(size=9), al, fmt, BRD)
 
-    col_widths = [15, 14, 14, 12, 6, 8, 10, 12, 12, 10, 8, 10, 8, 12, 10]
+    col_widths = [15, 14, 14, 12, 6, 8, 10, 12, 12, 10, 8, 10, 8, 12, 12, 10]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 18
