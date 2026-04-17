@@ -57,6 +57,12 @@ STP_SOLO_RE = re.compile(r'^([\d,]+)\s+[Ss]tp$', re.I)
 LDM_SOLO_RE = re.compile(r'^([\d,]+)\s+[Ll][Dd][Mm]$', re.I)
 BETRAG   = 'Betrag'
 
+# ── Parser B / C2: "DD.MM.YY Referenz-Erka: SNNNNN" (date optional) ─────────
+REDEBIT_ENTRY      = re.compile(r'^(\d{2}\.\d{2}\.\d{2})\s+Referenz-Erka:\s+(\d+)')
+REDEBIT_ENTRY_ND   = re.compile(r'^Referenz-Erka:\s+(\d+)')   # no-date variant
+# Generic kg finder (used in fallback parsers)
+GEW_KG_RE          = re.compile(r'(\d[\d.]*)\s+kg', re.I)
+
 # Single-letter country codes used in DINAS → normalize to ISO 2-letter
 _COUNTRY_NORM = {
     'F': 'FR', 'I': 'IT', 'E': 'ES', 'L': 'LU', 'B': 'BE',
@@ -329,25 +335,292 @@ def flatten(pos: dict) -> dict:
     return row
 
 
+# ── Parser B / C2: Referenz-Erka body ────────────────────────────────────────
+def parse_redebit_body(path: str, is_credit: bool = False) -> list[dict]:
+    """
+    Handles Rechnungskorrektur/Gutschrift (B), Redebit (C2), and misc special
+    invoices that share the "DD.MM.YY Referenz-Erka: SNNNNN" entry format.
+    One EUR amount per entry.  is_credit=True → amounts × -1.
+    """
+    doc      = fitz.open(path)
+    all_text = ''.join(p.get_text('text') for p in doc)
+    lines    = [l.strip() for l in all_text.split('\n') if l.strip()]
+    rn       = os.path.basename(path).replace('RECHNUNG', '').replace('.pdf', '')
+    sign     = -1.0 if is_credit else 1.0
+
+    # Fallback date: document-level Buchungsdatum (used when entry has no date)
+    doc_date = ''
+    for idx, ln in enumerate(lines):
+        if ln == 'Buchungsdatum' and idx + 1 < len(lines):
+            doc_date = lines[idx + 1]
+            break
+
+    def _new():
+        return {
+            'rechnung_nr': rn, 'pos_nr': 0,
+            'leistungsdatum': '', 'sendungs_nr': '',
+            'empf_land': '', 'empf_plz': '',
+            'ldm': None, 'kg_rechnung': None,
+            'stellplaetze': None, 'volumen': None,
+            '_await_vol_kg': False, '_items': [],
+        }
+
+    positions: list[dict] = []
+    cur: dict | None      = None
+    label_buf: list[str]  = []
+    in_footer             = False
+
+    for i, line in enumerate(lines):
+        # ── New entry trigger ─────────────────────────────────────────────
+        m = REDEBIT_ENTRY.match(line)
+        m_nd = None if m else REDEBIT_ENTRY_ND.match(line)
+        if m or m_nd:
+            if cur and cur['_items']:
+                positions.append(cur)
+            cur               = _new()
+            cur['pos_nr']     = len(positions) + 1
+            cur['leistungsdatum'] = m.group(1) if m else doc_date
+            cur['sendungs_nr']    = m.group(2) if m else m_nd.group(1)
+            label_buf         = []
+            in_footer         = False   # reset on each new entry
+            continue
+
+        if cur is None:
+            continue
+
+        # ── Footer: stop accumulating items once summary section reached ─
+        if any(line.startswith(t) for t in FOOTER_TRIGGER):
+            in_footer = True
+            continue
+        if in_footer:
+            continue
+
+        # ── Empfänger/destination ─────────────────────────────────────────
+        if not cur['empf_land']:
+            # Inline: "Emp/cons: COMPANY XX-NNNN CITY"
+            m_empc = re.search(r'[Ee]mp/cons[: ]+.*?([A-Z]{1,2})-(\d+)', line)
+            if m_empc:
+                cur['empf_land'] = _COUNTRY_NORM.get(m_empc.group(1), m_empc.group(1))
+                cur['empf_plz']  = m_empc.group(2)
+                label_buf = []
+                continue
+            # Standalone dest line "I-40016 SAN GIORGIO"
+            m_dest = DEST_RE.match(line)
+            if m_dest:
+                cur['empf_land'] = _COUNTRY_NORM.get(m_dest.group(1), m_dest.group(1))
+                cur['empf_plz']  = m_dest.group(2).split()[0]
+                label_buf = []
+                continue
+
+        # ── Gew/weight: kg ────────────────────────────────────────────────
+        if re.match(r'[Gg]ew[./]', line):
+            m_kg = GEW_KG_RE.search(line)
+            if m_kg and cur['kg_rechnung'] is None:
+                cur['kg_rechnung'] = float(m_kg.group(1).replace('.', ''))
+            elif i + 1 < len(lines) and cur['kg_rechnung'] is None:
+                m_kg2 = GEW_KG_RE.search(lines[i + 1])
+                if m_kg2:
+                    cur['kg_rechnung'] = float(m_kg2.group(1).replace('.', ''))
+            label_buf = []
+            continue
+
+        # ── EUR amount ────────────────────────────────────────────────────
+        m_eur = EUR_RE.match(line)
+        if m_eur:
+            amount = eur_to_float(m_eur.group(1)) * sign
+            # Filter metadata noise from label buffer
+            clean = [
+                l for l in label_buf
+                if l and not CODE_RE.match(l)
+                and not re.match(r'^(Abs[/:]|Emp/|Your Ref|Ref\.:|[A-Z]\d{4,5}\b)', l)
+            ]
+            label = ' / '.join(clean) if clean else 'FRACHT/FREIGHT'
+            if not any(kw in label.upper()
+                       for kwlist in CATS.values() for kw in kwlist):
+                label = 'FRACHT/FREIGHT'
+            cur['_items'].append({'label': label, 'amount': amount})
+            label_buf = []
+            continue
+
+        # ── Label buffer ──────────────────────────────────────────────────
+        if not any(line.startswith(p) for p in SKIP_PREFIXES):
+            label_buf.append(line)
+
+    if cur and cur['_items']:
+        positions.append(cur)
+    return positions
+
+
+# ── Parser C1: Differenzrechnung ──────────────────────────────────────────────
+def parse_differenz(path: str) -> list[dict]:
+    """
+    Handles "Differenzrechnung zu Ihrem Beleg" format.
+    Entry trigger: standalone line "Sendungsnr" → next line ": NNNN" → EUR.
+    """
+    doc      = fitz.open(path)
+    all_text = ''.join(p.get_text('text') for p in doc)
+    lines    = [l.strip() for l in all_text.split('\n') if l.strip()]
+    rn       = os.path.basename(path).replace('RECHNUNG', '').replace('.pdf', '')
+
+    # Document-level Buchungsdatum (shared by all entries)
+    doc_date = ''
+    for idx, ln in enumerate(lines):
+        if ln == 'Buchungsdatum' and idx + 1 < len(lines):
+            doc_date = lines[idx + 1]
+            break
+
+    def _new():
+        return {
+            'rechnung_nr': rn, 'pos_nr': 0,
+            'leistungsdatum': doc_date, 'sendungs_nr': '',
+            'empf_land': '', 'empf_plz': '',
+            'ldm': None, 'kg_rechnung': None,
+            'stellplaetze': None, 'volumen': None,
+            '_await_vol_kg': False, '_items': [],
+        }
+
+    positions: list[dict] = []
+    cur: dict | None      = None
+    in_empf               = False
+    in_gewicht            = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # ── Entry trigger: "Sendungsnr" ───────────────────────────────────
+        if line == 'Sendungsnr' and i + 1 < len(lines):
+            if cur and cur['_items']:
+                positions.append(cur)
+            cur        = _new()
+            cur['pos_nr'] = len(positions) + 1
+            in_empf    = False
+            in_gewicht = False
+            # Next line: ": NNNN"
+            m_snr = re.match(r'^:\s*(\d+)', lines[i + 1])
+            if m_snr:
+                cur['sendungs_nr'] = m_snr.group(1)
+                i += 1
+            # Line after that should be EUR amount
+            if i + 1 < len(lines):
+                m_eur = EUR_RE.match(lines[i + 1])
+                if m_eur:
+                    cur['_items'].append({
+                        'label': 'FRACHT/FREIGHT',
+                        'amount': eur_to_float(m_eur.group(1)),
+                    })
+                    i += 1
+            i += 1
+            continue
+
+        if cur is None:
+            i += 1
+            continue
+
+        # ── Empfänger block ───────────────────────────────────────────────
+        if line == 'Empfänger':
+            in_empf = True
+            i += 1
+            continue
+
+        if in_empf and not cur['empf_land']:
+            # PLZ/Ort pattern on this line or the next
+            for check_ln in [line] + ([lines[i + 1]] if i + 1 < len(lines) else []):
+                m_plz = re.search(r'PLZ/Ort:\s*([A-Z]{1,2})-(\d+)', check_ln, re.I)
+                if m_plz:
+                    cur['empf_land'] = _COUNTRY_NORM.get(m_plz.group(1), m_plz.group(1))
+                    cur['empf_plz']  = m_plz.group(2)
+                    break
+            in_empf = False
+
+        # ── Gewicht block ─────────────────────────────────────────────────
+        if line == 'Gewicht':
+            in_gewicht = True
+            i += 1
+            continue
+
+        if in_gewicht and cur['kg_rechnung'] is None:
+            if re.match(r'^:\s*kg', line, re.I):
+                # Value on next line
+                if i + 1 < len(lines):
+                    m_num = re.match(r'^(\d+)', lines[i + 1])
+                    if m_num:
+                        cur['kg_rechnung'] = float(m_num.group(1))
+                        i += 1
+            elif re.match(r'^:\s*\d', line):
+                m_num = re.match(r'^:\s*(\d+)', line)
+                if m_num:
+                    cur['kg_rechnung'] = float(m_num.group(1))
+            in_gewicht = False
+
+        i += 1
+
+    if cur and cur['_items']:
+        positions.append(cur)
+    return positions
+
+
 # ── Alle PDFs eines Verzeichnisses parsen ─────────────────────────────────
+# Keywords that identify third-party billing formats — not the direct customer's invoice
+_EXPLICIT_SKIP_KW = (
+    'B O R D E R O',       # Bordero-Belastung (billed to freight partner)
+    'A-META-ABRECHNUNG',   # A-META Abrechnung (old ERKA billing system)
+    'A-META-Abrechnung',   # case variant
+    'Stornobeleg',         # cancellation note
+    'S T O R N O B E L E G',
+)
+
+
 def parse_directory(pdf_dir: str | Path, verbose: bool = True) -> pd.DataFrame:
     pdfs = sorted(glob.glob(str(Path(pdf_dir) / '*.pdf')))
     if verbose:
         print(f'Parsing {len(pdfs)} PDFs from {pdf_dir} …')
 
-    rows = []
-    skipped = 0
+    rows             = []
+    skipped_explicit = 0   # known non-parseable formats (explicit skip)
+    skipped_unknown  = 0   # could not parse with any parser
     for path in pdfs:
         positions = parse_one(path)
-        if not positions:
-            skipped += 1
+        if positions:
+            for pos in positions:
+                rows.append(flatten(pos))
             continue
-        for pos in positions:
-            rows.append(flatten(pos))
+
+        # Fallback: read full text once for classification
+        doc       = fitz.open(path)
+        full_text = ''.join(p.get_text('text') for p in doc)
+        doc.close()
+
+        # Explicit skips: third-party billing formats (no sendungs_nr for this customer)
+        if any(kw in full_text for kw in _EXPLICIT_SKIP_KW):
+            skipped_explicit += 1
+            continue
+
+        # Parser B / C2: Referenz-Erka body (Gutschrift, Redebit, misc)
+        if 'Referenz-Erka:' in full_text:
+            is_credit = any(kw in full_text for kw in
+                            ('RECHNUNGSKORREKTUR', 'GUTSCHRIFT', 'CREDIT NOTE'))
+            positions = parse_redebit_body(path, is_credit=is_credit)
+            if positions:
+                for pos in positions:
+                    rows.append(flatten(pos))
+                continue
+
+        # Parser C1: Differenzrechnung
+        if 'Differenzrechnung' in full_text:
+            positions = parse_differenz(path)
+            if positions:
+                for pos in positions:
+                    rows.append(flatten(pos))
+                continue
+
+        skipped_unknown += 1
 
     if verbose:
-        print(f'  → {len(rows)} Positionen aus {len(pdfs) - skipped} PDFs '
-              f'({skipped} ohne Rechnungs-Body übersprungen)')
+        parsed_pdfs = len(pdfs) - skipped_explicit - skipped_unknown
+        print(f'  → {len(rows)} Positionen aus {parsed_pdfs} PDFs '
+              f'({skipped_explicit} explizit übersprungen, '
+              f'{skipped_unknown} unbekannte Formate)')
 
     if not rows:
         return pd.DataFrame()
