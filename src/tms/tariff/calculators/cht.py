@@ -283,9 +283,13 @@ class CHTItalyCalculator(TariffCalculator):
 
         if plz_norm in _SPECIAL_PLZ:
             basispreis = self._calc_special(actual_kg, billing_kg)
+            tarifgruppe = "cht_it_special"
+            file_used = str(self._dlv_file_special.name)
         else:
             zone = _lookup_zone(plz_norm)
             basispreis = self._calc_main(zone, actual_kg, billing_kg)
+            tarifgruppe = f"cht_it_zone{zone}"
+            file_used = str(self._dlv_file.name)
 
         maut = _MAUT_PER_100KG * Decimal(str(billing_kg)) / Decimal("100")
 
@@ -302,4 +306,7 @@ class CHTItalyCalculator(TariffCalculator):
                 f"billing_kg={billing_kg}",
                 f"plz={plz_norm}",
             ],
+            tarifgruppe=tarifgruppe,
+            tariff_file_used=file_used,
+            tariff_year_used=_VALID_FROM.year,
         )

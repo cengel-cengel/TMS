@@ -246,4 +246,7 @@ class EBMCalculator(TariffCalculator):
             tariff_valid_from=_VALID_FROM,
             tariff_valid_to=_VALID_TO,
             notes=[f"n_pallets={n_pallets} (from ldm={ldm_val})"],
+            tarifgruppe="ebm_papst_stellplaetze",
+            tariff_file_used=str(self._dlv_file.name),
+            tariff_year_used=_VALID_FROM.year,
         )

@@ -483,6 +483,9 @@ class GrozBeckertCalculator(TariffCalculator):
                 tariff_valid_from=_VALID_FROM,
                 tariff_valid_to=_VALID_TO,
                 notes=notes,
+                tarifgruppe=f"groz_beckert_lane_{ltl_lane.from_plz}_{ltl_lane.to_iso.lower()}",
+                tariff_file_used=_DLV_PATH.name,
+                tariff_year_used=_VALID_FROM.year,
             )
 
         # 2. General Cargo pricing
@@ -534,4 +537,7 @@ class GrozBeckertCalculator(TariffCalculator):
             tariff_valid_from=_VALID_FROM,
             tariff_valid_to=_VALID_TO,
             notes=notes,
+            tarifgruppe=f"groz_beckert_gc_{empf_land_up.lower()}",
+            tariff_file_used=_DLV_PATH.name,
+            tariff_year_used=_VALID_FROM.year,
         )

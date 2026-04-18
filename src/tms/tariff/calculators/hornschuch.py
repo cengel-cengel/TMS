@@ -153,6 +153,9 @@ class HornschuchCalculator(TariffCalculator):
                 tariff_valid_from=_VALID_FROM,
                 tariff_valid_to=_VALID_TO,
                 notes=[_DLV_NOTE, "ERKA not nominated for PL from Weissbach"],
+                tarifgruppe="hornschuch_pl_na",
+                tariff_file_used=_TARIFF_FILE,
+                tariff_year_used=_VALID_FROM.year,
             )
 
         t = float(tonnage_kg) if tonnage_kg is not None else 0.0
@@ -194,4 +197,7 @@ class HornschuchCalculator(TariffCalculator):
             tariff_valid_from=_VALID_FROM,
             tariff_valid_to=_VALID_TO,
             notes=[_DLV_NOTE, band_note],
+            tarifgruppe=f"hornschuch_{cc.lower()}_zone{zone}",
+            tariff_file_used=_TARIFF_FILE,
+            tariff_year_used=_VALID_FROM.year,
         )

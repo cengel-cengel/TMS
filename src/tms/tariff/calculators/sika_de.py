@@ -285,6 +285,7 @@ def _lookup_maut(
 
 class _SikaBase(TariffCalculator):
     pricing_basis = "stellplaetze"
+    _tarifgruppe: str = "sika_stellplatz"
 
     def calculate(
         self,
@@ -302,6 +303,7 @@ class _SikaBase(TariffCalculator):
 
         stpl_int = max(1, math.ceil(stellplaetze))
         use_date = shipment_date or date.today()
+        year = max(2025, min(2026, use_date.year))
 
         rates, de_maut, valid_from, valid_to, dlv_file = _get_dlv(use_date)
 
@@ -333,6 +335,9 @@ class _SikaBase(TariffCalculator):
             tariff_valid_from=valid_from,
             tariff_valid_to=valid_to,
             notes=notes,
+            tarifgruppe=self._tarifgruppe,
+            tariff_file_used=dlv_file,
+            tariff_year_used=year,
         )
 
 
@@ -342,7 +347,9 @@ class _SikaBase(TariffCalculator):
 
 class SikaDeCalculator(_SikaBase):
     customer_name = "Sika Deutschland GmbH"
+    _tarifgruppe = "sika_de_stellplatz"
 
 
 class SSCCalculator(_SikaBase):
     customer_name = "SIKA Supply Center AG"
+    _tarifgruppe = "ssc_stellplatz"

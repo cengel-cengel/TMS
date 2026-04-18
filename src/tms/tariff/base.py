@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Optional
 
 
 @dataclass
@@ -18,6 +18,11 @@ class TariffResult:
     tariff_valid_from: date = date(1970, 1, 1)
     tariff_valid_to: date | None = None
     notes: list[str] = field(default_factory=list)
+    # ── Etappe 6e: Tarif-Tracking ─────────────────────────────────────────
+    tarifgruppe: str = ""              # stabiler Cluster-Key pro Tarif-Segment
+    tariff_file_used: str = ""         # Dateiname der tatsächlich verwendeten DLV
+    tariff_year_used: int = 0          # tatsächlich verwendetes DLV-Jahr
+    tariff_fallback_note: Optional[str] = None  # gesetzt wenn Fallback auf älteres Jahr
 
     @property
     def total(self) -> Decimal:

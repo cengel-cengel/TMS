@@ -407,4 +407,7 @@ class BitzCalculator(TariffCalculator):
                 f"zone={zone}",
                 f"billing_kg={billing_kg}",
             ],
+            tarifgruppe=f"bitzer_{empf_land_up.lower()}_zone{zone}_{plant.lower()}",
+            tariff_file_used=ct.dlv_name,
+            tariff_year_used=_VALID_FROM_2025.year,
         )

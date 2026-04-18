@@ -608,6 +608,8 @@ class HermaCalculator(TariffCalculator):
             f"billing_det={billing_det}",
         ]
 
+        tarifgruppe = "herma_mit_vl" if billing_wt > _VL_THRESHOLD else "herma_ohne_vl"
+
         return TariffResult(
             basispreis=Decimal(str(round(rate, 4))).quantize(Decimal("0.0001")),
             diesel_surcharge=None,
@@ -618,4 +620,7 @@ class HermaCalculator(TariffCalculator):
             tariff_valid_from=vfrom,
             tariff_valid_to=vto,
             notes=notes,
+            tarifgruppe=tarifgruppe,
+            tariff_file_used=dlv_path.name,
+            tariff_year_used=vfrom.year,
         )

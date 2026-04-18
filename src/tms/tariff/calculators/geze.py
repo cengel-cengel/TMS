@@ -428,4 +428,7 @@ class GEZECalculator(TariffCalculator):
             tariff_valid_from=_VALID_FROM,
             tariff_valid_to=_VALID_TO,
             notes=notes,
+            tarifgruppe=f"geze_{empf_land.upper().lower()}_zone{zr.zone}",
+            tariff_file_used=_DLV_FILE.name,
+            tariff_year_used=_VALID_FROM.year,
         )

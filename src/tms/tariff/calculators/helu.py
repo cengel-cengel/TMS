@@ -658,4 +658,7 @@ class HeluCalculator(TariffCalculator):
             tariff_valid_from=valid_from,
             tariff_valid_to=valid_to,
             notes=notes,
+            tarifgruppe=f"helu_{cc.lower()}_zone{zone_key}",
+            tariff_file_used=dlv_file,
+            tariff_year_used=valid_from.year,
         )

@@ -372,4 +372,7 @@ class FischerwerkeCalculator(TariffCalculator):
             tariff_valid_from=route.valid_from,
             tariff_valid_to=route.valid_to,
             notes=notes,
+            tarifgruppe=f"fischerwerke_{route.dest_country.lower()}_{route.dest_plz_key.lower()}",
+            tariff_file_used=route.tariff_file,
+            tariff_year_used=route.valid_from.year,
         )
