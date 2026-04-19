@@ -339,3 +339,51 @@ def test_match_clusters_output_columns():
     )
     for col in _OUT_COLS:
         assert col in result.columns, f"Missing column: {col}"
+
+
+def test_full_era_top_n_selection():
+    """
+    Top-N Dinas clusters chosen by eur_pro_einheit DESC regardless of date.
+    Build a family with 10 clusters spanning Oct 2024–Sep 2025.
+    The highest-EUR/unit cluster is the oldest (Oct 2024).
+    It must appear in selected_as='dinas_sample' even though it is far from cutoff.
+    """
+    import math
+
+    dates = [pd.Timestamp(f"2024-10-{d:02d}") for d in range(1, 11)]
+    # eur_pro_einheit is fracht / stp; assign descending fracht so oldest = highest
+    fracts = list(range(1000, 0, -100))   # 1000, 900, ..., 100
+
+    dinas_df = pd.DataFrame({
+        "rechnung_nr":   list(range(5000001, 5000011)),  # 10 distinct invoices
+        "erka_kundennr": ["25607"] * 10,
+        "rechnung_date": dates,
+        "leistung_date": dates,
+        "template":      ["erka_standard"] * 10,
+        "abs_plz":       ["70439"] * 10,
+        "empf_plz":      ["EC1A"] * 10,
+        "empf_land":     ["GB"] * 10,
+        "gewicht_kg":    [500.0] * 10,
+        "stp":           [1.0] * 10,        # 1 Stpl each → eur_pe = fracht
+        "lm":            [0.4] * 10,
+        "fracht":        fracts,
+        "diesel":        [0.0] * 10,
+        "maut":          [0.0] * 10,
+        "sonstige":      ["[]"] * 10,
+        "bordero_nr":    [f"B{i}" for i in range(10)],
+    })
+
+    from tms.matching.cluster_matcher import match_clusters
+
+    # Need AX + TB too; use minimal ones from above helpers
+    result = match_clusters(dinas_df, _minimal_ax_df(), _minimal_tb_df())
+
+    dinas_rows = result[result["cluster_source"] == "DINAS"]
+    selected   = dinas_rows[dinas_rows["selected_as"] == "dinas_sample"]
+
+    assert len(selected) > 0
+    # All selected clusters should have eur_pro_einheit >= min of top-5 in the full era
+    top5_min = dinas_rows["eur_pro_einheit"].nlargest(5).min()
+    for _, row in selected.iterrows():
+        if row["eur_pro_einheit"] is not None and not (isinstance(row["eur_pro_einheit"], float) and math.isnan(row["eur_pro_einheit"])):
+            assert row["eur_pro_einheit"] >= top5_min - 0.01

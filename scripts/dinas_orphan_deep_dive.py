@@ -1,11 +1,11 @@
 """
-Etappe 8e Teil 2 — Vertiefte Analyse der größten Dinas-Orphan-Familien.
+Etappe 8f — Vertiefte Analyse der größten Dinas-Orphan-Familien.
 
 Klassifiziert jede Dinas-Orphan-Familie als:
-  likely_ax_successor_found  – AX hat plausiblen Nachfolger (anderes PLZ, gleiches Land)
-  ax_coverage_gap            – Route war kurz vor Cutoff aktiv, kein AX-Nachfolger
-  no_ax_successor_plausible  – Route bereits länger vor Cutoff inaktiv oder
-                               klar eingestellt
+  likely_ax_successor_found – AX hat plausiblen Nachfolger (gleicher Kunde/Land,
+                              andere PLZ-Kodierung)
+  ax_coverage_gap           – kein plausibles AX-Pendant gefunden; Lane könnte
+                              unabgerechnet sein (zeitunabhängige Definition)
 """
 from __future__ import annotations
 
@@ -20,8 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 PARQUET = Path("output/etappe8_cluster_families.parquet")
 OUT_MD  = Path("data/reports/dinas_orphan_deep_dive.md")
 
-CUTOFF      = datetime.date(2025, 9, 26)
-GAP_DAYS    = 60   # letzte Aktivität ≤ 60 Tage vor Cutoff → kandidat für ax_coverage_gap
+CUTOFF = datetime.date(2025, 9, 26)
 
 
 # ---------------------------------------------------------------------------
@@ -47,15 +46,16 @@ def classify_dinas_orphan(
     """
     Returns (classification, explanation, candidate_ax_rows | None).
 
-    Classification: 'likely_ax_successor_found' | 'ax_coverage_gap' | 'no_ax_successor_plausible'
+    Classification: 'likely_ax_successor_found' | 'ax_coverage_gap'
+
+    ax_coverage_gap: kein plausibles AX-Pendant — zeitunabhängig.
+    Eine Familie ist ax_coverage_gap wenn kein AX-Cluster mit gleichem
+    Kunden/PLZ/Land/Tarifgruppe existiert.
     """
     parts = fkey.split("|")
     if len(parts) != 4:
-        return "no_ax_successor_plausible", "Ungültiger family_key", None
+        return "ax_coverage_gap", "Ungültiger family_key", None
     kunde, abs_plz, empf_plz, tg = parts
-
-    last = _last_active(dinas_rows)
-    days = _days_to_cutoff(last)
 
     # Derive expected empf_land from Dinas rows
     lands = dinas_rows["empf_land"].dropna().unique()
@@ -64,71 +64,39 @@ def classify_dinas_orphan(
     # Search AX for same kunde
     ax_same_kunde = all_ax[all_ax["kunde_normalisiert"] == kunde]
 
-    # --- Criterion a: same kunde + same abs_plz + any empf_plz (different PLZ coding?)
+    # Criterion a: same kunde + same abs_plz + same empf_land (different 2-digit empf_plz)
     ax_same_abs = ax_same_kunde[ax_same_kunde["abs_plz_2"] == abs_plz]
-
-    # --- Criterion b: same kunde + same empf_land + same tarifgruppe (different abs?)
-    ax_same_land = pd.DataFrame()
-    if primary_land:
-        ax_same_land = ax_same_kunde[
-            ax_same_kunde["empf_land"].str.upper() == primary_land.upper()
-        ]
-
-    # --- Criterion c: same kunde + same tarifgruppe + any PLZ, first 3 months post-migration
-    post_cutoff = pd.Timestamp("2025-09-27")
-    post_90d    = pd.Timestamp("2025-12-27")
-    ax_early_post = ax_same_kunde[
-        (pd.to_datetime(ax_same_kunde["leistungsdatum"], errors="coerce") >= post_cutoff) &
-        (pd.to_datetime(ax_same_kunde["leistungsdatum"], errors="coerce") <= post_90d) &
-        (ax_same_kunde["tarifgruppe"] == tg)
-    ]
-
-    # --- Decision logic ---
-
-    # 1. Same abs_plz AND same empf_land → high plausibility successor
     if primary_land:
         cand = ax_same_abs[ax_same_abs["empf_land"].str.upper() == primary_land.upper()]
         if len(cand):
             return (
                 "likely_ax_successor_found",
-                f"AX hat {len(cand['family_key'].unique())} Familie(n) mit gleicher abs_plz={abs_plz} "
-                f"und gleichem Land={primary_land}, aber anderer empf_plz",
+                f"AX hat {len(cand['family_key'].unique())} Familie(n) mit gleicher "
+                f"abs_plz={abs_plz} und Land={primary_land}, andere empf_plz",
                 cand,
             )
 
-    # 2. Same empf_land + same tg → different abs? (inbound/re-routed)
-    if len(ax_same_land) and primary_land:
-        cand = ax_same_land[ax_same_land["tarifgruppe"] == tg]
+    # Criterion b: same kunde + same empf_land + same tarifgruppe (different abs_plz)
+    if primary_land:
+        cand = ax_same_kunde[
+            (ax_same_kunde["empf_land"].str.upper() == primary_land.upper()) &
+            (ax_same_kunde["tarifgruppe"] == tg)
+        ]
         if len(cand):
             return (
                 "likely_ax_successor_found",
-                f"AX hat {len(cand['family_key'].unique())} Familie(n) mit gleichem Land={primary_land} "
-                f"und tarifgruppe={tg}, aber anderer PLZ-Kombination",
+                f"AX hat {len(cand['family_key'].unique())} Familie(n) mit Land={primary_land} "
+                f"und tarifgruppe={tg}, andere PLZ-Kombination",
                 cand,
             )
 
-    # 3. ax_coverage_gap: route was active near cutoff, no plausible successor
-    if days is not None and days <= GAP_DAYS:
-        return (
-            "ax_coverage_gap",
-            f"Letzter Dinas-Cluster {days} Tage vor Cutoff ({last}), kein plausibles AX-Pendant gefunden",
-            None,
-        )
-
-    # 4. early post migration AX activity by same kunde+tg → might be same lane re-keyed
-    if len(ax_early_post):
-        return (
-            "likely_ax_successor_found",
-            f"AX hat {len(ax_early_post['family_key'].unique())} Familie(n) mit gleichem Kunden "
-            f"in den ersten 90 Tagen post-Migration, jedoch andere PLZ",
-            ax_early_post,
-        )
-
-    # 5. Fallback: truly discontinued
+    # No plausible AX successor found → ax_coverage_gap
+    last = _last_active(dinas_rows)
+    days = _days_to_cutoff(last)
     last_str = str(last) if last else "unbekannt"
     return (
-        "no_ax_successor_plausible",
-        f"Letzter Dinas-Cluster: {last_str} ({days or '?'} Tage vor Cutoff). Kein AX-Pendant gefunden.",
+        "ax_coverage_gap",
+        f"Kein plausibles AX-Pendant. Letzter Dinas-Cluster: {last_str} ({days or '?'} Tage vor Cutoff).",
         None,
     )
 
@@ -161,10 +129,9 @@ def main() -> None:
         f"**Quelle:** `{PARQUET}`",
         "",
         "Analysiert werden die Top-10 Dinas-Orphan-Familien nach Fracht-Volumen (€).  ",
-        "Klassifikationsschema:",
-        "- `likely_ax_successor_found` – AX hat einen plausiblen Nachfolger (gleicher Kunde, ähnliche Route, andere PLZ-Kodierung)",
-        "- `ax_coverage_gap` – Route war ≤ 60 Tage vor Cutoff aktiv, kein AX-Pendant → potenziell unabgerechnet",
-        "- `no_ax_successor_plausible` – Route länger inaktiv vor Cutoff oder klar eingestellt",
+        "Klassifikationsschema (zeitunabhängig, Etappe 8f):",
+        "- `likely_ax_successor_found` – AX hat plausiblen Nachfolger (gleicher Kunde + Land, andere PLZ-Kodierung)",
+        "- `ax_coverage_gap` – kein plausibles AX-Pendant; Lane könnte in POST-Ära unabgerechnet sein",
         "",
         "---",
         "",
@@ -175,17 +142,15 @@ def main() -> None:
     summary: dict[str, list] = {
         "likely_ax_successor_found": [],
         "ax_coverage_gap": [],
-        "no_ax_successor_plausible": [],
     }
     for fkey in all_orphan_fkeys:
         rows = orphan_dinas[orphan_dinas["family_key"] == fkey]
         clf, _, _ = classify_dinas_orphan(fkey, rows, ax_rows)
         summary[clf].append(fkey)
 
-    gap_fkeys = summary["ax_coverage_gap"]
-    gap_vol = orphan_dinas[orphan_dinas["family_key"].isin(gap_fkeys)]["fracht_ohne_diesel_eur"].sum()
+    gap_fkeys  = summary["ax_coverage_gap"]
+    gap_vol    = orphan_dinas[orphan_dinas["family_key"].isin(gap_fkeys)]["fracht_ohne_diesel_eur"].sum()
     likely_vol = orphan_dinas[orphan_dinas["family_key"].isin(summary["likely_ax_successor_found"])]["fracht_ohne_diesel_eur"].sum()
-    no_vol = orphan_dinas[orphan_dinas["family_key"].isin(summary["no_ax_successor_plausible"])]["fracht_ohne_diesel_eur"].sum()
 
     lines += [
         "## Aggregierte Klassifikation (alle Dinas-Orphans)",
@@ -194,7 +159,6 @@ def main() -> None:
         f"|----------------|---------|--------------|",
         f"| `likely_ax_successor_found` | {len(summary['likely_ax_successor_found'])} | {likely_vol:,.0f} € |",
         f"| `ax_coverage_gap` | {len(summary['ax_coverage_gap'])} | {gap_vol:,.0f} € |",
-        f"| `no_ax_successor_plausible` | {len(summary['no_ax_successor_plausible'])} | {no_vol:,.0f} € |",
         "",
         "---",
         "",
@@ -270,28 +234,30 @@ def main() -> None:
     lines += [
         "## ax_coverage_gap – Vollständige Liste",
         "",
-        "Familien, bei denen der letzte Dinas-Cluster ≤ 60 Tage vor Migrations-Cutoff lag  ",
-        "und kein plausibles AX-Pendant existiert. Das sind potenziell **unabgerechnete Lanes**.",
+        "Familien ohne plausibles AX-Pendant (zeitunabhängige Klassifikation).  ",
+        "Das sind potenziell **unabgerechnete Lanes** in der POST-Ära.",
         "",
         f"| Family-Key | Letzter Dinas | Tage vor Cutoff | Gesamt-Fracht |",
         f"|-----------|-------------|----------------|--------------|",
     ]
 
-    for fkey in sorted(gap_fkeys, key=lambda k: orphan_dinas[orphan_dinas["family_key"]==k]["fracht_ohne_diesel_eur"].sum(), reverse=True):
+    def _by_vol(k):
+        return orphan_dinas[orphan_dinas["family_key"] == k]["fracht_ohne_diesel_eur"].sum()
+
+    for fkey in sorted(gap_fkeys, key=_by_vol, reverse=True):
         rows = orphan_dinas[orphan_dinas["family_key"] == fkey]
         last = _last_active(rows)
         days = _days_to_cutoff(last)
         vol  = rows["fracht_ohne_diesel_eur"].sum()
         lines.append(f"| `{fkey}` | {last} | {days} | {vol:,.0f} € |")
 
-    total_gap_vol = orphan_dinas[orphan_dinas["family_key"].isin(gap_fkeys)]["fracht_ohne_diesel_eur"].sum()
     lines += [
         "",
-        f"**Gesamt ax_coverage_gap Volumen: {total_gap_vol:,.0f} €**",
+        f"**Gesamt ax_coverage_gap Volumen: {gap_vol:,.0f} €**",
         "",
         "---",
         "",
-        "*Bericht automatisch generiert von `scripts/dinas_orphan_deep_dive.py`.*",
+        "*Bericht automatisch generiert von `scripts/dinas_orphan_deep_dive.py` (Etappe 8f).*",
     ]
 
     OUT_MD.write_text("\n".join(lines), encoding="utf-8")
@@ -300,13 +266,12 @@ def main() -> None:
     print("\n=== Aggregierte Klassifikation ===")
     print(f"likely_ax_successor_found : {len(summary['likely_ax_successor_found'])} Familien, {likely_vol:,.0f} €")
     print(f"ax_coverage_gap           : {len(summary['ax_coverage_gap'])} Familien, {gap_vol:,.0f} €")
-    print(f"no_ax_successor_plausible : {len(summary['no_ax_successor_plausible'])} Familien, {no_vol:,.0f} €")
     if gap_fkeys:
-        print(f"\nax_coverage_gap Familien:")
-        for fkey in sorted(gap_fkeys, key=lambda k: orphan_dinas[orphan_dinas["family_key"]==k]["fracht_ohne_diesel_eur"].sum(), reverse=True):
+        print(f"\nax_coverage_gap Familien (nach Volumen):")
+        for fkey in sorted(gap_fkeys, key=_by_vol, reverse=True):
             rows = orphan_dinas[orphan_dinas["family_key"] == fkey]
             last = _last_active(rows)
-            vol  = rows["fracht_ohne_diesel_eur"].sum()
+            vol  = _by_vol(fkey)
             print(f"  {fkey}  last={last}  {vol:,.0f} €")
 
 

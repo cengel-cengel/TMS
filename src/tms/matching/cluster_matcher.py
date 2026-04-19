@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
@@ -37,9 +37,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DINAS_CUTOFF      = date(2025, 9, 26)   # letzter Dinas-Tag
-_DINAS_WINDOW_DAYS = 90                  # primäres Fenster
-_TOP_N             = 5                   # max Dinas- und AX-Cluster pro Familie
+_TOP_N = 5   # max Dinas-Referenz-Cluster (nach EUR/Einheit DESC) und AX-Cluster pro Familie
 
 # KNR → Calculator-Klasse (nur Sika-Kunden im aktuellen Scope)
 _KNR_CALC_MAP: dict[str, type[TariffCalculator]] = {
@@ -362,8 +360,6 @@ def match_clusters(
     *,
     excluded_knrs: frozenset[str] = frozenset({"413276"}),
     cq_filter: bool = True,
-    dinas_cutoff: Optional[date] = None,
-    dinas_window_days: int = _DINAS_WINDOW_DAYS,
     top_n: int = _TOP_N,
 ) -> pd.DataFrame:
     """
@@ -381,21 +377,13 @@ def match_clusters(
         KNRs excluded from AX side (default: {"413276"} Spiegelkonto).
     cq_filter:
         Apply Grauzone-Filter on TB (remove Migrations-Umbuchungen).
-    dinas_cutoff:
-        Last Dinas date. Defaults to 2025-09-26.
-    dinas_window_days:
-        Primary window for Dinas sample selection (default 90 days before cutoff).
     top_n:
-        Max Dinas + AX clusters per family in output.
+        Max Dinas-Referenz-Cluster pro Familie (nach EUR/Einheit DESC, gesamte Ära).
 
     Returns
     -------
     DataFrame with one row per (family, cluster), columns as in _OUT_COLS.
-    Only families with ≥1 AX cluster having positive abweichung_vs_dinas_mean are
-    included (orphan_ax families in separate rows with is_orphan_ax=True).
     """
-    cutoff = dinas_cutoff or _DINAS_CUTOFF
-    window_start = cutoff - timedelta(days=dinas_window_days)
 
     # ── 1. Grauzone filter ──────────────────────────────────────────────────
     if cq_filter:
@@ -604,50 +592,26 @@ def match_clusters(
     if dinas_df_out.empty and ax_df_out.empty:
         return pd.DataFrame(columns=_OUT_COLS)
 
-    # Compute Dinas mean eur_pro_einheit per family (using 90d window sample)
+    # Compute Dinas mean eur_pro_einheit per family — gesamte Dinas-Ära, kein Zeitfenster.
+    # Referenzbasis: Top-N Cluster nach eur_pro_einheit DESC (mind. 1, sonst orphan_ax).
     dinas_family_stats: dict[str, dict] = {}
 
     if not dinas_df_out.empty:
-        dinas_df_out["leistungsdatum_dt"] = pd.to_datetime(
-            dinas_df_out["leistungsdatum"], errors="coerce"
-        )
-        window_start_ts = pd.Timestamp(window_start)
-        cutoff_ts       = pd.Timestamp(cutoff)
-
         for fkey, grp in dinas_df_out.groupby("family_key"):
-            in_window = grp[
-                (grp["leistungsdatum_dt"] >= window_start_ts) &
-                (grp["leistungsdatum_dt"] <= cutoff_ts) &
-                grp["eur_pro_einheit"].notna()
-            ]
-            if len(in_window) < top_n:
-                # Stufenweise erweitern
-                for extra_days in [90, 180, 365, 10000]:
-                    wider = grp[
-                        (grp["leistungsdatum_dt"] >= (cutoff_ts - pd.Timedelta(days=dinas_window_days + extra_days))) &
-                        (grp["leistungsdatum_dt"] <= cutoff_ts) &
-                        grp["eur_pro_einheit"].notna()
-                    ]
-                    if len(wider) >= top_n or extra_days == 10000:
-                        in_window = wider
-                        break
-
-            sample = in_window.nlargest(top_n, "eur_pro_einheit")
+            valid  = grp[grp["eur_pro_einheit"].notna()]
+            sample = valid.nlargest(top_n, "eur_pro_einheit") if len(valid) else valid
             mean_epe = sample["eur_pro_einheit"].mean() if len(sample) else None
 
             dinas_family_stats[str(fkey)] = {
                 "mean_eur_pro_einheit": mean_epe,
                 "n_dinas":             len(grp),
             }
-            # Mark selected samples
             selected_ids = set(sample["cluster_id"])
             dinas_df_out.loc[
                 (dinas_df_out["family_key"] == fkey) &
                 (dinas_df_out["cluster_id"].isin(selected_ids)),
                 "selected_as",
             ] = "dinas_sample"
-
-        dinas_df_out.drop(columns=["leistungsdatum_dt"], inplace=True)
 
     # Fill Dinas mean into AX rows & compute abweichung
     if not ax_df_out.empty:
