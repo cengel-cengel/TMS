@@ -288,7 +288,7 @@ class CHTItalyCalculator(TariffCalculator):
         else:
             zone = _lookup_zone(plz_norm)
             basispreis = self._calc_main(zone, actual_kg, billing_kg)
-            tarifgruppe = f"cht_it_zone{zone}"
+            tarifgruppe = "cht_it_main"
             file_used = str(self._dlv_file.name)
 
         maut = _MAUT_PER_100KG * Decimal(str(billing_kg)) / Decimal("100")

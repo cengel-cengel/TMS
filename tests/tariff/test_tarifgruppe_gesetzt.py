@@ -130,8 +130,9 @@ def test_tarifgruppe_gesetzt_cht_main():
         "20155", "IT",
         tonnage_kg=500.0,
     )
-    _assert_tracking(result, tarifgruppe_prefix="cht_it_zone", year=2026)
-    assert result.tarifgruppe != "cht_it_zone"  # zone number must be appended
+    assert result.tarifgruppe == "cht_it_main"
+    assert result.tariff_year_used == 2026
+    assert result.tariff_file_used != ""
 
 
 def test_tarifgruppe_gesetzt_cht_special():
