@@ -162,7 +162,7 @@ def build_ax_clusters(
         agg_ldm = _sum("Lademeter")
         agg_vol = _sum("Volumen")
 
-        # --- PLZ 2-digit sets --------------------------------------------------
+        # --- PLZ 2-digit sets + Länder ----------------------------------------
         sender_plzs = sorted({
             p for r in tb_matched_rows
             if (p := _plz2(r.get("Versender PLZ")))
@@ -170,6 +170,11 @@ def build_ax_clusters(
         empf_plzs = sorted({
             p for r in tb_matched_rows
             if (p := _plz2(r.get("Empfänger PLZ")))
+        })
+        empf_laender = sorted({
+            str(r.get("Empfänger Land") or "").strip().upper()
+            for r in tb_matched_rows
+            if r.get("Empfänger Land")
         })
 
         if len(sender_plzs) > 1:
@@ -221,6 +226,7 @@ def build_ax_clusters(
             "aggregat_volumen":       agg_vol,
             "sender_plz_distinct":    sender_plzs,
             "empfaenger_plz_distinct": empf_plzs,
+            "empfaenger_land_distinct": empf_laender,
             "leistungsdatum":         pd.Timestamp(master.get("Leistungsdatum", pd.NaT)),
             "tb_coverage_subs":       coverage,
             "tb_gap_reason":          gap_reason,
@@ -231,7 +237,7 @@ def build_ax_clusters(
         "cluster_id", "master_auftragsnr", "master_knr",
         "master_billing_kg", "master_fracht_eur", "n_subs",
         "aggregat_gewicht_kg", "aggregat_stp", "aggregat_ldm", "aggregat_volumen",
-        "sender_plz_distinct", "empfaenger_plz_distinct",
+        "sender_plz_distinct", "empfaenger_plz_distinct", "empfaenger_land_distinct",
         "leistungsdatum", "tb_coverage_subs", "tb_gap_reason", "consistency_check",
     ]
     if not rows:

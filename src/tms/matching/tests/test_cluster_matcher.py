@@ -1,0 +1,233 @@
+"""Unit tests for cluster_matcher.py — Etappe 8."""
+from __future__ import annotations
+
+import datetime
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
+
+from tms.matching.cluster_matcher import (
+    _apply_cq_grauzone_filter,
+    _normalize_ax_knr,
+    _plz2,
+    _safe_float,
+    _tarifgruppe_for_knr,
+)
+
+
+# ---------------------------------------------------------------------------
+# _plz2
+# ---------------------------------------------------------------------------
+
+def test_plz2_standard():
+    assert _plz2("70439") == "70"
+
+def test_plz2_short():
+    assert _plz2("7") == "7"
+
+def test_plz2_empty():
+    assert _plz2("") == ""
+
+def test_plz2_nan_string():
+    assert _plz2("nan") == ""
+
+def test_plz2_none():
+    assert _plz2(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# _safe_float
+# ---------------------------------------------------------------------------
+
+def test_safe_float_positive():
+    assert _safe_float(3.14) == pytest.approx(3.14)
+
+def test_safe_float_zero_returns_none():
+    assert _safe_float(0) is None
+
+def test_safe_float_negative_returns_none():
+    assert _safe_float(-1) is None
+
+def test_safe_float_none():
+    assert _safe_float(None) is None
+
+def test_safe_float_string():
+    assert _safe_float("2.5") == pytest.approx(2.5)
+
+
+# ---------------------------------------------------------------------------
+# _normalize_ax_knr
+# ---------------------------------------------------------------------------
+
+def test_normalize_ara_ch():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "CH") == "511241"
+
+def test_normalize_ara_de():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "DE") == "491063"
+
+def test_normalize_ara_it():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "IT") == "491063"
+
+def test_normalize_passthrough():
+    assert _normalize_ax_knr("491063", "IT") == "491063"
+    assert _normalize_ax_knr("511241", "CH") == "511241"
+
+
+# ---------------------------------------------------------------------------
+# _tarifgruppe_for_knr
+# ---------------------------------------------------------------------------
+
+def test_tarifgruppe_sika_de():
+    tg = _tarifgruppe_for_knr("491063")
+    assert tg == "sika_de_stellplatz"
+
+def test_tarifgruppe_ssc():
+    tg = _tarifgruppe_for_knr("511241")
+    assert tg == "ssc_stellplatz"
+
+def test_tarifgruppe_atm_ch():
+    tg = _tarifgruppe_for_knr("527406")
+    assert tg == "sika_atm_ch"
+
+def test_tarifgruppe_unknown():
+    assert _tarifgruppe_for_knr("999999") == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _apply_cq_grauzone_filter
+# ---------------------------------------------------------------------------
+
+def _make_tb(auftr_vals, kref_vals) -> pd.DataFrame:
+    return pd.DataFrame({
+        "Auftragsnummer": auftr_vals,
+        "Kundenreferenz": kref_vals,
+    })
+
+
+def test_grauzone_removes_16digit_dinas_snr():
+    tb = _make_tb(
+        ["1234567890123456", "12345678", "1234567890123456"],
+        ["32000000", "32000000", "99999999"],
+    )
+    filtered = _apply_cq_grauzone_filter(tb)
+    assert len(filtered) == 2  # row 0 removed (16-digit + dinas SNR)
+
+
+def test_grauzone_keeps_8digit_rows():
+    tb = _make_tb(["12345678", "87654321"], ["28000000", "32999999"])
+    filtered = _apply_cq_grauzone_filter(tb)
+    assert len(filtered) == 2  # 8-digit rows kept regardless
+
+
+def test_grauzone_boundary_snr():
+    tb = _make_tb(
+        ["1234567890123456", "1234567890123457"],
+        ["21000000", "20999999"],  # at boundary and just below
+    )
+    filtered = _apply_cq_grauzone_filter(tb)
+    assert len(filtered) == 1  # only row 1 kept (20999999 < 21000000)
+
+
+# ---------------------------------------------------------------------------
+# match_clusters — smoke test with minimal synthetic DataFrames
+# ---------------------------------------------------------------------------
+
+def _minimal_dinas_df() -> pd.DataFrame:
+    """3 rows, 2 invoices for ERKA 25607 (→ KNR 491063 Sika DE)."""
+    return pd.DataFrame({
+        "rechnung_nr": [3000001, 3000001, 3000002],
+        "erka_kundennr": ["25607", "25607", "25607"],
+        "rechnung_date": [pd.Timestamp("2025-08-01")] * 3,
+        "leistung_date": [pd.Timestamp("2025-08-01"),
+                          pd.Timestamp("2025-08-02"),
+                          pd.Timestamp("2025-08-15")],
+        "template": ["erka_standard"] * 3,
+        "abs_plz": ["70439", "70439", "70439"],
+        "empf_plz": ["EC1A", "EC1A", "EC1A"],
+        "empf_land": ["GB", "GB", "GB"],
+        "gewicht_kg": [500.0, 600.0, 400.0],
+        "stp": [2.0, 2.0, 1.0],
+        "lm": [0.8, 0.8, 0.4],
+        "fracht": [300.0, 350.0, 180.0],
+        "diesel": [10.0, 12.0, 8.0],
+        "maut": [5.0, 6.0, 3.0],
+        "sonstige": ["[]", "[]", "[]"],
+        "bordero_nr": ["B001", "B001", "B002"],
+    })
+
+
+def _minimal_ax_df() -> pd.DataFrame:
+    """Minimal Sika.xlsx structure: 1 master + 1 sub = 1 cluster."""
+    return pd.DataFrame({
+        "Auftragsnummer": [1001100110011001, 1001100110011002],
+        "Kontonummer":    ["491063", "491063"],
+        "Abrechnungsstrecke": [9001, 9001],
+        "Zusammengefasst in": [9001.0, 9001.0],
+        "Betrag": [650.0, 0.0],
+        "Abrechnungsgewicht": [1100.0, 0.0],
+        "Leistungsdatum": [pd.Timestamp("2025-11-01"), pd.Timestamp("2025-11-01")],
+        "Von Ort": ["Stuttgart", "Stuttgart"],
+        "Nach Ort": ["London", "London"],
+    })
+
+
+def _minimal_tb_df() -> pd.DataFrame:
+    """TB rows matching the AX cluster members."""
+    return pd.DataFrame({
+        "Auftragsnummer": ["1001100110011001", "1001100110011002"],
+        "Kundenreferenz": ["REF1", "REF2"],
+        "Rechnungsnummer": ["0", "0"],
+        "Mastersendung": [None, None],
+        "Tonnage (eff.)": [600.0, 500.0],
+        "Stellplätze": [2.0, 2.0],
+        "Lademeter": [0.8, 0.8],
+        "Volumen": [2.0, 2.0],
+        "Versender PLZ": ["70439", "70439"],
+        "Empfänger PLZ": ["EC1A", "EC1A"],
+        "Empfänger Land": ["GB", "GB"],
+    })
+
+
+def test_match_clusters_smoke():
+    """Smoke test: match_clusters runs without error on minimal DataFrames."""
+    from tms.matching.cluster_matcher import match_clusters
+
+    dinas_df = _minimal_dinas_df()
+    ax_df    = _minimal_ax_df()
+    tb_df    = _minimal_tb_df()
+
+    result = match_clusters(dinas_df, ax_df, tb_df)
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) > 0
+    assert "family_key" in result.columns
+    assert "cluster_source" in result.columns
+    assert set(result["cluster_source"]).issubset({"DINAS", "AX"})
+
+
+def test_match_clusters_family_key_format():
+    """family_key has format knr|abs_plz2|empf_plz2|tarifgruppe."""
+    from tms.matching.cluster_matcher import match_clusters
+
+    result = match_clusters(
+        _minimal_dinas_df(),
+        _minimal_ax_df(),
+        _minimal_tb_df(),
+    )
+    for fkey in result["family_key"]:
+        parts = fkey.split("|")
+        assert len(parts) == 4, f"Bad family_key format: {fkey}"
+
+
+def test_match_clusters_output_columns():
+    """All _OUT_COLS present in result."""
+    from tms.matching.cluster_matcher import match_clusters, _OUT_COLS
+
+    result = match_clusters(
+        _minimal_dinas_df(),
+        _minimal_ax_df(),
+        _minimal_tb_df(),
+    )
+    for col in _OUT_COLS:
+        assert col in result.columns, f"Missing column: {col}"
