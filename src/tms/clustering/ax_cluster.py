@@ -18,6 +18,8 @@ from typing import Optional
 
 import pandas as pd
 
+from tms.clustering.plz_extractor import normalize_empf_plz, extract_plz_from_nach_ort
+
 logger = logging.getLogger(__name__)
 
 _TB_MAX_DATE = pd.Timestamp("2026-03-31")
@@ -167,15 +169,41 @@ def build_ax_clusters(
             p for r in tb_matched_rows
             if (p := _plz2(r.get("Versender PLZ")))
         })
-        empf_plzs = sorted({
-            p for r in tb_matched_rows
-            if (p := _plz2(r.get("Empfänger PLZ")))
-        })
+
+        # Collect empf_land first (needed for PLZ normalization)
         empf_laender = sorted({
             str(r.get("Empfänger Land") or "").strip().upper()
             for r in tb_matched_rows
             if r.get("Empfänger Land")
         })
+        _primary_land = empf_laender[0] if empf_laender else ""
+
+        empf_plzs = sorted({
+            p for r in tb_matched_rows
+            if (p := normalize_empf_plz(
+                r.get("Empfänger PLZ") or "",
+                str(r.get("Empfänger Land") or _primary_land),
+            ))
+        })
+
+        # plz_source: "field" if PLZ came from TB, "parsed_nach_ort" as fallback,
+        # "missing" if still empty.
+        if empf_plzs:
+            plz_source = "field"
+        else:
+            # Try to extract PLZ from Sika.xlsx Nach Ort text (fallback)
+            nach_ort_val = str(master.get("Nach Ort") or "")
+            nach_land_val = str(master.get("Nach Land") or _primary_land)
+            parsed = extract_plz_from_nach_ort(nach_ort_val, nach_land_val)
+            if parsed:
+                empf_plzs = [parsed]
+                plz_source = "parsed_nach_ort"
+                logger.info(
+                    "plz_from_nach_ort: cluster_id=%s nach_ort=%r land=%s → plz2=%s",
+                    int(cid), nach_ort_val, nach_land_val, parsed,
+                )
+            else:
+                plz_source = "missing"
 
         if len(sender_plzs) > 1:
             logger.info(
@@ -214,31 +242,34 @@ def build_ax_clusters(
             )
 
         rows.append({
-            "cluster_id":             int(cid),
-            "master_auftragsnr":      int(master["Auftragsnummer"]),
-            "master_knr":             str(master["Kontonummer"]),
-            "master_billing_kg":      billing_kg,
-            "master_fracht_eur":      float(master.get("Betrag") or 0),
-            "n_subs":                 n_subs,
-            "aggregat_gewicht_kg":    agg_kg,
-            "aggregat_stp":           agg_stp,
-            "aggregat_ldm":           agg_ldm,
-            "aggregat_volumen":       agg_vol,
-            "sender_plz_distinct":    sender_plzs,
+            "cluster_id":              int(cid),
+            "master_auftragsnr":       int(master["Auftragsnummer"]),
+            "master_knr":              str(master["Kontonummer"]),
+            "master_von_name":         str(master.get("Von Name") or ""),
+            "master_billing_kg":       billing_kg,
+            "master_fracht_eur":       float(master.get("Betrag") or 0),
+            "n_subs":                  n_subs,
+            "aggregat_gewicht_kg":     agg_kg,
+            "aggregat_stp":            agg_stp,
+            "aggregat_ldm":            agg_ldm,
+            "aggregat_volumen":        agg_vol,
+            "sender_plz_distinct":     sender_plzs,
             "empfaenger_plz_distinct": empf_plzs,
             "empfaenger_land_distinct": empf_laender,
-            "leistungsdatum":         pd.Timestamp(master.get("Leistungsdatum", pd.NaT)),
-            "tb_coverage_subs":       coverage,
-            "tb_gap_reason":          gap_reason,
-            "consistency_check":      ok,
+            "leistungsdatum":          pd.Timestamp(master.get("Leistungsdatum", pd.NaT)),
+            "tb_coverage_subs":        coverage,
+            "tb_gap_reason":           gap_reason,
+            "consistency_check":       ok,
+            "plz_source":              plz_source,
         })
 
     _COLS = [
-        "cluster_id", "master_auftragsnr", "master_knr",
+        "cluster_id", "master_auftragsnr", "master_knr", "master_von_name",
         "master_billing_kg", "master_fracht_eur", "n_subs",
         "aggregat_gewicht_kg", "aggregat_stp", "aggregat_ldm", "aggregat_volumen",
         "sender_plz_distinct", "empfaenger_plz_distinct", "empfaenger_land_distinct",
         "leistungsdatum", "tb_coverage_subs", "tb_gap_reason", "consistency_check",
+        "plz_source",
     ]
     if not rows:
         return pd.DataFrame(columns=_COLS)

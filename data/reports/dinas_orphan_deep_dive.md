@@ -15,8 +15,8 @@ Klassifikationsschema (zeitunabhängig, Etappe 8f):
 
 | Klassifikation | Familien | Gesamt-Fracht |
 |----------------|---------|--------------|
-| `likely_ax_successor_found` | 15 | 634,731 € |
-| `ax_coverage_gap` | 17 | 827,784 € |
+| `likely_ax_successor_found` | 18 | 1,020,257 € |
+| `ax_coverage_gap` | 7 | 55,520 € |
 
 ---
 
@@ -60,7 +60,7 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 | AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
 |--------------|---------|----------------|-----------|-----------------|
-| `491063|70|LU|sika_de_stellplatz` | 49 | 1,213 € | GB | 2026-03-27 |
+| `491063|70|LU|sika_de_stellplatz` | 45 | 1,176 € | GB | 2026-03-27 |
 | `491063|70|PO|sika_de_stellplatz` | 8 | 1,894 € | GB | 2026-02-27 |
 | `491063|70|S8|sika_de_stellplatz` | 1 | 336 € | GB | 2026-01-13 |
 
@@ -78,7 +78,7 @@ Plausible AX-Nachfolger-Familien (bis 3):
 | Anzahl Dinas-Cluster | 4 |
 | Letzter Cluster | 2025-06-03 |
 | Tage vor Cutoff | 115 |
-| **Klassifikation** | `ax_coverage_gap` |
+| **Klassifikation** | `likely_ax_successor_found` |
 
 **Dinas-Cluster:**
 
@@ -91,43 +91,18 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 **Near-Match-Analyse auf AX-Seite:**
 
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-06-03 (115 Tage vor Cutoff).
+> AX hat 2 Familie(n) mit gleicher abs_plz=70 und Land=ES, andere empf_plz
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `511241|70|28|ssc_stellplatz` | 3 | 922 € | ES | 2026-01-16 |
+| `511241|70|19|ssc_stellplatz` | 6 | 1,169 € | ES | 2026-03-03 |
 
 ---
 
-### 3. `511241|70|19|ssc_stellplatz`
-
-| Feld | Wert |
-|------|------|
-| Kunde (KNR) | 511241 |
-| Absender-PLZ 2-st. | 70 |
-| Empfänger-PLZ 2-st. | 19 |
-| Tarifgruppe | ssc_stellplatz |
-| Gesamt-Fracht | 152,151 € |
-| Anzahl Dinas-Cluster | 7 |
-| Letzter Cluster | 2025-07-01 |
-| Tage vor Cutoff | 87 |
-| **Klassifikation** | `ax_coverage_gap` |
-
-**Dinas-Cluster:**
-
-| Datum | Cluster-ID | Fracht (€) | Basis.-Wert | €/Einheit |
-|-------|-----------|-----------|------------|----------|
-| 2025-07-01 | 3775371 | 40,721.11 | – | – |
-| 2025-06-26 | 3771132 | 8,550.80 | – | – |
-| 2025-05-28 | 3767155 | 2,137.70 | – | – |
-| 2025-04-25 | 3763115 | 350.03 | – | – |
-| 2025-04-01 | 3763113 | 44,986.67 | – | – |
-| 2025-01-03 | 3749646 | 42,404.37 | – | – |
-| 2024-12-03 | 3744960 | 13,000.66 | – | – |
-
-**Near-Match-Analyse auf AX-Seite:**
-
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-07-01 (87 Tage vor Cutoff).
-
----
-
-### 4. `491063|70|13|sika_de_stellplatz`
+### 3. `491063|70|13|sika_de_stellplatz`
 
 | Feld | Wert |
 |------|------|
@@ -165,52 +140,13 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 | AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
 |--------------|---------|----------------|-----------|-----------------|
-| `491063|70|09|sika_de_stellplatz` | 46 | 817 € | ES | 2026-03-27 |
-| `491063|70|28|sika_de_stellplatz` | 18 | 579 € | ES | 2026-03-20 |
+| `491063|70|15|sika_de_stellplatz` | 40 | 765 € | ES | 2026-03-27 |
+| `491063|70|28|sika_de_stellplatz` | 15 | 511 € | ES | 2026-03-20 |
 | `491063|70|08|sika_de_stellplatz` | 1 | 223 € | ES | 2026-01-16 |
 
 ---
 
-### 5. `511241|70|38|ssc_stellplatz`
-
-| Feld | Wert |
-|------|------|
-| Kunde (KNR) | 511241 |
-| Absender-PLZ 2-st. | 70 |
-| Empfänger-PLZ 2-st. | 38 |
-| Tarifgruppe | ssc_stellplatz |
-| Gesamt-Fracht | 106,637 € |
-| Anzahl Dinas-Cluster | 8 |
-| Letzter Cluster | 2025-07-03 |
-| Tage vor Cutoff | 85 |
-| **Klassifikation** | `likely_ax_successor_found` |
-
-**Dinas-Cluster:**
-
-| Datum | Cluster-ID | Fracht (€) | Basis.-Wert | €/Einheit |
-|-------|-----------|-----------|------------|----------|
-| 2025-07-03 | 3775373 | 19,092.93 | 141 | 135.41 |
-| 2025-05-30 | 3771126 | 10,779.89 | 87 | 123.91 |
-| 2025-04-30 | 3767098 | 12,531.95 | 135 | 92.83 |
-| 2025-04-03 | 3763116 | 20,139.03 | 154 | 130.77 |
-| 2025-03-06 | 3758464 | 8,073.60 | 96 | 84.10 |
-| 2025-02-06 | 3754037 | 12,647.35 | 161 | 78.55 |
-| 2025-01-09 | 3749648 | 16,643.33 | 135 | 123.28 |
-| 2024-12-05 | 3744963 | 6,728.56 | 23 | 292.55 |
-
-**Near-Match-Analyse auf AX-Seite:**
-
-> AX hat 1 Familie(n) mit gleicher abs_plz=70 und Land=PT, andere empf_plz
-
-Plausible AX-Nachfolger-Familien (bis 3):
-
-| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
-|--------------|---------|----------------|-----------|-----------------|
-| `511241|70|54|ssc_stellplatz` | 2 | 2,360 € | PT | 2026-02-18 |
-
----
-
-### 6. `511241|70|20|ssc_stellplatz`
+### 4. `511241|70|20|ssc_stellplatz`
 
 | Feld | Wert |
 |------|------|
@@ -222,7 +158,7 @@ Plausible AX-Nachfolger-Familien (bis 3):
 | Anzahl Dinas-Cluster | 6 |
 | Letzter Cluster | 2025-06-30 |
 | Tage vor Cutoff | 88 |
-| **Klassifikation** | `ax_coverage_gap` |
+| **Klassifikation** | `likely_ax_successor_found` |
 
 **Dinas-Cluster:**
 
@@ -237,11 +173,18 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 **Near-Match-Analyse auf AX-Seite:**
 
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-06-30 (88 Tage vor Cutoff).
+> AX hat 2 Familie(n) mit gleicher abs_plz=70 und Land=IT, andere empf_plz
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `511241|70|41|ssc_stellplatz` | 7 | 578 € | IT | 2026-02-04 |
+| `511241|70|28|ssc_stellplatz` | 2 | 140 € | IT | 2025-10-15 |
 
 ---
 
-### 7. `511241|70|IP|ssc_stellplatz`
+### 5. `511241|70|IP|ssc_stellplatz`
 
 | Feld | Wert |
 |------|------|
@@ -253,7 +196,7 @@ Plausible AX-Nachfolger-Familien (bis 3):
 | Anzahl Dinas-Cluster | 3 |
 | Letzter Cluster | 2025-06-03 |
 | Tage vor Cutoff | 115 |
-| **Klassifikation** | `ax_coverage_gap` |
+| **Klassifikation** | `likely_ax_successor_found` |
 
 **Dinas-Cluster:**
 
@@ -265,11 +208,17 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 **Near-Match-Analyse auf AX-Seite:**
 
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-06-03 (115 Tage vor Cutoff).
+> AX hat 1 Familie(n) mit gleicher abs_plz=70 und Land=GB, andere empf_plz
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `511241|70|LU|ssc_stellplatz` | 4 | 1,633 € | GB | 2026-01-23 |
 
 ---
 
-### 8. `511241|70|LS|ssc_stellplatz`
+### 6. `511241|70|LS|ssc_stellplatz`
 
 | Feld | Wert |
 |------|------|
@@ -281,7 +230,7 @@ Plausible AX-Nachfolger-Familien (bis 3):
 | Anzahl Dinas-Cluster | 3 |
 | Letzter Cluster | 2025-05-02 |
 | Tage vor Cutoff | 147 |
-| **Klassifikation** | `ax_coverage_gap` |
+| **Klassifikation** | `likely_ax_successor_found` |
 
 **Dinas-Cluster:**
 
@@ -293,11 +242,17 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 **Near-Match-Analyse auf AX-Seite:**
 
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-05-02 (147 Tage vor Cutoff).
+> AX hat 1 Familie(n) mit gleicher abs_plz=70 und Land=GB, andere empf_plz
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `511241|70|LU|ssc_stellplatz` | 4 | 1,633 € | GB | 2026-01-23 |
 
 ---
 
-### 9. `511241|70|AL|ssc_stellplatz`
+### 7. `511241|70|AL|ssc_stellplatz`
 
 | Feld | Wert |
 |------|------|
@@ -309,7 +264,7 @@ Plausible AX-Nachfolger-Familien (bis 3):
 | Anzahl Dinas-Cluster | 2 |
 | Letzter Cluster | 2025-07-01 |
 | Tage vor Cutoff | 87 |
-| **Klassifikation** | `ax_coverage_gap` |
+| **Klassifikation** | `likely_ax_successor_found` |
 
 **Dinas-Cluster:**
 
@@ -320,46 +275,115 @@ Plausible AX-Nachfolger-Familien (bis 3):
 
 **Near-Match-Analyse auf AX-Seite:**
 
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-07-01 (87 Tage vor Cutoff).
+> AX hat 1 Familie(n) mit gleicher abs_plz=70 und Land=GB, andere empf_plz
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `511241|70|LU|ssc_stellplatz` | 4 | 1,633 € | GB | 2026-01-23 |
 
 ---
 
-### 10. `511241|70|DU|ssc_stellplatz`
+### 8. `511241|20|70|ssc_stellplatz`
 
 | Feld | Wert |
 |------|------|
 | Kunde (KNR) | 511241 |
-| Absender-PLZ 2-st. | 70 |
-| Empfänger-PLZ 2-st. | DU |
+| Absender-PLZ 2-st. | 20 |
+| Empfänger-PLZ 2-st. | 70 |
 | Tarifgruppe | ssc_stellplatz |
-| Gesamt-Fracht | 60,794 € |
-| Anzahl Dinas-Cluster | 14 |
-| Letzter Cluster | 2025-07-18 |
-| Tage vor Cutoff | 70 |
+| Gesamt-Fracht | 38,335 € |
+| Anzahl Dinas-Cluster | 1 |
+| Letzter Cluster | 2025-07-01 |
+| Tage vor Cutoff | 87 |
+| **Klassifikation** | `likely_ax_successor_found` |
+
+**Dinas-Cluster:**
+
+| Datum | Cluster-ID | Fracht (€) | Basis.-Wert | €/Einheit |
+|-------|-----------|-----------|------------|----------|
+| 2025-07-01 | 2384360 | 38,335.00 | – | – |
+
+**Near-Match-Analyse auf AX-Seite:**
+
+> AX hat 1 Familie(n) mit Land=DE und tarifgruppe=ssc_stellplatz, andere PLZ-Kombination
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `511241|28|70|ssc_stellplatz` | 100 | 3,561 € | DE | 2026-03-30 |
+
+---
+
+### 9. `491063|70|BB|sika_de_stellplatz`
+
+| Feld | Wert |
+|------|------|
+| Kunde (KNR) | 491063 |
+| Absender-PLZ 2-st. | 70 |
+| Empfänger-PLZ 2-st. | BB |
+| Tarifgruppe | sika_de_stellplatz |
+| Gesamt-Fracht | 35,197 € |
+| Anzahl Dinas-Cluster | 2 |
+| Letzter Cluster | 2025-07-15 |
+| Tage vor Cutoff | 73 |
+| **Klassifikation** | `likely_ax_successor_found` |
+
+**Dinas-Cluster:**
+
+| Datum | Cluster-ID | Fracht (€) | Basis.-Wert | €/Einheit |
+|-------|-----------|-----------|------------|----------|
+| 2025-07-15 | 3774971 | 19,555.73 | 205 | 95.39 |
+| 2025-05-02 | 3764492 | 15,641.00 | 136 | 115.01 |
+
+**Near-Match-Analyse auf AX-Seite:**
+
+> AX hat 3 Familie(n) mit gleicher abs_plz=70 und Land=GB, andere empf_plz
+
+Plausible AX-Nachfolger-Familien (bis 3):
+
+| AX-Family-Key | Clusters | ∅ Fracht/Cluster | Empf.-Land | Letzte Aktivität |
+|--------------|---------|----------------|-----------|-----------------|
+| `491063|70|LU|sika_de_stellplatz` | 45 | 1,176 € | GB | 2026-03-27 |
+| `491063|70|PO|sika_de_stellplatz` | 8 | 1,894 € | GB | 2026-02-27 |
+| `491063|70|S8|sika_de_stellplatz` | 1 | 336 € | GB | 2026-01-13 |
+
+---
+
+### 10. `527406|70|28|sika_atm_ch`
+
+| Feld | Wert |
+|------|------|
+| Kunde (KNR) | 527406 |
+| Absender-PLZ 2-st. | 70 |
+| Empfänger-PLZ 2-st. | 28 |
+| Tarifgruppe | sika_atm_ch |
+| Gesamt-Fracht | 34,172 € |
+| Anzahl Dinas-Cluster | 10 |
+| Letzter Cluster | 2025-08-13 |
+| Tage vor Cutoff | 44 |
 | **Klassifikation** | `ax_coverage_gap` |
 
 **Dinas-Cluster:**
 
 | Datum | Cluster-ID | Fracht (€) | Basis.-Wert | €/Einheit |
 |-------|-----------|-----------|------------|----------|
-| 2025-07-18 | 3775597 | 3,886.50 | 35 | 111.04 |
-| 2025-07-04 | 3775375 | 7,810.97 | 37 | 211.11 |
-| 2025-06-06 | 3771128 | 6,289.24 | 50 | 125.78 |
-| 2025-05-02 | 3767100 | 5,274.70 | 36 | 146.52 |
-| 2025-04-04 | 3763118 | 7,307.69 | 57 | 128.21 |
-| 2025-03-07 | 3758466 | 11,253.40 | 97 | 116.01 |
-| 2025-02-14 | 1103235 | 2,145.25 | – | – |
-| 2025-01-28 | 3750569 | 1,160.55 | 9 | 128.95 |
-| 2025-01-17 | 3749650 | 1,630.69 | – | – |
-| 2025-01-10 | 3749651 | 3,706.45 | 34 | 109.01 |
-| 2025-01-10 | 3754039 | 8,183.35 | 67 | 122.14 |
-| 2025-01-03 | 3753086 | 180.05 | 1 | 180.05 |
-| 2024-12-06 | 3744965 | 1,386.95 | 10 | 138.69 |
-| 2024-11-29 | 3745727 | 578.05 | – | – |
+| 2025-08-13 | 3776369 | 213.60 | – | – |
+| 2025-07-18 | 3774730 | 3,194.60 | – | – |
+| 2025-06-30 | 3772895 | 5,113.85 | – | – |
+| 2025-05-19 | 3766774 | 3,834.20 | – | – |
+| 2025-05-02 | 3764377 | 3,929.70 | – | – |
+| 2025-04-15 | 3762926 | 5,748.40 | – | – |
+| 2025-03-31 | 3760707 | 2,582.95 | – | – |
+| 2025-03-04 | 3758170 | 2,691.50 | – | – |
+| 2025-02-17 | 3761831 | 2,164.25 | – | – |
+| 2025-02-03 | 3751486 | 4,698.60 | – | – |
 
 **Near-Match-Analyse auf AX-Seite:**
 
-> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-07-18 (70 Tage vor Cutoff).
+> Kein plausibles AX-Pendant. Letzter Dinas-Cluster: 2025-08-13 (44 Tage vor Cutoff).
 
 ---
 
@@ -370,25 +394,15 @@ Das sind potenziell **unabgerechnete Lanes** in der POST-Ära.
 
 | Family-Key | Letzter Dinas | Tage vor Cutoff | Gesamt-Fracht |
 |-----------|-------------|----------------|--------------|
-| `511241|70|17|ssc_stellplatz` | 2025-06-03 | 115 | 159,611 € |
-| `511241|70|19|ssc_stellplatz` | 2025-07-01 | 87 | 152,151 € |
-| `511241|70|20|ssc_stellplatz` | 2025-06-30 | 88 | 106,617 € |
-| `511241|70|IP|ssc_stellplatz` | 2025-06-03 | 115 | 103,302 € |
-| `511241|70|LS|ssc_stellplatz` | 2025-05-02 | 147 | 83,097 € |
-| `511241|70|AL|ssc_stellplatz` | 2025-07-01 | 87 | 73,777 € |
-| `511241|70|DU|ssc_stellplatz` | 2025-07-18 | 70 | 60,794 € |
 | `527406|70|28|sika_atm_ch` | 2025-08-13 | 44 | 34,172 € |
-| `511241|70|28|ssc_stellplatz` | 2025-05-02 | 147 | 26,896 € |
 | `527406|70|36|sika_atm_ch` | 2025-06-16 | 102 | 20,126 € |
-| `511241|70|41|ssc_stellplatz` | 2025-06-30 | 88 | 4,211 € |
-| `511241|70|LU|ssc_stellplatz` | 2025-07-11 | 77 | 1,808 € |
 | `527406|70|29|sika_atm_ch` | 2025-08-01 | 56 | 528 € |
 | `491063|72|95|sika_de_stellplatz` | 2025-03-10 | 200 | 296 € |
 | `491063|41|72|sika_de_stellplatz` | 2025-02-20 | 218 | 234 € |
 | `491063|47|70|sika_de_stellplatz` | 2025-07-28 | 60 | 164 € |
 | `491063|LU|72|sika_de_stellplatz` | 2025-02-25 | 213 | 0 € |
 
-**Gesamt ax_coverage_gap Volumen: 827,784 €**
+**Gesamt ax_coverage_gap Volumen: 55,520 €**
 
 ---
 

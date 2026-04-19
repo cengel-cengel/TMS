@@ -69,8 +69,20 @@ _AX_KNR_NORMALIZE: dict[str, tuple[str, str]] = {
 }
 
 
-def _normalize_ax_knr(knr: str, empf_land: str) -> str:
-    """Resolve combined AX accounts to the canonical Dinas KNR for family_key matching."""
+def _normalize_ax_knr(knr: str, empf_land: str, von_name: str = "") -> str:
+    """Resolve combined AX accounts to the canonical Dinas KNR for family_key matching.
+
+    For ARA_Sika_DE+CH:
+      - CH destination → always SSC (511241)
+      - non-CH + Von Name contains "Supply Center" → SSC (511241, export routes)
+      - non-CH otherwise → Sika DE (491063)
+    """
+    if knr == "ARA_Sika_DE+CH":
+        if str(empf_land).strip().upper() == "CH":
+            return "511241"
+        if "supply center" in str(von_name).strip().lower():
+            return "511241"
+        return "491063"
     if knr in _AX_KNR_NORMALIZE:
         ch_knr, de_knr = _AX_KNR_NORMALIZE[knr]
         return ch_knr if str(empf_land).strip().upper() == "CH" else de_knr
@@ -511,7 +523,8 @@ def match_clusters(
         )
 
         # Normalize combined AX accounts to canonical Dinas KNR for family matching
-        knr = _normalize_ax_knr(master_knr, empf_land)
+        von_name = str(ac.get("master_von_name") or "")
+        knr = _normalize_ax_knr(master_knr, empf_land, von_name)
         tarifgruppe = _tarifgruppe_for_knr(knr)
 
         agg_stp = _safe_float(ac.get("aggregat_stp"))

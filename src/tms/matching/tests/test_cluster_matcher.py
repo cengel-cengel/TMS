@@ -74,6 +74,30 @@ def test_normalize_passthrough():
     assert _normalize_ax_knr("491063", "IT") == "491063"
     assert _normalize_ax_knr("511241", "CH") == "511241"
 
+def test_normalize_ssc_export_ie():
+    """SSC Von Name on non-CH destination → 511241 (SSC), not 491063."""
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "IE", "Sika Supply Center AG") == "511241"
+
+def test_normalize_ssc_export_es():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "ES", "Sika Supply Center AG") == "511241"
+
+def test_normalize_ssc_export_gb():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "GB", "Sika Supply Center AG") == "511241"
+
+def test_normalize_sika_de_export_it():
+    """Sika DE Von Name on non-CH destination → 491063."""
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "IT", "Sika Deutschland GmbH") == "491063"
+
+def test_normalize_sika_de_export_ie():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "IE", "Sika Deutschland GmbH") == "491063"
+
+def test_normalize_ssc_ch_always_511241():
+    """CH destination always SSC, regardless of Von Name."""
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "CH", "Sika Deutschland GmbH") == "511241"
+
+def test_normalize_supply_center_case_insensitive():
+    assert _normalize_ax_knr("ARA_Sika_DE+CH", "GB", "SIKA SUPPLY CENTER AG") == "511241"
+
 
 # ---------------------------------------------------------------------------
 # _tarifgruppe_for_knr
