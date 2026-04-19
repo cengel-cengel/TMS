@@ -1,0 +1,483 @@
+kunde,route,tarifgruppe,n,median_pct,min_pct,max_pct,spread,interpretation
+GEZE GmbH,AT-10,weight_100kg,5,-3.62,-6.46,-1.46,4.99,Diesel-konsistent
+GEZE GmbH,AT-11,weight_100kg,1,-6.45,-6.45,-6.45,0.00,zu wenig Daten
+GEZE GmbH,AT-12,weight_100kg,5,-2.61,-5.84,-1.46,4.37,atypisch
+GEZE GmbH,AT-22,weight_100kg,28,-5.80,-8.47,-1.47,7.00,"streut, prüfen"
+GEZE GmbH,AT-23,weight_100kg,46,-3.52,-24.44,7.29,31.73,"streut, prüfen"
+GEZE GmbH,AT-24,weight_100kg,10,-3.51,-8.45,7.29,15.74,"streut, prüfen"
+GEZE GmbH,AT-27,weight_100kg,1,-6.37,-6.37,-6.37,0.00,zu wenig Daten
+GEZE GmbH,AT-28,weight_100kg,1,-7.28,-7.28,-7.28,0.00,zu wenig Daten
+GEZE GmbH,AT-31,weight_100kg,5,-3.44,-5.81,-2.04,3.77,Diesel-konsistent
+GEZE GmbH,AT-34,weight_100kg,2,-4.44,-6.44,-2.44,4.00,zu wenig Daten
+GEZE GmbH,AT-35,weight_100kg,2,-5.54,-8.47,-2.62,5.85,zu wenig Daten
+GEZE GmbH,AT-40,weight_100kg,293,-3.43,-28.93,7.29,36.23,"streut, prüfen"
+GEZE GmbH,AT-42,weight_100kg,1,-2.43,-2.43,-2.43,0.00,zu wenig Daten
+GEZE GmbH,AT-44,weight_100kg,6,-2.04,-15.52,-1.47,14.05,"streut, prüfen"
+GEZE GmbH,AT-45,weight_100kg,13,-3.43,-8.46,-1.47,6.99,"streut, prüfen"
+GEZE GmbH,AT-46,weight_100kg,6,-2.04,-7.30,7.28,14.58,"streut, prüfen"
+GEZE GmbH,AT-48,weight_100kg,2,-21.58,-41.69,-1.47,40.22,zu wenig Daten
+GEZE GmbH,AT-49,weight_100kg,44,-2.62,-8.47,12.06,20.53,"streut, prüfen"
+GEZE GmbH,AT-50,weight_100kg,14,-4.71,-8.47,-2.03,6.44,"streut, prüfen"
+GEZE GmbH,AT-51,weight_100kg,19,-2.62,-8.47,7.29,15.76,"streut, prüfen"
+GEZE GmbH,AT-53,weight_100kg,121,-3.43,-31.02,7.29,38.31,"streut, prüfen"
+GEZE GmbH,AT-54,weight_100kg,2,-3.61,-3.61,-3.60,0.01,zu wenig Daten
+GEZE GmbH,AT-61,weight_100kg,1,7.26,7.26,7.26,0.00,zu wenig Daten
+GEZE GmbH,AT-62,weight_100kg,18,-3.53,-8.47,7.29,15.76,"streut, prüfen"
+GEZE GmbH,AT-64,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,AT-67,weight_100kg,18,-3.43,-8.48,7.27,15.75,"streut, prüfen"
+GEZE GmbH,AT-68,weight_100kg,1,-8.48,-8.48,-8.48,0.00,zu wenig Daten
+GEZE GmbH,AT-69,weight_100kg,11,-5.82,-8.48,-2.60,5.88,"streut, prüfen"
+GEZE GmbH,AT-73,weight_100kg,13,-2.61,-8.47,-1.49,6.98,"streut, prüfen"
+GEZE GmbH,AT-80,weight_100kg,47,-2.62,-8.49,7.31,15.80,"streut, prüfen"
+GEZE GmbH,AT-82,weight_100kg,2,-5.46,-8.46,-2.45,6.01,zu wenig Daten
+GEZE GmbH,AT-85,weight_100kg,1,-5.83,-5.83,-5.83,0.00,zu wenig Daten
+GEZE GmbH,AT-86,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,AT-90,weight_100kg,12,-2.74,-7.28,7.28,14.56,"streut, prüfen"
+GEZE GmbH,AT-91,weight_100kg,13,-3.44,-8.46,-1.49,6.97,"streut, prüfen"
+GEZE GmbH,AT-93,weight_100kg,25,-3.61,-8.47,-1.49,6.99,"streut, prüfen"
+GEZE GmbH,AT-94,weight_100kg,1,-5.81,-5.81,-5.81,0.00,zu wenig Daten
+GEZE GmbH,AT-95,weight_100kg,5,-5.81,-6.44,-2.60,3.84,Diesel-konsistent
+GEZE GmbH,AT-98,weight_100kg,1,-1.49,-1.49,-1.49,0.00,zu wenig Daten
+GEZE GmbH,CH-12,weight_100kg,4,-40.49,-40.56,-40.43,0.13,Calculator-Prüfung
+GEZE GmbH,CH-14,weight_100kg,3,-39.30,-43.23,-33.72,9.50,"streut, prüfen"
+GEZE GmbH,CH-17,weight_100kg,1,-68.69,-68.69,-68.69,0.00,zu wenig Daten
+GEZE GmbH,CH-18,weight_100kg,2,-33.46,-40.52,-26.40,14.11,zu wenig Daten
+GEZE GmbH,CH-19,weight_100kg,2,-35.06,-35.09,-35.04,0.06,zu wenig Daten
+GEZE GmbH,CH-28,weight_100kg,2,-42.45,-46.17,-38.74,7.43,zu wenig Daten
+GEZE GmbH,CH-31,weight_100kg,1,-44.99,-44.99,-44.99,0.00,zu wenig Daten
+GEZE GmbH,CH-32,weight_100kg,2,-45.10,-45.10,-45.10,0.00,zu wenig Daten
+GEZE GmbH,CH-35,weight_100kg,1,-44.94,-44.94,-44.94,0.00,zu wenig Daten
+GEZE GmbH,CH-36,weight_100kg,11,-44.00,-69.39,-43.59,25.80,"streut, prüfen"
+GEZE GmbH,CH-40,weight_100kg,1,-47.23,-47.23,-47.23,0.00,zu wenig Daten
+GEZE GmbH,CH-41,weight_100kg,1,-47.46,-47.46,-47.46,0.00,zu wenig Daten
+GEZE GmbH,CH-42,weight_100kg,1,-32.86,-32.86,-32.86,0.00,zu wenig Daten
+GEZE GmbH,CH-45,weight_100kg,1,-42.47,-42.47,-42.47,0.00,zu wenig Daten
+GEZE GmbH,CH-46,weight_100kg,9,-46.27,-46.33,-42.47,3.86,Calculator-Prüfung
+GEZE GmbH,CH-49,weight_100kg,32,-46.13,-50.71,-31.63,19.08,"streut, prüfen"
+GEZE GmbH,CH-50,weight_100kg,2,-44.32,-46.17,-42.47,3.70,zu wenig Daten
+GEZE GmbH,CH-54,weight_100kg,22,-42.97,-71.57,-10.69,60.88,"streut, prüfen"
+GEZE GmbH,CH-57,weight_100kg,6,-38.89,-39.00,-29.31,9.69,"streut, prüfen"
+GEZE GmbH,CH-60,weight_100kg,1,-38.09,-38.09,-38.09,0.00,zu wenig Daten
+GEZE GmbH,CH-62,weight_100kg,62,-38.07,-54.13,-16.88,37.26,"streut, prüfen"
+GEZE GmbH,CH-66,weight_100kg,2,-49.13,-52.08,-46.18,5.90,zu wenig Daten
+GEZE GmbH,CH-80,weight_100kg,3,-47.23,-47.27,-43.84,3.43,Calculator-Prüfung
+GEZE GmbH,CH-82,weight_100kg,1,-39.09,-39.09,-39.09,0.00,zu wenig Daten
+GEZE GmbH,CH-83,weight_100kg,84,-41.03,-63.23,-14.54,48.69,"streut, prüfen"
+GEZE GmbH,CH-84,weight_100kg,2,-47.25,-47.27,-47.23,0.03,zu wenig Daten
+GEZE GmbH,CH-85,weight_100kg,1,-46.11,-46.11,-46.11,0.00,zu wenig Daten
+GEZE GmbH,CH-89,weight_100kg,22,-46.13,-46.33,-12.06,34.27,"streut, prüfen"
+GEZE GmbH,CH-90,weight_100kg,30,-45.59,-50.63,-37.88,12.75,"streut, prüfen"
+GEZE GmbH,CH-91,weight_100kg,1,-45.60,-45.60,-45.60,0.00,zu wenig Daten
+GEZE GmbH,CH-92,weight_100kg,1,-45.78,-45.78,-45.78,0.00,zu wenig Daten
+GEZE GmbH,CH-94,weight_100kg,50,-44.77,-50.09,-11.59,38.50,"streut, prüfen"
+GEZE GmbH,ES-03,weight_100kg,7,-5.81,-10.93,-1.48,9.45,"streut, prüfen"
+GEZE GmbH,ES-04,weight_100kg,1,-3.43,-3.43,-3.43,0.00,zu wenig Daten
+GEZE GmbH,ES-07,weight_100kg,7,-3.61,-7.27,7.29,14.56,"streut, prüfen"
+GEZE GmbH,ES-08,weight_100kg,141,-6.44,-60.31,86.40,146.71,"streut, prüfen"
+GEZE GmbH,ES-09,weight_100kg,1,-3.62,-3.62,-3.62,0.00,zu wenig Daten
+GEZE GmbH,ES-12,weight_100kg,1,-5.80,-5.80,-5.80,0.00,zu wenig Daten
+GEZE GmbH,ES-13,weight_100kg,9,-3.39,-6.45,-1.48,4.97,Diesel-konsistent
+GEZE GmbH,ES-14,weight_100kg,3,-2.04,-2.04,-1.48,0.56,atypisch
+GEZE GmbH,ES-15,weight_100kg,43,-3.61,-10.93,46.34,57.28,"streut, prüfen"
+GEZE GmbH,ES-17,weight_100kg,28,-3.03,-10.93,7.27,18.20,"streut, prüfen"
+GEZE GmbH,ES-18,weight_100kg,7,-5.81,-8.47,-1.48,6.99,"streut, prüfen"
+GEZE GmbH,ES-23,weight_100kg,1,-3.43,-3.43,-3.43,0.00,zu wenig Daten
+GEZE GmbH,ES-25,weight_100kg,2,-2.45,-3.42,-1.47,1.95,zu wenig Daten
+GEZE GmbH,ES-26,weight_100kg,9,-3.44,-8.46,-1.47,6.99,"streut, prüfen"
+GEZE GmbH,ES-27,weight_100kg,3,-2.04,-10.94,-1.48,9.46,"streut, prüfen"
+GEZE GmbH,ES-28,weight_100kg,50,-2.61,-30.92,7.30,38.23,"streut, prüfen"
+GEZE GmbH,ES-29,weight_100kg,3,-5.81,-8.47,-3.44,5.02,"streut, prüfen"
+GEZE GmbH,ES-30,weight_100kg,18,-5.81,-8.47,-1.48,6.99,"streut, prüfen"
+GEZE GmbH,ES-31,weight_100kg,4,-3.02,-8.47,-1.47,6.99,"streut, prüfen"
+GEZE GmbH,ES-32,weight_100kg,1,-2.44,-2.44,-2.44,0.00,zu wenig Daten
+GEZE GmbH,ES-33,weight_100kg,23,-3.61,-10.93,7.29,18.22,"streut, prüfen"
+GEZE GmbH,ES-35,weight_100kg,2,-37.12,-37.12,-37.11,0.00,zu wenig Daten
+GEZE GmbH,ES-36,weight_100kg,67,-5.81,-62.41,7.28,69.69,"streut, prüfen"
+GEZE GmbH,ES-38,weight_100kg,4,-38.77,-43.87,-29.54,14.33,"streut, prüfen"
+GEZE GmbH,ES-39,weight_100kg,8,-4.71,-7.28,-2.62,4.66,Diesel-konsistent
+GEZE GmbH,ES-41,weight_100kg,4,-9.70,-10.94,-2.05,8.89,"streut, prüfen"
+GEZE GmbH,ES-42,weight_100kg,6,-2.86,-8.46,-2.61,5.85,"streut, prüfen"
+GEZE GmbH,ES-43,weight_100kg,6,-4.94,-10.93,-1.48,9.45,"streut, prüfen"
+GEZE GmbH,ES-45,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,ES-46,weight_100kg,20,-2.63,-10.93,-1.48,9.45,"streut, prüfen"
+GEZE GmbH,ES-47,weight_100kg,1,-2.44,-2.44,-2.44,0.00,zu wenig Daten
+GEZE GmbH,ES-48,weight_100kg,26,-3.44,-15.52,7.28,22.80,"streut, prüfen"
+GEZE GmbH,FR-01,weight_100kg,37,-2.44,-30.43,458.61,489.04,"streut, prüfen"
+GEZE GmbH,FR-11,weight_100kg,1,1.99,1.99,1.99,0.00,zu wenig Daten
+GEZE GmbH,FR-13,weight_100kg,9,-3.61,-7.27,-1.48,5.80,"streut, prüfen"
+GEZE GmbH,FR-14,weight_100kg,60,-1.72,-18.14,285.39,303.53,"streut, prüfen"
+GEZE GmbH,FR-17,weight_100kg,1,-8.47,-8.47,-8.47,0.00,zu wenig Daten
+GEZE GmbH,FR-23,weight_100kg,1,-2.43,-2.43,-2.43,0.00,zu wenig Daten
+GEZE GmbH,FR-27,weight_100kg,19,-2.62,-8.47,-1.48,6.99,"streut, prüfen"
+GEZE GmbH,FR-28,weight_100kg,1,-29.86,-29.86,-29.86,0.00,zu wenig Daten
+GEZE GmbH,FR-31,weight_100kg,8,-2.04,-7.28,2.30,9.57,"streut, prüfen"
+GEZE GmbH,FR-33,weight_100kg,1,-2.62,-2.62,-2.62,0.00,zu wenig Daten
+GEZE GmbH,FR-34,weight_100kg,2,-7.46,-8.47,-6.44,2.02,zu wenig Daten
+GEZE GmbH,FR-35,weight_100kg,2,-5.03,-6.45,-3.61,2.85,zu wenig Daten
+GEZE GmbH,FR-36,weight_100kg,5,-2.62,-5.81,7.28,13.09,"streut, prüfen"
+GEZE GmbH,FR-37,weight_100kg,19,-2.44,-23.17,120.50,143.67,"streut, prüfen"
+GEZE GmbH,FR-40,weight_100kg,15,-3.61,-8.47,4.83,13.29,"streut, prüfen"
+GEZE GmbH,FR-42,weight_100kg,1,-7.28,-7.28,-7.28,0.00,zu wenig Daten
+GEZE GmbH,FR-44,weight_100kg,3,-1.48,-2.62,7.28,9.91,"streut, prüfen"
+GEZE GmbH,FR-47,weight_100kg,1,-6.45,-6.45,-6.45,0.00,zu wenig Daten
+GEZE GmbH,FR-49,weight_100kg,5,-2.92,-7.28,-1.48,5.80,"streut, prüfen"
+GEZE GmbH,FR-54,weight_100kg,2,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,FR-56,weight_100kg,1,-2.62,-2.62,-2.62,0.00,zu wenig Daten
+GEZE GmbH,FR-57,weight_100kg,20,-2.44,-19.99,214.63,234.62,"streut, prüfen"
+GEZE GmbH,FR-59,weight_100kg,50,-2.44,-8.47,294.17,302.64,"streut, prüfen"
+GEZE GmbH,FR-60,weight_100kg,3,-2.04,-5.81,-1.48,4.33,atypisch
+GEZE GmbH,FR-63,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,FR-66,weight_100kg,2,7.12,-31.62,45.85,77.48,zu wenig Daten
+GEZE GmbH,FR-67,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,FR-68,weight_100kg,1,-6.44,-6.44,-6.44,0.00,zu wenig Daten
+GEZE GmbH,FR-69,weight_100kg,8,-3.03,-8.47,-1.48,6.99,"streut, prüfen"
+GEZE GmbH,FR-72,weight_100kg,62,-1.96,-37.38,350.66,388.05,"streut, prüfen"
+GEZE GmbH,FR-73,weight_100kg,1,-7.28,-7.28,-7.28,0.00,zu wenig Daten
+GEZE GmbH,FR-74,weight_100kg,3,-6.44,-6.45,-5.53,0.92,Diesel-konsistent
+GEZE GmbH,FR-76,weight_100kg,2,-6.04,-8.46,-3.61,4.85,zu wenig Daten
+GEZE GmbH,FR-77,weight_100kg,62,-4.60,-19.49,222.74,242.22,"streut, prüfen"
+GEZE GmbH,FR-78,weight_100kg,1,39.29,39.29,39.29,0.00,zu wenig Daten
+GEZE GmbH,FR-80,weight_100kg,2,-20.97,-33.48,-8.47,25.00,zu wenig Daten
+GEZE GmbH,FR-81,weight_100kg,10,-1.76,-8.47,7.29,15.75,"streut, prüfen"
+GEZE GmbH,FR-84,weight_100kg,4,-3.33,-6.45,1.22,7.66,"streut, prüfen"
+GEZE GmbH,FR-85,weight_100kg,5,-2.04,-3.61,-2.04,1.57,atypisch
+GEZE GmbH,FR-86,weight_100kg,3,7.28,-2.62,7.28,9.89,"streut, prüfen"
+GEZE GmbH,FR-87,weight_100kg,2,-2.44,-2.44,-2.43,0.01,zu wenig Daten
+GEZE GmbH,FR-91,weight_100kg,4,-2.04,-3.61,34.01,37.63,"streut, prüfen"
+GEZE GmbH,FR-92,weight_100kg,2,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,FR-93,weight_100kg,1,-7.28,-7.28,-7.28,0.00,zu wenig Daten
+GEZE GmbH,FR-94,weight_100kg,5,-2.61,-8.46,37.20,45.66,"streut, prüfen"
+GEZE GmbH,FR-95,weight_100kg,1,7.28,7.28,7.28,0.00,zu wenig Daten
+GEZE GmbH,GB-WS,weight_100kg,72,0.45,-61.01,768.51,829.52,"streut, prüfen"
+GEZE GmbH,IT-00,weight_100kg,31,-5.24,-90.00,-1.47,88.53,"streut, prüfen"
+GEZE GmbH,IT-01,weight_100kg,3,-2.04,-5.80,-1.47,4.33,atypisch
+GEZE GmbH,IT-02,weight_100kg,1,-2.02,-2.02,-2.02,0.00,zu wenig Daten
+GEZE GmbH,IT-06,weight_100kg,7,-2.63,-7.27,7.29,14.56,"streut, prüfen"
+GEZE GmbH,IT-10,weight_100kg,16,-6.38,-8.48,-1.48,7.00,"streut, prüfen"
+GEZE GmbH,IT-12,weight_100kg,7,-3.61,-8.48,-1.48,7.00,"streut, prüfen"
+GEZE GmbH,IT-14,weight_100kg,7,-6.46,-8.48,-2.44,6.03,"streut, prüfen"
+GEZE GmbH,IT-15,weight_100kg,8,-2.62,-8.47,-1.48,6.99,"streut, prüfen"
+GEZE GmbH,IT-16,weight_100kg,45,-3.44,-8.47,7.29,15.76,"streut, prüfen"
+GEZE GmbH,IT-17,weight_100kg,2,-4.22,-5.81,-2.64,3.17,zu wenig Daten
+GEZE GmbH,IT-18,weight_100kg,1,-3.44,-3.44,-3.44,0.00,zu wenig Daten
+GEZE GmbH,IT-19,weight_100kg,2,-2.63,-2.64,-2.62,0.02,zu wenig Daten
+GEZE GmbH,IT-20,weight_100kg,133,-3.43,-59.66,33.22,92.88,"streut, prüfen"
+GEZE GmbH,IT-21,weight_100kg,4,-2.93,-5.78,37.58,43.36,"streut, prüfen"
+GEZE GmbH,IT-22,weight_100kg,13,-5.80,-8.47,7.28,15.75,"streut, prüfen"
+GEZE GmbH,IT-24,weight_100kg,16,-5.80,-8.47,-1.47,7.00,"streut, prüfen"
+GEZE GmbH,IT-25,weight_100kg,17,-3.62,-8.47,7.28,15.75,"streut, prüfen"
+GEZE GmbH,IT-26,weight_100kg,6,-3.94,-8.48,-1.48,7.00,"streut, prüfen"
+GEZE GmbH,IT-27,weight_100kg,2,-2.55,-3.61,-1.48,2.13,zu wenig Daten
+GEZE GmbH,IT-29,weight_100kg,4,-6.45,-6.45,-2.03,4.42,Diesel-konsistent
+GEZE GmbH,IT-30,weight_100kg,17,-3.60,-8.47,-1.47,7.00,"streut, prüfen"
+GEZE GmbH,IT-31,weight_100kg,27,-2.43,-8.47,7.28,15.75,"streut, prüfen"
+GEZE GmbH,IT-33,weight_100kg,30,-3.61,-8.47,66.08,74.56,"streut, prüfen"
+GEZE GmbH,IT-34,weight_100kg,1,-2.43,-2.43,-2.43,0.00,zu wenig Daten
+GEZE GmbH,IT-35,weight_100kg,7,-6.37,-8.47,-2.03,6.44,"streut, prüfen"
+GEZE GmbH,IT-36,weight_100kg,32,-3.11,-8.47,7.28,15.75,"streut, prüfen"
+GEZE GmbH,IT-37,weight_100kg,25,-3.60,-8.47,-1.47,7.00,"streut, prüfen"
+GEZE GmbH,IT-38,weight_100kg,30,-3.36,-8.47,7.28,15.75,"streut, prüfen"
+GEZE GmbH,IT-39,weight_100kg,95,-2.62,-8.48,7.29,15.76,"streut, prüfen"
+GEZE GmbH,IT-40,weight_100kg,27,-3.43,-12.62,257.70,270.33,"streut, prüfen"
+GEZE GmbH,IT-41,weight_100kg,5,-1.48,-7.02,7.29,14.31,"streut, prüfen"
+GEZE GmbH,IT-42,weight_100kg,1,-2.04,-2.04,-2.04,0.00,zu wenig Daten
+GEZE GmbH,IT-43,weight_100kg,9,-5.54,-8.48,-2.05,6.42,"streut, prüfen"
+GEZE GmbH,IT-44,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,IT-45,weight_100kg,6,-2.04,-8.48,-1.48,7.00,"streut, prüfen"
+GEZE GmbH,IT-46,weight_100kg,10,-2.34,-7.28,-1.48,5.80,"streut, prüfen"
+GEZE GmbH,IT-47,weight_100kg,16,-2.04,-8.48,-1.48,7.00,"streut, prüfen"
+GEZE GmbH,IT-48,weight_100kg,1,-3.44,-3.44,-3.44,0.00,zu wenig Daten
+GEZE GmbH,IT-50,weight_100kg,11,-6.46,-50.74,-2.44,48.30,"streut, prüfen"
+GEZE GmbH,IT-51,weight_100kg,14,-1.77,-8.48,7.29,15.77,"streut, prüfen"
+GEZE GmbH,IT-52,weight_100kg,8,-3.93,-8.48,7.29,15.77,"streut, prüfen"
+GEZE GmbH,IT-56,weight_100kg,8,-2.33,-5.82,-1.48,4.34,atypisch
+GEZE GmbH,IT-57,weight_100kg,4,-2.73,-6.44,7.29,13.73,"streut, prüfen"
+GEZE GmbH,IT-59,weight_100kg,4,-3.73,-5.82,-2.05,3.77,Diesel-konsistent
+GEZE GmbH,IT-60,weight_100kg,2,-2.80,-2.99,-2.60,0.38,zu wenig Daten
+GEZE GmbH,IT-61,weight_100kg,5,-3.61,-8.46,7.29,15.75,"streut, prüfen"
+GEZE GmbH,IT-63,weight_100kg,5,-3.43,-8.47,-1.48,6.99,"streut, prüfen"
+GEZE GmbH,IT-64,weight_100kg,1,-2.62,-2.62,-2.62,0.00,zu wenig Daten
+GEZE GmbH,IT-66,weight_100kg,1,-1.48,-1.48,-1.48,0.00,zu wenig Daten
+GEZE GmbH,IT-73,weight_100kg,2,-2.55,-3.62,-1.48,2.14,zu wenig Daten
+GEZE GmbH,PT-24,weight_100kg,5,-2.04,-8.46,-1.47,6.99,"streut, prüfen"
+GEZE GmbH,PT-25,weight_100kg,3,-8.46,-8.48,-2.43,6.04,"streut, prüfen"
+GEZE GmbH,PT-26,weight_100kg,8,-5.03,-27.74,-1.47,26.27,"streut, prüfen"
+GEZE GmbH,PT-27,weight_100kg,9,-2.61,-8.48,7.28,15.75,"streut, prüfen"
+GEZE GmbH,PT-30,weight_100kg,5,-2.03,-7.28,-1.47,5.81,"streut, prüfen"
+GEZE GmbH,PT-31,weight_100kg,3,-1.47,-5.80,7.28,13.08,"streut, prüfen"
+GEZE GmbH,PT-34,weight_100kg,18,-2.62,-7.27,7.29,14.55,"streut, prüfen"
+GEZE GmbH,PT-35,weight_100kg,3,-1.47,-1.48,7.29,8.77,"streut, prüfen"
+GEZE GmbH,PT-37,weight_100kg,31,-2.61,-37.83,7.28,45.11,"streut, prüfen"
+GEZE GmbH,PT-38,weight_100kg,1,-2.44,-2.44,-2.44,0.00,zu wenig Daten
+GEZE GmbH,PT-40,weight_100kg,3,-1.47,-8.46,7.28,15.74,"streut, prüfen"
+GEZE GmbH,PT-44,weight_100kg,6,-2.62,-7.27,7.28,14.54,"streut, prüfen"
+GEZE GmbH,PT-45,weight_100kg,11,-2.44,-7.28,7.27,14.55,"streut, prüfen"
+GEZE GmbH,PT-46,weight_100kg,3,-3.42,-3.61,-1.48,2.13,Diesel-konsistent
+GEZE GmbH,PT-47,weight_100kg,13,-3.61,-8.48,7.28,15.75,"streut, prüfen"
+GEZE GmbH,PT-49,weight_100kg,4,-2.62,-8.46,7.27,15.73,"streut, prüfen"
+GEZE GmbH,PT-81,weight_100kg,1,-7.28,-7.28,-7.28,0.00,zu wenig Daten
+Fischerwerke GmbH,BE-28,stellplatz,14,0.96,-63.17,3.31,66.48,"streut, prüfen"
+Fischerwerke GmbH,DE-72,stellplatz,46,2.00,-90.22,68.83,159.05,"streut, prüfen"
+Fischerwerke GmbH,DE-79,stellplatz,1,51.40,51.40,51.40,0.00,zu wenig Daten
+Fischerwerke GmbH,DK-46,stellplatz,52,2.50,-88.18,469.44,557.62,"streut, prüfen"
+Fischerwerke GmbH,ES-08,stellplatz,1,-37.17,-37.17,-37.17,0.00,zu wenig Daten
+Fischerwerke GmbH,ES-43,stellplatz,132,19.66,-82.12,401.50,483.62,"streut, prüfen"
+Fischerwerke GmbH,IE-DU,stellplatz,39,2.50,-96.20,55.46,151.67,"streut, prüfen"
+Fischerwerke GmbH,IT-35,stellplatz,120,-2.34,-95.04,42.77,137.80,"streut, prüfen"
+EBM-Papst Mulfingen,IE-GA,ldm_stpl,10,-5.40,-5.96,-4.87,1.09,Diesel-konsistent
+EBM-Papst Mulfingen,IE-LA,ldm_stpl,10,-5.99,-7.42,-5.34,2.08,Diesel-konsistent
+EBM-Papst Mulfingen,SK-90,ldm_stpl,1,-3.27,-3.27,-3.27,0.00,zu wenig Daten
+HERMA GmbH,ES-03,weight_herma,60,-0.86,-27.15,74.88,102.03,"streut, prüfen"
+HERMA GmbH,ES-04,weight_herma,10,16.06,-0.38,85.29,85.67,"streut, prüfen"
+HERMA GmbH,ES-05,weight_herma,5,39.03,14.02,49.62,35.59,"streut, prüfen"
+HERMA GmbH,ES-08,weight_herma,635,-14.23,-75.09,87.48,162.56,"streut, prüfen"
+HERMA GmbH,ES-11,weight_herma,1,-5.69,-5.69,-5.69,0.00,zu wenig Daten
+HERMA GmbH,ES-12,weight_herma,1,-21.12,-21.12,-21.12,0.00,zu wenig Daten
+HERMA GmbH,ES-13,weight_herma,4,-1.17,-7.99,-0.16,7.83,"streut, prüfen"
+HERMA GmbH,ES-14,weight_herma,2,-33.59,-45.16,-22.03,23.13,zu wenig Daten
+HERMA GmbH,ES-15,weight_herma,5,-12.14,-26.42,-5.71,20.71,"streut, prüfen"
+HERMA GmbH,ES-17,weight_herma,197,32.72,-71.23,135.51,206.74,"streut, prüfen"
+HERMA GmbH,ES-19,weight_herma,7,-9.51,-11.32,1.18,12.50,"streut, prüfen"
+HERMA GmbH,ES-20,weight_herma,1,-13.07,-13.07,-13.07,0.00,zu wenig Daten
+HERMA GmbH,ES-23,weight_herma,14,-12.63,-51.06,26.98,78.04,"streut, prüfen"
+HERMA GmbH,ES-24,weight_herma,1,-24.96,-24.96,-24.96,0.00,zu wenig Daten
+HERMA GmbH,ES-26,weight_herma,7,-7.78,-8.71,9.39,18.09,"streut, prüfen"
+HERMA GmbH,ES-28,weight_herma,64,-32.20,-49.81,67.53,117.34,"streut, prüfen"
+HERMA GmbH,ES-29,weight_herma,5,-28.45,-29.01,-27.72,1.29,Calculator-Prüfung
+HERMA GmbH,ES-30,weight_herma,90,-0.32,-23.38,78.20,101.59,"streut, prüfen"
+HERMA GmbH,ES-31,weight_herma,38,-3.92,-12.72,80.05,92.77,"streut, prüfen"
+HERMA GmbH,ES-36,weight_herma,4,-14.11,-24.68,31.50,56.18,"streut, prüfen"
+HERMA GmbH,ES-39,weight_herma,1,-10.28,-10.28,-10.28,0.00,zu wenig Daten
+HERMA GmbH,ES-41,weight_herma,25,-14.42,-32.18,57.88,90.07,"streut, prüfen"
+HERMA GmbH,ES-43,weight_herma,25,-21.73,-38.50,11.28,49.78,"streut, prüfen"
+HERMA GmbH,ES-45,weight_herma,1,-0.85,-0.85,-0.85,0.00,zu wenig Daten
+HERMA GmbH,ES-46,weight_herma,47,-2.39,-20.73,44.80,65.54,"streut, prüfen"
+HERMA GmbH,ES-48,weight_herma,4,-10.71,-12.94,-6.98,5.96,"streut, prüfen"
+HERMA GmbH,ES-49,weight_herma,5,-19.65,-22.96,50.26,73.22,"streut, prüfen"
+HERMA GmbH,ES-50,weight_herma,15,-9.12,-22.52,74.03,96.55,"streut, prüfen"
+HERMA GmbH,FR-01,weight_herma,7,-0.14,-22.21,31.55,53.76,"streut, prüfen"
+HERMA GmbH,FR-02,weight_herma,6,36.19,2.50,37.58,35.08,"streut, prüfen"
+HERMA GmbH,FR-06,weight_herma,1,-22.15,-22.15,-22.15,0.00,zu wenig Daten
+HERMA GmbH,FR-10,weight_herma,5,-8.25,-9.17,13.78,22.95,"streut, prüfen"
+HERMA GmbH,FR-12,weight_herma,27,8.14,-1.13,187.12,188.25,"streut, prüfen"
+HERMA GmbH,FR-13,weight_herma,6,-5.84,-32.96,80.66,113.62,"streut, prüfen"
+HERMA GmbH,FR-17,weight_herma,4,-32.51,-35.04,2.18,37.22,"streut, prüfen"
+HERMA GmbH,FR-19,weight_herma,1,-11.15,-11.15,-11.15,0.00,zu wenig Daten
+HERMA GmbH,FR-21,weight_herma,3,-7.73,-7.73,13.40,21.13,"streut, prüfen"
+HERMA GmbH,FR-22,weight_herma,9,25.86,9.70,27.15,17.44,"streut, prüfen"
+HERMA GmbH,FR-25,weight_herma,1,-36.04,-36.04,-36.04,0.00,zu wenig Daten
+HERMA GmbH,FR-26,weight_herma,2,-11.20,-12.77,-9.63,3.14,zu wenig Daten
+HERMA GmbH,FR-27,weight_herma,39,18.94,-1.78,189.36,191.14,"streut, prüfen"
+HERMA GmbH,FR-28,weight_herma,13,8.16,-5.92,77.94,83.86,"streut, prüfen"
+HERMA GmbH,FR-31,weight_herma,1,-1.30,-1.30,-1.30,0.00,zu wenig Daten
+HERMA GmbH,FR-32,weight_herma,11,-9.69,-31.68,24.21,55.89,"streut, prüfen"
+HERMA GmbH,FR-33,weight_herma,52,-11.92,-52.59,76.77,129.37,"streut, prüfen"
+HERMA GmbH,FR-34,weight_herma,16,-10.88,-25.43,19.86,45.29,"streut, prüfen"
+HERMA GmbH,FR-35,weight_herma,16,0.72,-50.50,90.93,141.43,"streut, prüfen"
+HERMA GmbH,FR-37,weight_herma,1,12.43,12.43,12.43,0.00,zu wenig Daten
+HERMA GmbH,FR-38,weight_herma,2,17.32,17.31,17.33,0.01,zu wenig Daten
+HERMA GmbH,FR-41,weight_herma,13,28.74,6.55,197.51,190.97,"streut, prüfen"
+HERMA GmbH,FR-42,weight_herma,16,1.86,-13.05,48.38,61.43,"streut, prüfen"
+HERMA GmbH,FR-43,weight_herma,12,15.24,-81.82,86.99,168.80,"streut, prüfen"
+HERMA GmbH,FR-44,weight_herma,9,-31.35,-38.61,26.03,64.65,"streut, prüfen"
+HERMA GmbH,FR-45,weight_herma,6,2.64,-6.70,43.93,50.63,"streut, prüfen"
+HERMA GmbH,FR-46,weight_herma,2,7.34,6.80,7.88,1.09,zu wenig Daten
+HERMA GmbH,FR-53,weight_herma,10,13.61,3.57,14.77,11.20,"streut, prüfen"
+HERMA GmbH,FR-54,weight_herma,6,4.85,-30.79,102.57,133.36,"streut, prüfen"
+HERMA GmbH,FR-56,weight_herma,32,4.13,-22.37,100.15,122.52,"streut, prüfen"
+HERMA GmbH,FR-57,weight_herma,50,-12.81,-35.83,88.67,124.50,"streut, prüfen"
+HERMA GmbH,FR-58,weight_herma,2,12.78,12.10,13.46,1.35,zu wenig Daten
+HERMA GmbH,FR-59,weight_herma,100,-22.83,-53.74,130.72,184.46,"streut, prüfen"
+HERMA GmbH,FR-60,weight_herma,4,18.80,-21.79,30.82,52.60,"streut, prüfen"
+HERMA GmbH,FR-62,weight_herma,4,-10.87,-55.02,33.80,88.82,"streut, prüfen"
+HERMA GmbH,FR-63,weight_herma,15,5.32,-15.57,45.85,61.42,"streut, prüfen"
+HERMA GmbH,FR-67,weight_herma,44,-3.39,-18.05,87.19,105.24,"streut, prüfen"
+HERMA GmbH,FR-68,weight_herma,66,13.63,-12.41,163.65,176.05,"streut, prüfen"
+HERMA GmbH,FR-69,weight_herma,3,-1.85,-1.85,-1.85,0.00,atypisch
+HERMA GmbH,FR-71,weight_herma,14,25.67,4.67,104.79,100.13,"streut, prüfen"
+HERMA GmbH,FR-74,weight_herma,14,-4.36,-63.58,39.35,102.93,"streut, prüfen"
+HERMA GmbH,FR-76,weight_herma,154,86.29,-39.07,312.40,351.47,"streut, prüfen"
+HERMA GmbH,FR-77,weight_herma,14,7.48,-25.75,40.65,66.39,"streut, prüfen"
+HERMA GmbH,FR-80,weight_herma,1,3.34,3.34,3.34,0.00,zu wenig Daten
+HERMA GmbH,FR-81,weight_herma,1,-25.10,-25.10,-25.10,0.00,zu wenig Daten
+HERMA GmbH,FR-82,weight_herma,4,-5.71,-15.54,2.39,17.94,"streut, prüfen"
+HERMA GmbH,FR-85,weight_herma,2,-25.21,-25.21,-25.21,0.00,zu wenig Daten
+HERMA GmbH,FR-86,weight_herma,1,40.42,40.42,40.42,0.00,zu wenig Daten
+HERMA GmbH,FR-87,weight_herma,11,-14.20,-24.96,36.51,61.47,"streut, prüfen"
+HERMA GmbH,FR-88,weight_herma,60,20.28,-17.34,150.54,167.88,"streut, prüfen"
+HERMA GmbH,FR-89,weight_herma,1,88.43,88.43,88.43,0.00,zu wenig Daten
+HERMA GmbH,FR-91,weight_herma,54,-15.17,-34.41,92.25,126.67,"streut, prüfen"
+HERMA GmbH,FR-92,weight_herma,2,-20.78,-21.18,-20.38,0.80,zu wenig Daten
+HERMA GmbH,FR-93,weight_herma,1,-19.58,-19.58,-19.58,0.00,zu wenig Daten
+HERMA GmbH,FR-94,weight_herma,3,-27.87,-27.87,-19.40,8.47,"streut, prüfen"
+HERMA GmbH,FR-95,weight_herma,3,-7.07,-8.00,29.67,37.67,"streut, prüfen"
+HERMA GmbH,GB-B3,weight_herma,2,-11.80,-20.05,-3.55,16.49,zu wenig Daten
+HERMA GmbH,GB-B4,weight_herma,3,-8.56,-25.25,6.11,31.36,"streut, prüfen"
+HERMA GmbH,GB-BA,weight_herma,53,11.27,-25.93,108.67,134.60,"streut, prüfen"
+HERMA GmbH,GB-BD,weight_herma,2,3.99,3.16,4.82,1.66,zu wenig Daten
+HERMA GmbH,GB-BN,weight_herma,3,-4.50,-27.03,-4.50,22.53,"streut, prüfen"
+HERMA GmbH,GB-BR,weight_herma,12,-7.92,-34.39,7.29,41.68,"streut, prüfen"
+HERMA GmbH,GB-BS,weight_herma,2,-41.75,-42.81,-40.68,2.13,zu wenig Daten
+HERMA GmbH,GB-CB,weight_herma,3,-11.84,-27.03,-11.09,15.94,"streut, prüfen"
+HERMA GmbH,GB-CO,weight_herma,4,6.01,6.01,7.07,1.06,Calculator-Prüfung
+HERMA GmbH,GB-CT,weight_herma,4,5.97,5.57,7.27,1.70,Calculator-Prüfung
+HERMA GmbH,GB-CV,weight_herma,43,-40.68,-58.05,-0.88,57.17,"streut, prüfen"
+HERMA GmbH,GB-CW,weight_herma,1,-3.44,-3.44,-3.44,0.00,zu wenig Daten
+HERMA GmbH,GB-DA,weight_herma,1,-40.81,-40.81,-40.81,0.00,zu wenig Daten
+HERMA GmbH,GB-DE,weight_herma,17,4.49,-26.32,77.78,104.10,"streut, prüfen"
+HERMA GmbH,GB-DN,weight_herma,11,-43.00,-46.55,2.06,48.61,"streut, prüfen"
+HERMA GmbH,GB-EX,weight_herma,24,-8.80,-26.17,92.68,118.85,"streut, prüfen"
+HERMA GmbH,GB-HG,weight_herma,3,-22.68,-22.68,-19.89,2.79,Calculator-Prüfung
+HERMA GmbH,GB-L3,weight_herma,7,5.55,-23.54,77.65,101.19,"streut, prüfen"
+HERMA GmbH,GB-LE,weight_herma,72,-3.08,-53.17,38.55,91.72,"streut, prüfen"
+HERMA GmbH,GB-LL,weight_herma,10,-3.26,-18.10,66.36,84.46,"streut, prüfen"
+HERMA GmbH,GB-M1,weight_herma,8,-0.46,-11.10,4.86,15.96,"streut, prüfen"
+HERMA GmbH,GB-NG,weight_herma,14,4.84,-33.58,8.03,41.61,"streut, prüfen"
+HERMA GmbH,GB-NN,weight_herma,41,-10.81,-41.77,24.09,65.86,"streut, prüfen"
+HERMA GmbH,GB-NP,weight_herma,2,4.98,4.98,4.98,0.00,zu wenig Daten
+HERMA GmbH,GB-NR,weight_herma,1,-11.73,-11.73,-11.73,0.00,zu wenig Daten
+HERMA GmbH,GB-OL,weight_herma,2,5.14,4.63,5.66,1.03,zu wenig Daten
+HERMA GmbH,GB-PE,weight_herma,87,5.91,-19.19,80.04,99.23,"streut, prüfen"
+HERMA GmbH,GB-RG,weight_herma,122,7.26,-33.61,16.45,50.06,"streut, prüfen"
+HERMA GmbH,GB-RH,weight_herma,4,-2.88,-27.03,5.76,32.79,"streut, prüfen"
+HERMA GmbH,GB-RM,weight_herma,14,0.94,-62.56,31.73,94.29,"streut, prüfen"
+HERMA GmbH,GB-SK,weight_herma,13,-6.94,-12.04,6.01,18.05,"streut, prüfen"
+HERMA GmbH,GB-SN,weight_herma,3,-43.60,-48.20,-40.81,7.39,"streut, prüfen"
+HERMA GmbH,GB-TF,weight_herma,5,-0.10,-8.95,5.72,14.68,"streut, prüfen"
+HERMA GmbH,GB-WS,weight_herma,1,6.01,6.01,6.01,0.00,zu wenig Daten
+HERMA GmbH,IE-DU,weight_herma,1,-15.10,-15.10,-15.10,0.00,zu wenig Daten
+HERMA GmbH,IE-KI,weight_herma,12,-32.28,-32.28,-14.58,17.70,"streut, prüfen"
+HERMA GmbH,IE-SL,weight_herma,3,-58.51,-71.61,-23.86,47.75,"streut, prüfen"
+HERMA GmbH,IT-00,weight_herma,37,-30.27,-44.34,108.41,152.75,"streut, prüfen"
+HERMA GmbH,IT-02,weight_herma,1,-30.27,-30.27,-30.27,0.00,zu wenig Daten
+HERMA GmbH,IT-03,weight_herma,91,32.54,-28.71,138.92,167.64,"streut, prüfen"
+HERMA GmbH,IT-04,weight_herma,1,-35.11,-35.11,-35.11,0.00,zu wenig Daten
+HERMA GmbH,IT-10,weight_herma,5,-10.55,-28.19,-8.72,19.47,"streut, prüfen"
+HERMA GmbH,IT-12,weight_herma,8,19.05,-23.81,117.19,141.00,"streut, prüfen"
+HERMA GmbH,IT-13,weight_herma,3,-11.44,-11.44,-10.55,0.89,atypisch
+HERMA GmbH,IT-14,weight_herma,6,-5.03,-11.44,1.50,12.93,"streut, prüfen"
+HERMA GmbH,IT-15,weight_herma,3,-9.31,-9.31,-7.80,1.51,Diesel-konsistent
+HERMA GmbH,IT-20,weight_herma,264,9.56,-41.34,160.76,202.11,"streut, prüfen"
+HERMA GmbH,IT-21,weight_herma,45,-2.82,-40.51,108.07,148.58,"streut, prüfen"
+HERMA GmbH,IT-22,weight_herma,5,-32.99,-32.99,-32.32,0.68,Calculator-Prüfung
+HERMA GmbH,IT-23,weight_herma,6,28.74,22.09,46.02,23.94,"streut, prüfen"
+HERMA GmbH,IT-24,weight_herma,11,-10.82,-33.66,114.05,147.71,"streut, prüfen"
+HERMA GmbH,IT-25,weight_herma,5,-32.32,-32.99,-26.81,6.18,"streut, prüfen"
+HERMA GmbH,IT-26,weight_herma,15,-9.84,-10.73,-8.93,1.80,Diesel-konsistent
+HERMA GmbH,IT-27,weight_herma,16,-11.71,-33.66,42.57,76.23,"streut, prüfen"
+HERMA GmbH,IT-28,weight_herma,1,-26.22,-26.22,-26.22,0.00,zu wenig Daten
+HERMA GmbH,IT-29,weight_herma,6,-25.06,-41.59,-22.38,19.21,"streut, prüfen"
+HERMA GmbH,IT-30,weight_herma,6,10.05,7.30,40.91,33.61,"streut, prüfen"
+HERMA GmbH,IT-31,weight_herma,77,-2.16,-30.76,716.36,747.12,"streut, prüfen"
+HERMA GmbH,IT-33,weight_herma,1,24.75,24.75,24.75,0.00,zu wenig Daten
+HERMA GmbH,IT-35,weight_herma,40,-20.03,-47.06,76.90,123.96,"streut, prüfen"
+HERMA GmbH,IT-36,weight_herma,10,-24.81,-47.59,15.98,63.57,"streut, prüfen"
+HERMA GmbH,IT-37,weight_herma,1,-25.79,-25.79,-25.79,0.00,zu wenig Daten
+HERMA GmbH,IT-40,weight_herma,21,20.23,-31.27,117.46,148.73,"streut, prüfen"
+HERMA GmbH,IT-42,weight_herma,2,-23.33,-39.88,-6.78,33.10,zu wenig Daten
+HERMA GmbH,IT-43,weight_herma,4,-29.54,-38.32,-9.45,28.87,"streut, prüfen"
+HERMA GmbH,IT-44,weight_herma,2,10.89,-7.19,28.96,36.15,zu wenig Daten
+HERMA GmbH,IT-46,weight_herma,4,42.06,-32.94,55.08,88.02,"streut, prüfen"
+HERMA GmbH,IT-47,weight_herma,36,61.96,-42.16,142.44,184.60,"streut, prüfen"
+HERMA GmbH,IT-48,weight_herma,13,-29.92,-41.77,97.50,139.27,"streut, prüfen"
+HERMA GmbH,IT-50,weight_herma,29,-11.70,-31.33,100.41,131.74,"streut, prüfen"
+HERMA GmbH,IT-53,weight_herma,2,-14.92,-15.34,-14.49,0.85,zu wenig Daten
+HERMA GmbH,IT-55,weight_herma,2,-16.08,-27.17,-4.98,22.19,zu wenig Daten
+HERMA GmbH,IT-60,weight_herma,5,2.80,0.43,26.16,25.73,"streut, prüfen"
+HERMA GmbH,IT-64,weight_herma,1,-19.60,-19.60,-19.60,0.00,zu wenig Daten
+HERMA GmbH,IT-67,weight_herma,1,-21.54,-21.54,-21.54,0.00,zu wenig Daten
+HERMA GmbH,IT-70,weight_herma,10,18.55,-42.80,56.69,99.50,"streut, prüfen"
+HERMA GmbH,IT-80,weight_herma,11,4.39,-36.31,51.23,87.54,"streut, prüfen"
+HERMA GmbH,IT-84,weight_herma,6,1.53,-29.43,52.21,81.64,"streut, prüfen"
+HERMA GmbH,IT-89,weight_herma,3,-0.58,-8.45,18.87,27.32,"streut, prüfen"
+HERMA GmbH,IT-93,weight_herma,2,44.00,43.27,44.73,1.45,zu wenig Daten
+HERMA GmbH,IT-95,weight_herma,2,-16.60,-25.03,-8.16,16.87,zu wenig Daten
+HERMA GmbH,PT-20,weight_herma,22,-38.01,-44.59,-22.22,22.36,"streut, prüfen"
+HERMA GmbH,PT-21,weight_herma,8,-15.18,-19.28,-14.32,4.96,Calculator-Prüfung
+HERMA GmbH,PT-24,weight_herma,10,-11.50,-19.66,47.91,67.58,"streut, prüfen"
+HERMA GmbH,PT-26,weight_herma,5,-20.90,-37.70,-18.45,19.25,"streut, prüfen"
+HERMA GmbH,PT-27,weight_herma,13,2.83,-38.32,69.95,108.27,"streut, prüfen"
+HERMA GmbH,PT-28,weight_herma,12,9.25,-37.70,39.31,77.01,"streut, prüfen"
+HERMA GmbH,PT-30,weight_herma,4,-19.41,-27.99,-11.49,16.51,"streut, prüfen"
+HERMA GmbH,PT-31,weight_herma,4,-20.55,-28.72,-7.16,21.56,"streut, prüfen"
+HERMA GmbH,PT-44,weight_herma,53,-3.60,-39.87,68.55,108.42,"streut, prüfen"
+HERMA GmbH,PT-47,weight_herma,29,-25.51,-38.32,7.94,46.26,"streut, prüfen"
+HERMA GmbH,PT-48,weight_herma,14,-10.00,-38.32,60.16,98.48,"streut, prüfen"
+CHT Germany GmbH,AT-27,weight_100kg,1,-2.30,-2.30,-2.30,0.00,zu wenig Daten
+CHT Germany GmbH,AT-31,weight_100kg,2,-5.87,-5.87,-5.87,0.00,zu wenig Daten
+CHT Germany GmbH,AT-33,weight_100kg,9,-3.98,-4.54,29.49,34.03,"streut, prüfen"
+CHT Germany GmbH,AT-40,weight_100kg,8,-2.10,-50.47,-0.93,49.53,"streut, prüfen"
+CHT Germany GmbH,AT-43,weight_100kg,1,-4.73,-4.73,-4.73,0.00,zu wenig Daten
+CHT Germany GmbH,AT-46,weight_100kg,1,-3.23,-3.23,-3.23,0.00,zu wenig Daten
+CHT Germany GmbH,AT-48,weight_100kg,5,-3.48,-3.48,-2.04,1.44,Diesel-konsistent
+CHT Germany GmbH,AT-50,weight_100kg,1,-4.52,-4.52,-4.52,0.00,zu wenig Daten
+CHT Germany GmbH,AT-51,weight_100kg,2,-1.70,-1.72,-1.69,0.03,zu wenig Daten
+CHT Germany GmbH,AT-54,weight_100kg,5,-1.16,-1.69,-0.96,0.73,atypisch
+CHT Germany GmbH,AT-68,weight_100kg,4,-1.27,-1.50,-1.27,0.23,atypisch
+CHT Germany GmbH,AT-75,weight_100kg,3,-2.14,-2.14,-0.60,1.54,atypisch
+CHT Germany GmbH,AT-84,weight_100kg,10,-0.28,-87.65,9.45,97.10,"streut, prüfen"
+CHT Germany GmbH,AT-85,weight_100kg,1,-0.36,-0.36,-0.36,0.00,zu wenig Daten
+CHT Germany GmbH,AT-89,weight_100kg,1,-1.45,-1.45,-1.45,0.00,zu wenig Daten
+CHT Germany GmbH,AT-90,weight_100kg,4,0.89,-0.87,9.45,10.32,"streut, prüfen"
+CHT Germany GmbH,AT-94,weight_100kg,3,-5.43,-5.43,-5.43,0.00,Diesel-konsistent
+CHT Germany GmbH,BE-15,weight_100kg,14,-9.51,-41.12,-7.11,34.01,"streut, prüfen"
+CHT Germany GmbH,BE-18,weight_100kg,1,-9.73,-9.73,-9.73,0.00,zu wenig Daten
+CHT Germany GmbH,BE-30,weight_100kg,3,-9.95,-16.29,-9.28,7.01,"streut, prüfen"
+CHT Germany GmbH,BE-35,weight_100kg,2,-10.66,-11.46,-9.85,1.61,zu wenig Daten
+CHT Germany GmbH,BE-36,weight_100kg,8,-11.27,-13.30,-9.85,3.44,atypisch
+CHT Germany GmbH,BE-39,weight_100kg,1,-9.05,-9.05,-9.05,0.00,zu wenig Daten
+CHT Germany GmbH,BE-40,weight_100kg,3,-9.74,-10.00,-9.06,0.94,Diesel-konsistent
+CHT Germany GmbH,BE-46,weight_100kg,1,-7.90,-7.90,-7.90,0.00,zu wenig Daten
+CHT Germany GmbH,BE-48,weight_100kg,5,-9.79,-10.46,-9.28,1.18,Diesel-konsistent
+CHT Germany GmbH,BE-66,weight_100kg,2,-13.11,-13.39,-12.82,0.57,zu wenig Daten
+CHT Germany GmbH,BE-70,weight_100kg,2,-10.45,-10.46,-10.44,0.02,zu wenig Daten
+CHT Germany GmbH,BE-75,weight_100kg,1,-9.88,-9.88,-9.88,0.00,zu wenig Daten
+CHT Germany GmbH,BE-77,weight_100kg,14,-11.05,-21.72,-9.53,12.19,"streut, prüfen"
+CHT Germany GmbH,BE-80,weight_100kg,2,-9.34,-10.53,-8.15,2.38,zu wenig Daten
+CHT Germany GmbH,BE-84,weight_100kg,4,-10.74,-17.86,-8.21,9.65,"streut, prüfen"
+CHT Germany GmbH,BE-85,weight_100kg,51,-10.44,-21.72,-7.31,14.41,"streut, prüfen"
+CHT Germany GmbH,BE-87,weight_100kg,58,-10.22,-45.03,344.15,389.19,"streut, prüfen"
+CHT Germany GmbH,BE-89,weight_100kg,2,-9.29,-10.45,-8.13,2.32,zu wenig Daten
+CHT Germany GmbH,BE-91,weight_100kg,11,-10.06,-16.41,-9.05,7.36,"streut, prüfen"
+CHT Germany GmbH,BE-92,weight_100kg,16,-10.47,-13.23,-7.31,5.91,"streut, prüfen"
+CHT Germany GmbH,BE-96,weight_100kg,26,-10.73,-18.74,-9.05,9.69,"streut, prüfen"
+CHT Germany GmbH,BE-98,weight_100kg,13,-10.45,-11.42,-8.21,3.20,atypisch
+CHT Germany GmbH,ES-08,weight_100kg,18,-0.65,-2.73,0.88,3.61,atypisch
+CHT Germany GmbH,ES-17,weight_100kg,2,-0.65,-0.65,-0.65,0.00,zu wenig Daten
+CHT Germany GmbH,ES-25,weight_100kg,1,1.16,1.16,1.16,0.00,zu wenig Daten
+CHT Germany GmbH,ES-46,weight_100kg,88,-0.57,-1.81,52.82,54.63,"streut, prüfen"
+CHT Germany GmbH,GR-10,weight_100kg,3,58.56,5.71,58.56,52.85,"streut, prüfen"
+CHT Germany GmbH,GR-13,weight_100kg,2,5.71,-47.15,58.56,105.71,zu wenig Daten
+CHT Germany GmbH,GR-19,weight_100kg,18,58.56,-70.00,235.74,305.75,"streut, prüfen"
+CHT Germany GmbH,GR-23,weight_100kg,4,21.02,-69.56,74.84,144.40,"streut, prüfen"
+CHT Germany GmbH,GR-27,weight_100kg,1,-20.73,-20.73,-20.73,0.00,zu wenig Daten
+CHT Germany GmbH,GR-29,weight_100kg,2,28.28,27.74,28.82,1.08,zu wenig Daten
+CHT Germany GmbH,GR-32,weight_100kg,19,-36.14,-88.87,138.84,227.71,"streut, prüfen"
+CHT Germany GmbH,GR-46,weight_100kg,14,-42.23,-64.04,74.84,138.88,"streut, prüfen"
+CHT Germany GmbH,GR-55,weight_100kg,1,-87.44,-87.44,-87.44,0.00,zu wenig Daten
+CHT Germany GmbH,GR-56,weight_100kg,7,-26.51,-56.54,231.68,288.22,"streut, prüfen"
+CHT Germany GmbH,GR-57,weight_100kg,50,2.29,-79.44,526.83,606.27,"streut, prüfen"
+CHT Germany GmbH,GR-67,weight_100kg,1,-31.34,-31.34,-31.34,0.00,zu wenig Daten
+CHT Germany GmbH,IT-03,weight_100kg,2,-0.98,-7.83,5.88,13.71,zu wenig Daten
+CHT Germany GmbH,IT-10,weight_100kg,1,18.09,18.09,18.09,0.00,zu wenig Daten
+CHT Germany GmbH,IT-12,weight_100kg,2,-0.77,-0.82,-0.71,0.11,zu wenig Daten
+CHT Germany GmbH,IT-13,weight_100kg,14,-2.35,-3.68,0.39,4.08,atypisch
+CHT Germany GmbH,IT-20,weight_100kg,48,-3.73,-35.55,18.09,53.64,"streut, prüfen"
+CHT Germany GmbH,IT-21,weight_100kg,2,-3.04,-3.90,-2.19,1.71,zu wenig Daten
+CHT Germany GmbH,IT-22,weight_100kg,8,-3.37,-4.19,-2.00,2.18,Diesel-konsistent
+CHT Germany GmbH,IT-24,weight_100kg,9,-2.43,-27.02,-2.07,24.95,"streut, prüfen"
+CHT Germany GmbH,IT-25,weight_100kg,9,-2.07,-11.70,17.90,29.59,"streut, prüfen"
+CHT Germany GmbH,IT-27,weight_100kg,1,-2.04,-2.04,-2.04,0.00,zu wenig Daten
+CHT Germany GmbH,IT-28,weight_100kg,10,-1.75,-2.64,-0.41,2.23,atypisch
+CHT Germany GmbH,IT-36,weight_100kg,1,-2.61,-2.61,-2.61,0.00,zu wenig Daten
+CHT Germany GmbH,IT-37,weight_100kg,2,-2.07,-2.07,-2.07,0.00,zu wenig Daten
+CHT Germany GmbH,IT-41,weight_100kg,13,-2.43,-4.35,-1.24,3.11,atypisch
+CHT Germany GmbH,IT-43,weight_100kg,3,-2.04,-3.06,27.23,30.29,"streut, prüfen"
+CHT Germany GmbH,IT-48,weight_100kg,4,-2.61,-3.83,-1.07,2.76,atypisch
+CHT Germany GmbH,IT-55,weight_100kg,1,-0.56,-0.56,-0.56,0.00,zu wenig Daten
+CHT Germany GmbH,IT-56,weight_100kg,5,-4.55,-13.04,-0.28,12.76,"streut, prüfen"
+CHT Germany GmbH,IT-57,weight_100kg,1,-1.80,-1.80,-1.80,0.00,zu wenig Daten
+CHT Germany GmbH,IT-59,weight_100kg,23,-2.98,-12.67,107.88,120.54,"streut, prüfen"
+CHT Germany GmbH,IT-61,weight_100kg,1,-1.51,-1.51,-1.51,0.00,zu wenig Daten
+CHT Germany GmbH,IT-64,weight_100kg,3,-0.43,-0.98,-0.32,0.66,atypisch
+CHT Germany GmbH,IT-75,weight_100kg,4,-1.14,-1.76,-0.58,1.17,atypisch
