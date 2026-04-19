@@ -54,6 +54,16 @@ _KNR_CALC_MAP: dict[str, type[TariffCalculator]] = {
 _CQ_SNR_MIN = 21_000_000
 _CQ_SNR_MAX = 32_999_999
 
+# PLZ-Toleranz-Pass: Hamming-Distanz auf 2-stellige Empfänger-PLZ
+_PLZ2_LEN = 2
+
+
+def _hamming1(a: str, b: str) -> bool:
+    """True wenn a und b gleich lang und in genau einer Zeichenposition verschieden."""
+    if len(a) != len(b) or len(a) == 0:
+        return False
+    return sum(x != y for x, y in zip(a, b)) == 1
+
 # AX combined accounts → canonical KNR for family matching.
 # ARA_Sika_DE+CH covers routes to CH (→ SSC 511241) and non-CH (→ Sika DE 491063).
 _AX_KNR_NORMALIZE: dict[str, tuple[str, str]] = {
@@ -337,6 +347,7 @@ _OUT_COLS = [
     "is_orphan_dinas",
     "is_orphan_ax",
     "selected_as",          # "dinas_sample" | "ax_underbilling" | "ax_neutral"
+    "merge_reason",         # None | "plz_tolerance_1" | "plz_tolerance_ambiguous"
 ]
 
 
@@ -492,6 +503,7 @@ def match_clusters(
             "is_orphan_dinas":         False,
             "is_orphan_ax":            False,
             "selected_as":             None,
+            "merge_reason":            None,
         })
 
     # ── 6. Build AX cluster records ──────────────────────────────────────────
@@ -582,6 +594,7 @@ def match_clusters(
             "is_orphan_dinas":         False,
             "is_orphan_ax":            False,
             "selected_as":             None,
+            "merge_reason":            None,
         })
 
     # ── 7. Match families & compute abweichung ───────────────────────────────
@@ -674,6 +687,84 @@ def match_clusters(
                 .nlargest(top_n, "abweichung_vs_dinas_mean")  # most positive = worst underbilling (dinas>>ax)
             )
             ax_df_out.loc[top_ax.index, "selected_as"] = "ax_underbilling"
+
+    # ── 7.5 PLZ-Toleranz-Pass (Hamming-1 auf empf_plz_2) ───────────────────
+    # Versucht, noch ungematchte Dinas/AX-Orphan-Familien zusammenzuführen,
+    # wenn (kunde, abs_plz_2, tarifgruppe) übereinstimmen und die Empfänger-PLZ
+    # sich in genau einem Zeichen unterscheidet.
+    if not dinas_df_out.empty and not ax_df_out.empty:
+        matched_ax_fkeys  = set(ax_df_out["family_key"]) & set(dinas_df_out["family_key"])
+        unmatched_dinas   = set(dinas_df_out["family_key"]) - matched_ax_fkeys
+        unmatched_ax      = set(ax_df_out["family_key"])   - matched_ax_fkeys
+
+        def _parse_fkey(fkey: str) -> tuple[str, str, str, str] | None:
+            parts_ = fkey.split("|")
+            return tuple(parts_) if len(parts_) == 4 else None  # type: ignore[return-value]
+
+        # Build AX lookup: (kunde, abs_plz, tg) → list[(empf_plz, fkey)]
+        ax_tol_lookup: dict[tuple, list[tuple]] = {}
+        for fkey in unmatched_ax:
+            parsed = _parse_fkey(fkey)
+            if parsed is None:
+                continue
+            kunde_, abs_, empf_, tg_ = parsed
+            if not empf_:
+                continue
+            ax_tol_lookup.setdefault((kunde_, abs_, tg_), []).append((empf_, fkey))
+
+        # fkey_remaps: old AX fkey → (new fkey = Dinas fkey, reason)
+        fkey_remaps: dict[str, tuple[str, str]] = {}
+
+        for dinas_fkey in unmatched_dinas:
+            parsed = _parse_fkey(dinas_fkey)
+            if parsed is None:
+                continue
+            kunde_, abs_, empf_, tg_ = parsed
+            if not empf_:
+                continue
+            candidates = ax_tol_lookup.get((kunde_, abs_, tg_), [])
+            h1_matches = [
+                (ax_empf, ax_fkey)
+                for ax_empf, ax_fkey in candidates
+                if _hamming1(empf_, ax_empf)
+            ]
+            if len(h1_matches) == 1:
+                _, ax_fkey = h1_matches[0]
+                fkey_remaps[ax_fkey] = (dinas_fkey, "plz_tolerance_1")
+            elif len(h1_matches) > 1:
+                for _, ax_fkey in h1_matches:
+                    fkey_remaps.setdefault(ax_fkey, (ax_fkey, "plz_tolerance_ambiguous"))
+
+        if fkey_remaps:
+            logger.info(
+                "PLZ-Toleranz-Pass: %d AX-Familien remapped (%d eindeutig, %d ambiguous)",
+                len(fkey_remaps),
+                sum(1 for _, (_, r) in fkey_remaps.items() if r == "plz_tolerance_1"),
+                sum(1 for _, (_, r) in fkey_remaps.items() if r == "plz_tolerance_ambiguous"),
+            )
+            for old_fkey, (new_fkey, reason) in fkey_remaps.items():
+                mask = ax_df_out["family_key"] == old_fkey
+                ax_df_out.loc[mask, "family_key"]   = new_fkey
+                ax_df_out.loc[mask, "merge_reason"] = reason
+
+                if reason == "plz_tolerance_1":
+                    # Recompute abweichung using the now-matched Dinas family stats
+                    stats    = dinas_family_stats.get(str(new_fkey))
+                    mean_epe = stats["mean_eur_pro_einheit"] if stats else None
+                    ax_df_out.loc[mask, "dinas_mean_eur_pro_einheit"] = mean_epe
+                    ax_df_out.loc[mask, "is_orphan_ax"] = False
+                    if mean_epe is not None:
+                        ax_eur = pd.to_numeric(ax_df_out.loc[mask, "eur_pro_einheit"], errors="coerce")
+                        ax_df_out.loc[mask, "abweichung_vs_dinas_mean"] = mean_epe - ax_eur
+                    # Clear orphan_dinas flag on the Dinas side
+                    dinas_df_out.loc[
+                        dinas_df_out["family_key"] == new_fkey, "is_orphan_dinas"
+                    ] = False
+
+            # Re-enforce numeric dtype after remapping
+            ax_df_out["abweichung_vs_dinas_mean"] = pd.to_numeric(
+                ax_df_out["abweichung_vs_dinas_mean"], errors="coerce"
+            )
 
     # ── 8. Assemble output ──────────────────────────────────────────────────
     parts = []

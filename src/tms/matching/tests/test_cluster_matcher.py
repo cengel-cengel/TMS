@@ -9,6 +9,7 @@ import pytest
 
 from tms.matching.cluster_matcher import (
     _apply_cq_grauzone_filter,
+    _hamming1,
     _normalize_ax_knr,
     _plz2,
     _safe_float,
@@ -92,6 +93,113 @@ def test_tarifgruppe_atm_ch():
 
 def test_tarifgruppe_unknown():
     assert _tarifgruppe_for_knr("999999") == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _hamming1
+# ---------------------------------------------------------------------------
+
+def test_hamming1_identical_returns_false():
+    assert _hamming1("70", "70") is False
+
+def test_hamming1_one_diff():
+    assert _hamming1("70", "71") is True
+
+def test_hamming1_both_diff():
+    assert _hamming1("70", "81") is False
+
+def test_hamming1_alpha_codes():
+    assert _hamming1("AB", "AC") is True
+    assert _hamming1("LU", "LS") is True
+
+def test_hamming1_different_lengths():
+    assert _hamming1("70", "700") is False
+
+def test_hamming1_empty():
+    assert _hamming1("", "") is False
+
+
+# ---------------------------------------------------------------------------
+# match_clusters PLZ tolerance pass
+# ---------------------------------------------------------------------------
+
+def _make_plz_tolerance_frames():
+    """
+    Dinas: KNR 491063, abs=70, empf=47 (Portugal)
+    AX:    KNR 491063, abs=70, empf=48 (one char off)
+    → Should be merged via plz_tolerance_1
+    """
+    dinas_df = pd.DataFrame({
+        "rechnung_nr":    [4700001],
+        "erka_kundennr":  ["25607"],   # → KNR 491063
+        "rechnung_date":  [pd.Timestamp("2025-08-01")],
+        "leistung_date":  [pd.Timestamp("2025-08-15")],
+        "template":       ["erka_standard"],
+        "abs_plz":        ["70439"],
+        "empf_plz":       ["4700"],    # empf_plz_2 = "47"
+        "empf_land":      ["PT"],
+        "gewicht_kg":     [800.0],
+        "stp":            [4.0],
+        "lm":             [1.6],
+        "fracht":         [400.0],
+        "diesel":         [20.0],
+        "maut":           [10.0],
+        "sonstige":       ["[]"],
+        "bordero_nr":     ["B047"],
+    })
+    ax_df = pd.DataFrame({
+        "Auftragsnummer":       [2002200220022001, 2002200220022002],
+        "Kontonummer":          ["491063", "491063"],
+        "Abrechnungsstrecke":   [9002, 9003],        # master=9002, sub=9003
+        "Zusammengefasst in":  [9002.0, 9002.0],    # both point to master 9002
+        "Betrag":               [420.0, 0.0],
+        "Abrechnungsgewicht":   [800.0, 0.0],
+        "Leistungsdatum":       [pd.Timestamp("2025-11-10")] * 2,
+        "Von Ort":              ["Stuttgart"] * 2,
+        "Nach Ort":             ["Lisbon"] * 2,
+    })
+    tb_df = pd.DataFrame({
+        "Auftragsnummer":   ["2002200220022001", "2002200220022002"],
+        "Kundenreferenz":   ["REF1", "REF2"],
+        "Rechnungsnummer":  ["0", "0"],
+        "Mastersendung":    [None, None],
+        "Tonnage (eff.)":   [400.0, 400.0],
+        "Stellplätze":      [2.0, 2.0],
+        "Lademeter":        [0.8, 0.8],
+        "Volumen":          [2.0, 2.0],
+        "Versender PLZ":    ["70439", "70439"],
+        "Empfänger PLZ":    ["4800", "4800"],  # empf_plz_2 = "48" ← one char off
+        "Empfänger Land":   ["PT", "PT"],
+    })
+    return dinas_df, ax_df, tb_df
+
+
+def test_plz_tolerance_merges_hamming1_family():
+    """PLZ tolerance pass joins Dinas empf=47 with AX empf=48 into one family."""
+    from tms.matching.cluster_matcher import match_clusters
+
+    dinas_df, ax_df, tb_df = _make_plz_tolerance_frames()
+    result = match_clusters(dinas_df, ax_df, tb_df)
+
+    # Both DINAS and AX rows should share the same family_key
+    dinas_rows = result[result["cluster_source"] == "DINAS"]
+    ax_rows    = result[result["cluster_source"] == "AX"]
+
+    assert len(dinas_rows) > 0
+    assert len(ax_rows) > 0
+    # After tolerance merge, AX row family_key == Dinas row family_key
+    assert dinas_rows["family_key"].iloc[0] == ax_rows["family_key"].iloc[0]
+
+
+def test_plz_tolerance_sets_merge_reason():
+    """Merged AX rows carry merge_reason='plz_tolerance_1'."""
+    from tms.matching.cluster_matcher import match_clusters
+
+    dinas_df, ax_df, tb_df = _make_plz_tolerance_frames()
+    result = match_clusters(dinas_df, ax_df, tb_df)
+
+    ax_rows = result[result["cluster_source"] == "AX"]
+    assert (ax_rows["merge_reason"] == "plz_tolerance_1").all()
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Scratch / debug scripts at repo root
+debug*.py
+run_etappe*.py
+
 # Raw data directories (PDFs, Excel, ZIP) — too large for git
 Fischerwerke/
 Herma/
