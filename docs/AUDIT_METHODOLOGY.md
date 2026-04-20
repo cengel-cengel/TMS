@@ -246,19 +246,26 @@ Muster-A = **Fester ERKA-Indexaufschlag** von exakt 7,00 % auf den DLV-Basistari
 
 ### Erkennungsformel
 ```
-floater_pct = (betrag - toll) / tariff - 1
+# Standard (BI-Daten, ab v1.5):
+floater_pct = (Erlöse_Fracht − basispreis) / basispreis
 muster_a    = abs(floater_pct - 0.07) < 0.0015
+
+# EBM-Sonder-Block (Abrechnungsstrecken-Quelle, kein Erlöse_Fracht):
+floater_pct = (betrag − toll) / tariff − 1
+# betrag = Fracht+Floater; toll = DLV-Maut; tariff = DLV-Tarif
+# Retroaktiv offen: ob Diesel in betrag eingebettet (→ §7 EBM-Diesel)
 ```
 
 **Begründung für floater_pct-Basis (nicht Ratio-Basis):**
 
-Die nahe liegende Alternative — `ratio = betrag / (tariff + toll)` mit Fenster
+Die nahe liegende Alternative — `ratio = Erlöse_Fracht / basispreis` mit Fenster
 `[1.0645, 1.0755]` — ist **zu breit** und erzeugt Falsch-Positive:
 - PL-Zeilen März 2026 haben einen variablen Diesel-Floater von ~8,1 %
 - Deren Ratio fällt ebenfalls in das Fenster, obwohl es sich um regulären
   Dieselzuschlag (kein ERKA-Indexaufschlag) handelt
-- Der floater_pct-Ansatz trennt sauber: 7,00 % ± 0,15 % = ERKA-Indexaufschlag;
-  8,1 % = normaler Dieselzuschlag
+- Der floater_pct-Ansatz (`Erlöse_Fracht − basispreis`) trennt sauber: Diesel
+  ist in §2.0 aus `floater_pct` herausdefiniert; 7,00 % ± 0,15 % = ERKA-
+  Indexaufschlag; Diesel-Floater erscheint ausschließlich in `diesel_delta`
 
 **Kreuzvalidierung:** Alle 50 bestätigten Muster-A-Zeilen liegen im Januar 2026
 und stammen aus 5 Lanes (IE/PL/EE/SK/HR) — konsistent mit einem systemweiten
@@ -270,15 +277,13 @@ Aktivierungsdatum.
 |---|---|---|---|---|
 | Fischerwerke | 409480 | März 2026 | ~31 | IT-Padova, IT-Copiano, FR, GB |
 | EBM-Papst | 410844 | Januar 2026 | 50 | IE, PL, EE, SK, HR |
-| GEZE GmbH | 406035 | offen (9b.3) | — | alle Lanes zu prüfen |
+| GEZE GmbH | 406035 | nicht nachweisbar (9b.3) | 0 | kein Treffer in POST-Daten |
+| CHT Germany | 486073 | offen (9c.3) | — | alle Lanes zu prüfen |
 
 Unterschiedliche Aktivierungszeitpunkte pro Kunde deuten auf kundenspezifische
 Vereinbarungen hin — gleicher Mechanismus, unterschiedliches Roll-out-Datum.
-
-**Muster-A-Check in 9b.3:** Binning-Fenster `abs(floater_pct - 0.07) < 0.00005`
-(enger als Standard 0,0015, da Diesel-Floater bei GEZE als separate Spalte
-erkennbar ist und kein Falsch-Positiv-Risiko besteht). Fund → dritter Kunde
-bestätigt Meta-Erkenntnis. Kein Fund → GEZE als Gegenbeleg ebenso dokumentieren.
+GEZE zeigt keinen Muster-A-Befund in POST-Daten (mögliches Roll-out nach April 2026
+oder keine ERKA-Vereinbarung).
 
 ---
 
@@ -404,7 +409,7 @@ erwartet worden wäre. Grüner Test, falscher Grund.
 | GEZE | CHF-Floater | mind. 1 CH-Fall mit CHF/EUR < 1.021 (nicht-null Band) |
 | HERMA | VL-Aufschlag (Vorlauf) | mind. 1 Fall mit VL > 0 |
 | HELU | Country-Fallback | mind. 1 Fall, der Fallback auslöst |
-| CHT | Zonen-Lookup (Spanien, Italien) | mind. 1 Fall je Zone-Lookup-Pfad |
+| CHT | Dual-Mode-Umschalt + Maut | mind. 1 Fall per-Sendung + 1 Fall per-100kg + 1 Fall mit Maut-Delta ≠ 0 |
 | Hornschuch | Formel-Varianten | mind. 1 Fall je Formelzweig |
 
 ---
