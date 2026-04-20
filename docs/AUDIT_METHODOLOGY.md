@@ -130,10 +130,19 @@ konsistent befüllt ist.
   Aggregationsebene: Eine große Sendung mit 50 Positionen, die korrekt
   abgerechnet wurde, kann auf Positions-Ebene 49× als Muster-B erscheinen
   (Einzelposition << DLV-Minimum der aggregierten Sendung).
-- **Aggregationsartefakt-Flag:** Muster-B-Kandidaten mit `n_pos > 5` und
-  `fp > 0` auf Gruppenebene sind als "Aggregationsartefakt — Sendungs-Aggregation
-  erforderlich" zu kennzeichnen und **nicht** als bestätigte Unterfakturierung
-  zu werten.
+- **Aggregationsartefakt-Flag (streng):** Muster-B-Kandidaten mit `n_pos > 5`
+  und `fp > 0` auf Gruppenebene sind als "Aggregationsartefakt — Sendungs-
+  Aggregation erforderlich" zu kennzeichnen und **nicht** als bestätigte
+  Unterfakturierung zu werten. (GEZE 9b.3: GB/WS13 8SY, n_pos=27, fp=−0,395)
+- **Aggregationsartefakt-Flag (weich):** Muster-B-Kandidaten mit
+  `n_pos > 20 AND |delta_raw| < positions_min_fee × n_pos` sind als
+  "Aggregation-Minimalgebühren-Verdacht — manuelle Sendungs-Disaggregation
+  empfohlen" zu markieren. Hintergrund: Wenn eine Gruppe aus 30 kleinen
+  Positionen besteht, von denen jede einzeln die DLV-Mindestgebühr ausgelöst
+  hätte, ist der aggregierte Soll-Basispreis systematisch zu niedrig. Erst wenn
+  `delta_raw_per_sendung > delta_raw_per_positions` kann auf echte
+  Unterfakturierung geschlossen werden. Anwendungsfall: HERMA/Hornschuch-
+  Rollouts mit vielen kleinen Positionen je Rechnungsempfänger.
 
 ### Pflichtfelder (ab v1.4)
 
