@@ -1,0 +1,25 @@
+DLV-Datei: /home/user/TMS/GEZE Leonberg/2025/20250305_Geze_Export_incl. MP_ PT_GB_IT_FR_AT_ES_CH_inkl. Maut und Zusatzkosten IT-00_ERGÄNZT UM DUBLIN.xlsx
+Sheet: Exporttarife, Block: Schweiz
+Tarif-Zellen für CH (country='Schweiz'): 81 rows
+
+Zonen und PLZ-Bereiche:
+  Zone 1       PLZ=40-44, 80-81, 83-84  Minimum=51.41
+  Zone 2       PLZ=27-28, 45-49, 50-57, 82, 85-86, 89, 92, 95 Minimum=54.25
+  Zone 3       PLZ=25-26, 29, 33-34, 60-63, 87-88, 90-91, 93, 96 Minimum=55.76
+  Zone 4       PLZ=23, 30-32, 35, 94    Minimum=57.41
+  Zone 5       PLZ=17, 20, 22, 24, 36, 64, 73 Minimum=60.26
+  Zone 6       PLZ=15, 21, 38, 70       Minimum=62.69
+  Zone 7       PLZ=10, 13-14, 16, 67, 71-72 Minimum=62.69
+  Zone 8       PLZ=11-12, 18, 37, 65,66, 69, 76 Minimum=72.42
+  Zone 9       PLZ=19                   Minimum=98.09
+
+Preise pro 100kg je Gewichtsband (erste Zone):
+  bis 3.000 kg         → 18.39 EUR/100kg
+  bis. 2.500 kg        → 19.27 EUR/100kg
+  bis 2.000 kg         → 20.05 EUR/100kg
+  bis 1.800 kg         → 21.34 EUR/100kg
+  bis 1.500 kg         → 21.55 EUR/100kg
+  bis 1.000 kg         → 25.74 EUR/100kg
+  bis 800 kg           → 26.41 EUR/100kg
+  bis 500 kg           → 30.45 EUR/100kg
+  bis 300 kg           → 35.83 EUR/100kg
