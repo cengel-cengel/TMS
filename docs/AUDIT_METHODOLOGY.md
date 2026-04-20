@@ -67,19 +67,39 @@ Beim Modus `hybrid` gilt `unbundled` für die aufgeführten Einzelkomponenten un
 - Lookup-Tabelle: Anzahl Stellplätze → Flat-Rate per Sendung
 - Per-Route-Dateien (eine Datei pro Abrechnungsrelation)
 - Quelle: `Fischerwerke/DLVs & Tarife/`
+- `pricing_mode: all_in` — kein separates Maut/Diesel im DLV modelliert
+- `all_in_components: [maut, diesel]`
 
 ### EBM-Papst (Palletspace-Matrix, LDM-basiert)
 - Breite Matrix: Zeile = Route (PLZ-Key), Spalte = Stellplätze 1–33 + FTL
 - Zwei Sheets pro DLV-Datei: `Tariffs_DE_EU` (Frachtpreis) + `Toll_DE_EU` (Maut)
-- Abrechnung: `betrag = tariff[route][n_stpl] × (1 + floater) + toll[route][n_stpl]`
-- Quelle: `EBM-Papst, Mulfingen/`
+- Datenquelle: **Abrechnungsstrecken** `EBM.xlsx` (nicht BI-Daten) — Spalten:
+  `betrag` (Fracht + Floater, kein Diesel), `toll` (DLV-Maut)
+- `pricing_mode: hybrid` — Maut unbundled (aus `Toll_DE_EU`); Diesel fehlt in
+  Abrechnungsstrecken-Quelle (kein `Erlöse_Diesel`-Äquivalent), muss retroaktiv
+  geprüft werden (→ §7 EBM-Diesel-Retroaktiv)
+- Abrechnungsformel (Abrechnungsstrecken):
+```
+floater_pct = (betrag − toll) / tariff − 1
+# toll aus DLV-Matrix; tariff aus DLV-Matrix
+# Diesel: Abrechnungsstrecken-Quelle hat keine separate Diesel-Spalte
+#         → falls Diesel in betrag eingebettet: floater_pct enthält Diesel-Anteil
+#         → falls Diesel nicht verrechnet: floater_pct = reiner Floater
+```
+- `all_in_components: [diesel]` — bis Retroaktiv-Check (§7) bestätigt ob diesel=0
 
 ### Route-Key-Extraktion (EBM)
 - **IE/GB** (Eircode-Länder): 3-stelliger Alpha-Code — `'IE-A92 FY90'` → `'A92'`
 - **PLZ-Länder** (PL/SK/SI/HR/EE): Vollständiger PLZ-String — `'PL-03-236'` → `'PL-03-236'`
 - **Merged-Einträge**: Pipe-separated → nimm erstes — `'EE-75301|EE-75306'` → `'EE-75301'`
 
-### GEZE GmbH (Gewichts-basiert, EUR/100 kg, Maut inkludiert)
+### GEZE GmbH (Gewichts-basiert, EUR/100 kg, Maut all_in)
+- `pricing_mode: hybrid`
+- `all_in_components: [maut]` — Maut in `basispreis` inkludiert, kein separates `Erlöse_Maut`
+- Diesel: Fall A unbundled — `Erlöse_Diesel` in BI-Daten vorhanden; `diesel_soll = 0`
+  (DLV modelliert keinen Diesel-Satz); `diesel_delta = Erlöse_Diesel − 0`
+- CHF-Floater: Fall B all_in — in `Erlöse_Fracht` eingebettet; via Reverse-Engineer
+  auf CHF-Band-Tabelle gemappt
 
 **DLV-Struktur:** Sheet "Exporttarife" — Country-Blocks mit Zonen-Zeilen.
 Pro Zone: Minimum-Betrag + Gewichtsbänder (bis 300 kg, bis 500 kg, … bis 3.000 kg)
@@ -88,40 +108,63 @@ Gültig: 2025-01-01 – 2025-12-31 (kein separates 2026-DLV; 2025-Fallback bleib
 
 **Abrechnungsformel:**
 ```
-billing_kg  = max(100, ceil(tonnage_kg / 100) * 100)
-basispreis  = max(minimum_zone, rate_per_100kg × billing_kg / 100)   # EUR
-chf_amount  = basispreis × chf_floater_fraction                       # EUR, nur CH
-Erlöse_Fracht_soll = basispreis + chf_amount
-```
+billing_kg   = max(100, ceil(tonnage_kg / 100) * 100)
+basispreis   = max(minimum_zone, rate_per_100kg × billing_kg / 100)   # EUR, Maut inkl.
+chf_amount   = basispreis × chf_floater_fraction                       # EUR, nur CH
+fracht_soll  = basispreis + chf_amount
 
-**Maut:** In `basispreis` inkludiert → `toll = 0` in der floater_pct-Formel.
-**Diesel:** Nicht im DLV modelliert — erscheint als separate Spalte `Erlöse Diesel`
-in den BI-Daten und fließt nicht in `floater_pct` ein.
-
-**floater_pct für GEZE:**
-```
-floater_pct = Erlöse_Fracht / basispreis - 1
-# non-CH: floater_pct ≈ Diesel-Floater (variabel, monatlich)
-# CH:     floater_pct ≈ CHF-Floater-Fraktion + ggf. Diesel-Floater
+floater_pct  = (Erlöse_Fracht − basispreis) / basispreis
+# non-CH: floater_pct ≈ CHF-Neutralband (≈0) + variabler Diesel-Floater
+# CH:     floater_pct ≈ CHF-Floater-Fraktion (Diesel separat in Erlöse_Diesel)
+diesel_delta = Erlöse_Diesel − 0     # diesel_soll=0, DLV hat keinen Diesel-Block
 ```
 
 **CHF-Floater (nur Empfänger Land = CH):**
 Der CHF/EUR-Wechselkurs zum Sendungsdatum dient als **Lookup-Key** in die
-Prozentband-Tabelle (`Schweiz_Währungszuschlag_Geze.xlsx` bzw. Sheet
-"CH-Währungsfloater" im DLV). Die Tabelle gibt eine EUR-Prozent-Fraktion auf
-`basispreis` zurück — kein Währungsumtausch, alles in EUR.
+Prozentband-Tabelle (Sheet "CH-Währungsfloater" im DLV). Die Tabelle gibt eine
+EUR-Prozent-Fraktion auf `basispreis` zurück — kein Währungsumtausch, alles in EUR.
 
-Bandbreite im aktuellen CHF-Sheet: **CHF/EUR 1,021 – 0,88** in 14 Stufen;
-Stückgut (≤ 3.000 kg): 0 % – 9,18 %; Komplett (> 3.000 kg): 0 % – separates
-Staffel (Forward-Fill für Lücken in der Komplett-Spalte).
+Bandbreite: **CHF/EUR 1,021 – 0,88** in 14 Stufen;
+Stückgut (≤ 3.000 kg): 0 % – 9,18 %; Komplett (> 3.000 kg): separates Staffel.
 
-**Reverse-Engineer-Ansatz für 9b.3** (kein externer CHF/EUR-Kursdatensatz
-erforderlich): `floater_pct` aus Billing-Daten berechnen → CHF-Bandtabelle
-rückwärts durchlaufen → konsistente Bandeinordnung als Verifikation.
+**Reverse-Engineer-Ansatz für 9b.3:** `floater_pct` aus Billing-Daten berechnen →
+CHF-Bandtabelle rückwärts → konsistente Bandeinordnung. 9b.3-Ergebnis: 51/95
+CH-Gruppen im Neutralband, 3 aktive Bänder, 41 Diesel-Überlagerung.
 
-**Zone-Lookup:** Länderspezifische PLZ-Präfix-Tabellen im Calculator
-(`geze.py`); IE = immer Zone 1; GB = Postcode-Area (WS/B/CV… → Zone 1,
-G/EH… → Zone 3, BT → Zone 4).
+**Zone-Lookup:** Länderspezifische PLZ-Präfix-Tabellen im Calculator (`geze.py`);
+IE = immer Zone 1; GB = Postcode-Area (WS/B/CV… → Zone 1, G/EH… → Zone 3, BT → Zone 4).
+
+### CHT Germany GmbH (Gewichts-basiert, Dual-Mode, Maut unbundled)
+- `pricing_mode: hybrid`
+- Maut: Fall A unbundled — 0,56 EUR/100 kg (DE-Maut 0,50 + AT-Maut 0,06)
+  aus Calculator; `Erlöse_Maut` in BI-Daten vorhanden (empirisch zu prüfen)
+- Diesel: `Erlöse_Diesel` laut Calculator-Code = 0 in BI-Daten; Diesel via
+  separaten Sonder-Dieselfloater (nicht im DLV modelliert) → `diesel_delta = 0`
+- `all_in_components: []` — keine Komponente all_in (außer Diesel=0)
+
+**DLV-Struktur:** Sheet "Ex- und Import Italien" — 8 Zonen, 2 Preismodi.
+Gültig: 2026-01-01 – 2026-12-31. Herkunft: DE-72072 Tübingen.
+Länder in Scope: IT (cht.py), weitere (AT/BE/ES/GR via dlv_tariffs.py).
+
+**Dual-Mode-Umschaltpunkt: 1.000 kg (Aktual-Gewicht, nicht Billing-Gewicht)**
+```
+if actual_kg ≤ 1000:   # per-Sendung (Pauschalpreis je Gewichtsband)
+    basispreis = band.rates[zone]
+else:                   # per-100-kg
+    billing_kg = max(100, ceil(actual_kg / 100) * 100)
+    basispreis = rate_per_100kg × billing_kg / 100
+maut_soll = 0.56 × billing_kg / 100                   # EUR
+
+floater_pct  = (Erlöse_Fracht − basispreis) / basispreis
+maut_delta   = Erlöse_Maut − maut_soll
+diesel_delta = Erlöse_Diesel − 0
+```
+
+**Zone-Lookup (IT):** Erste 2 Stellen der 5-stelligen IT-PLZ → Zone 1–8.
+Override: PLZ-Präfix 238/239 → Zone 1 (vor generischem Präfix 23 → Zone 4 geprüft).
+
+**Sonder-PLZ (all_in_special):** PLZ 20052 (Arcor Monza) und 20098 (Sesto Ulteriano)
+→ eigene DLV-Datei; immer per-100-kg mit Mindestgebühr 55,46 EUR/Sendung.
 
 ---
 
