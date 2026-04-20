@@ -1,0 +1,2 @@
+lane,nach_ort,auftragsnr,datum,phase,route_key,no_route_match,ldm,n_direct,betrag,dlv_version_used,dlv_fallback,tariff_source,dlv_tariff,dlv_toll,dlv_expected,delta_raw,ratio,floater_pct,muster_a,muster_b
+EE,Lehmja,7092010022930001,2025-12-08,in_dlv_2025,EE-75301,False,0.4000,2.0000,159.6000,2025-10-10,date_match,exact,260.0000,0.0000,260.0000,-100.4000,0.6138,-0.3862,False,True
