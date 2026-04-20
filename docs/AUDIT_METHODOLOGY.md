@@ -175,6 +175,28 @@ Override: PLZ-Präfix 238/239 → Zone 1 (vor generischem Präfix 23 → Zone 4 
 **Sonder-PLZ (all_in_special):** PLZ 20052 (Arcor Monza) und 20098 (Sesto Ulteriano)
 → eigene DLV-Datei; immer per-100-kg mit Mindestgebühr 55,46 EUR/Sendung.
 
+**CHT Diesel/Maut-Vereinbarung per Land (B-Check 9c.0, empirisch):**
+
+| Land | `diesel_mode` | `maut_mode` | Erlöse_Diesel >0 | Erlöse_Maut >0 |
+|---|---|---|---|---|
+| IT | `not_contracted` | `unbundled` | 0/158 (0 %) | 157/158 (99 %) |
+| AT | `not_contracted` | `unbundled` | 0/36 (0 %) | 34/36 (94 %) |
+| ES | `not_contracted` | `unbundled` | 0/114 (0 %) | 111/114 (97 %) |
+| DE | `not_contracted` | `unbundled` | 0/11 (0 %) | 3/11 (27 %) |
+| BE | `contracted` | `unbundled` | 256/258 (99 %) | 256/258 (99 %) |
+| GR | `contracted` | `unbundled` | 102/102 (100 %) | 102/102 (100 %) |
+
+Maut ist kunden-weit Fall A (unbundled) bei CHT — `Erlöse_Maut` zuverlässig gefüllt
+für alle relevanten Länder. Maut-Delta für IT (9c.0): mean=−0,29 EUR, p50=0,000.
+
+**9c.0 IT fp-Befund (pre_dlv_2026-Diagnose):**
+
+| Cluster | n | fp-Bereich | Datum | Interpretation |
+|---|---|---|---|---|
+| fp ≈ 0,000 | 64 | ±0,001 | Jan–Mär 2026 | In-DLV exakter Match |
+| fp ≈ −0,020 | 80 | −0,022 bis −0,018 | Okt–Dez 2025 | `pre_dlv_2026`: 2025-Raten ~2 % günstiger |
+| fp ≈ +0,070 | 0 | — | — | Kein Muster-A bei CHT |
+
 ---
 
 ## §2a Positions-Level vs Sendungs-Level
@@ -244,6 +266,27 @@ konsistent befüllt ist.
 
 Diese Felder sind in den Lane-Summary-CSVs ab 9b.3 implizit vorhanden
 (9b.3 verwendet `mastersendung`-Key) und werden ab 9b.4 explizit ausgewiesen.
+
+### Diesel/Maut-Modus pro (Kunde, Land) (ab v1.6)
+
+Diesel und Maut sind **nicht kunden-global**, sondern **landen-spezifisch** vereinbart.
+Innerhalb eines Landes gilt: entweder immer verrechnet (`contracted`) oder nie (`not_contracted`).
+
+**Regel:**
+```
+diesel_mode(kunde, land) ∈ {"contracted", "not_contracted"}
+maut_mode(kunde, land)   ∈ {"unbundled", "all_in"}
+```
+
+**Sanity-Check:**
+- `diesel_mode = "contracted"` UND `Erlöse_Diesel = 0` in > 5 % der Zeilen
+  → Flag `"diesel_expected_missing"` — manuelle Prüfung (Storno? Korrekturbuchung?)
+- `diesel_mode = "not_contracted"` UND `Erlöse_Diesel > 0` in > 0 Zeilen
+  → Flag `"diesel_unexpected"` — mögliche Falschbuchung
+
+**Präzedenzfall CHT (9c.0 B-Check):** BE und GR haben Diesel vereinbart (Erlöse_Diesel
+immer > 0); IT, AT, ES, DE nicht (immer = 0). 2 BE-Zeilen ohne Diesel (von 258) →
+Flag `"diesel_expected_missing"`, Einzelfall-Abweichungen (Storno/Korrektur), kein Blocker.
 
 ---
 
@@ -482,17 +525,28 @@ verschiedene Dinge bedeuten:
 | **Diesel = 0** (EBM hat keinen Diesel-Floater) | Reiner ERKA-/Vertragsfloater | Muster-A-Treffer sind valide; 7 % = ERKA-Aufschlag |
 | **Diesel in betrag** (EBM-Diesel in `betrag` eingebettet) | ERKA-Floater + Diesel | Muster-A-Treffer könnten Diesel+Floater-Kombination sein |
 
-**Prüfschema:**
-1. EBM BI-Daten (bi_top20_data.pkl, KNR 410844) auf `Erlöse_Diesel`-Spalte prüfen:
-   - Wenn `Erlöse_Diesel > 0` für EBM-Zeilen: Diesel wird verrechnet, liegt aber
-     möglicherweise in `betrag` (Abrechnungsstrecken-Format) unsichtbar drin
-   - Wenn `Erlöse_Diesel = 0` für alle EBM-Zeilen: EBM hat keinen Diesel-Floater
-2. Cross-Check: `betrag / (tariff + toll)` für EBM Nicht-Floater-Monate (vor Jan 2026)
-   → wenn Ratio ≈ 1.000 (keine Drift): Diesel=0 bestätigt
-   → wenn Ratio ≈ 1.07–1.10 (systematische Drift vor Jan 2026): Diesel in betrag
+**Schärfung durch CHT-B-Check (v1.6):** Die diesel_mode-Regel besagt: Diesel ist
+pro (Kunde, Land) vereinbart — entweder immer oder nie. EBM-Prüfschema daher:
 
-**Status:** Offen. Hohe Priorität vor Abschluss-Report, da Muster-A-Narrative
-für EBM davon abhängt. Prüfung in Etappe 9c.x oder separatem Retroaktiv-Commit.
+**Prüfschema:**
+1. EBM BI-Daten (bi_top20_data.pkl, KNR 410844): `Erlöse_Diesel` per Land abfragen
+   - Wenn für alle EBM-Länder `Erlöse_Diesel = 0`: EBM hat **keinen Diesel-Floater**
+     → diesel_mode = `"not_contracted"` für alle EBM-Länder → floater_pct ist reiner
+     Vertragsfloater → Muster-A-Narrative (7 % = ERKA-Aufschlag) bleibt valide
+   - Wenn für einige Länder `Erlöse_Diesel > 0`: EBM hat Diesel für jene Länder
+     → die Abrechnungsstrecken-`betrag`-Spalte enthält ggf. keinen Diesel (eigene
+     Spalte im BI-System, nicht in Streckenabrechnung) → betrag = Tariff + Floater
+     (Diesel separat im BI, nicht im `betrag`)
+2. Cross-Check: `floater_pct = (betrag − toll) / tariff − 1` für EBM-Zeilen vor
+   Jan 2026 (vor Muster-A-Aktivierungsdatum): Wenn Ratio ≈ 0,000 → kein Floater
+   vor Jan 2026 → 7 % exakt im Jan 2026 = struktureller Switch = ERKA bestätigt
+
+**Konsequenzbaum:**
+- `Erlöse_Diesel = 0` für alle EBM-Länder in BI + fp ≈ 0 vor Jan 2026 → Muster-A valide
+- `Erlöse_Diesel > 0` für EBM-Länder, `betrag` ohne Diesel + fp ≈ 0 vor Jan 2026 → Muster-A valide
+- fp ≈ konstant vor Jan 2026 (nicht Null) → Diesel in `betrag` oder anderer Floater vorher
+
+**Status:** Offen. Hohe Priorität. Prüfung in Etappe 9c.x als eigenständiger Retroaktiv-Commit.
 
 ### EBM-Papst und Fischerwerke — Retroaktiv-Prüfung Aggregationsebene (post-9b.3)
 
@@ -537,3 +591,4 @@ Retroaktiv-Commit vor Abschluss-Report.
 | 1.3 | 2026-04-20 | 9b.2 | §5.0 tonnage_source-Pflichtfeld + 20%-Audit-Schwelle; GEZE-Befund 25,5% Tonnage=0 dokumentiert |
 | 1.4 | 2026-04-20 | 9b.3 | §2a Positions-Level vs Sendungs-Level: Aggregations-Key-Hierarchie, Muster-B-Aggregationsartefakt-Flag, Pflichtfelder aggregation_level/key_source; §7 EBM+Fischerwerke Retroaktiv-Aggregationsebene-Prüfung; §7 GEZE 9b.3-Ergebnis (CHF-Band-Match) |
 | 1.5 | 2026-04-20 | 9c.0 | §2.0 Standard-Formeln: Diesel-always-separate, Zwei-Fall-Regel (unbundled/all_in), Pflichtfelder pricing_mode + all_in_components; §2 Kunden-Blöcke realigned (Fischerwerke/EBM/GEZE) + CHT-Block neu; §3 Muster-A-Formel auf neue Notation + EBM-Sonder-Block; §3 Kundentabelle GEZE+CHT aktualisiert; §7 EBM-Diesel-Retroaktiv-Check (Szenario Diesel=0 vs Diesel-in-betrag) |
+| 1.6 | 2026-04-20 | 9c.0 | §1 pre_dlv_2026-Phase + in_dlv_2025_fallback präzisiert; §2 CHT Diesel/Maut-Tabelle per Land (B-Check empirisch) + 9c.0 IT fp-Befund; §2a diesel_mode/maut_mode pro (Kunde, Land) mit Sanity-Check-Regel; CHT-Präzedenzfall BE/GR contracted vs IT/AT/ES not_contracted |
