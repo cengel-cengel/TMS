@@ -86,6 +86,67 @@ G/EH… → Zone 3, BT → Zone 4).
 
 ---
 
+## §2a Positions-Level vs Sendungs-Level
+
+### Hintergrund
+
+Die **Abrechnungsstrecken**-Daten aus dem AX-System liefern je nach Datenquelle und
+Kundenkonfiguration entweder:
+- **Positions-Level:** Eine Zeile pro Auftragsposition (Auftragsnummer). Mehrere
+  Positionen können zur selben Sendung (Ausgangsbordero) gehören.
+- **Sendungs-Level:** Eine Zeile pro Sendung. Tonnage und Betrag sind bereits
+  sendungsseitig aggregiert.
+
+Der Unterschied ist **nicht sofort sichtbar** — beide Formate haben die gleichen
+Spaltennamen. Erkennbar erst beim Quervergleich: mehrere Auftragsnummern auf
+gleicher Rechnungsnummer/Ausgangsbordero → Positions-Level.
+
+### GEZE-Befund (9b.3)
+
+GEZE BI-Daten sind **Positions-Level**: 3.120 beurteilbare Positionen entsprechen
+1.098 Gruppen nach Aggregation auf `Rechnungsnummer × Empfänger Land × PLZ-norm`.
+Extremfall GB: 591 Positionen auf 8 Gruppen (Ø 74 Positionen/Gruppe, 2 eindeutige
+Ausgangsbordero). Auf Positions-Ebene wäre `floater_pct` stark verzerrt
+(Einzelminimumgebühren dominieren → fp ≈ −0,996).
+
+### Aggregations-Key-Hierarchie
+
+| Priorität | Key | Verwendbar wenn |
+|---|---|---|
+| 1 | `Ausgangsbordero` | Vorhanden und eindeutig pro Sendung |
+| 2 | `Mastersendungs-Key` (RN × Land × PLZ-norm) | Ausgangsbordero fehlt oder dünn besetzt |
+| 3 | `Position-Level mit Caveat` | Keine Aggregation möglich; fp-Werte als "unvalidiert" kennzeichnen |
+
+**Aktuell (9b.3):** Aggregations-Key = Mastersendungs-Key (Rechnungsnummer ×
+Empfänger Land × PLZ-norm), da `Ausgangsbordero` in den GEZE BI-Daten nicht
+konsistent befüllt ist.
+
+### Konsequenzen für Muster-A / Muster-B
+
+- **floater_pct** und daraus abgeleitetes **Muster-A** sind nur auf
+  **Sendungs-Ebene** belastbar. Auf Positions-Ebene (ohne Aggregation) sind alle
+  fp-Werte als **unvalidiert** zu markieren.
+- **Muster-B** (delta_raw < −10 EUR) reagiert empfindlich auf die
+  Aggregationsebene: Eine große Sendung mit 50 Positionen, die korrekt
+  abgerechnet wurde, kann auf Positions-Ebene 49× als Muster-B erscheinen
+  (Einzelposition << DLV-Minimum der aggregierten Sendung).
+- **Aggregationsartefakt-Flag:** Muster-B-Kandidaten mit `n_pos > 5` und
+  `fp > 0` auf Gruppenebene sind als "Aggregationsartefakt — Sendungs-Aggregation
+  erforderlich" zu kennzeichnen und **nicht** als bestätigte Unterfakturierung
+  zu werten.
+
+### Pflichtfelder (ab v1.4)
+
+| Feld | Werte | Bedeutung |
+|---|---|---|
+| `aggregation_level` | `sendung` \| `position` | Ebene der Billing-Kalkulation |
+| `aggregation_key_source` | `bordero` \| `mastersendung` \| `position_group` \| `none` | Welcher Key für die Aggregation verwendet wurde |
+
+Diese Felder sind in den Lane-Summary-CSVs ab 9b.3 implizit vorhanden
+(9b.3 verwendet `mastersendung`-Key) und werden ab 9b.4 explizit ausgewiesen.
+
+---
+
 ## §3 Muster-A-Erkennung
 
 ### Definition
@@ -294,6 +355,44 @@ Kein Testfall prüfte einen nicht-null CHF-Floater.
 (dd3d558) als Nachfolge-Commit dokumentieren. Keine Zahlen aus 5e zitieren,
 bis 9b.3 den CH-Floater im AX-Betrag bestätigt hat.
 
+**9b.3-Ergebnis:** 54/95 CH-Gruppen zeigen Band-Match (51 × Neutralband
+1.021–1.075 → chf_amount=0; 3 × aktive Bänder < 1.021 → CHF-Floater aktiv).
+41 CH-Gruppen ohne Band-Match: Diesel-Überlagerung oder multiperiodische Batches.
+→ Bestätigt: ERKA hat CHF-Floater korrekt in `Erlöse Fracht` eingerechnet;
+5e-Commit-Bug hatte keine Auswirkung auf die tatsächliche Abrechnung (ERKA
+rechnete korrekt), nur auf die Validator-Prüfung.
+
+### EBM-Papst und Fischerwerke — Retroaktiv-Prüfung Aggregationsebene (post-9b.3)
+
+**Offene Frage:** Wurden EBM Muster-A-Treffer (50 Zeilen, Jan 2026) und Fischerwerke
+Muster-A-Treffer (~31 Zeilen, März 2026) auf Positions- oder Sendungs-Ebene berechnet?
+
+**EBM 9a.4.2-Analyse (Commit c4bcad9):**
+- Eingabedaten: Abrechnungsstrecken `EBM.xlsx`, eine Zeile pro Eintrag
+- Aggregations-Key: `Nach Ort` (Ortsname) → DLV-Route-Key
+- Muster-A-Check: direkt auf Zeilen-Level (nicht aggregiert)
+- Risiko: Falls EBM-Daten Positions-Level sind, könnten die 50 Muster-A-Treffer
+  auf denselben 10–15 Sendungen basieren (Zahl des Findings wäre identisch, aber
+  fp-Statistik wäre sendungsseitig robuster darzustellen)
+
+**Fischerwerke (Muster-A ~31 Zeilen, März 2026):** Aggregationsebene noch nicht
+dokumentiert; Risiko analog EBM.
+
+**Prüfschema:**
+1. Zähle eindeutige `Ausgangsbordero` in den EBM/Fischerwerke Muster-A-Zeilen
+2. Wenn `n_unique_bordero << n_zeilen`: Positions-Level → retroaktiv auf
+   Sendungs-Ebene aggregieren, Muster-A und delta_sum neu berechnen
+3. Wenn `n_unique_bordero ≈ n_zeilen`: Sendungs-Level → kein Retroaktiv-Bedarf
+
+**Wichtig:** Das Muster-A-Zählkriterium (`abs(fp − 0.07) < 0.0015`) ist auf
+Positions-Ebene identisch anwendbar, sofern der 7 %-Floater sendungseinheitlich
+aufgeschlagen wird (alle Positionen derselben Sendung haben denselben Floater).
+In diesem Fall ändert Sendungs-Aggregation die Anzahl Treffer nicht, nur die
+Granularität der delta_sum-Darstellung.
+
+**Status:** Offen. Prüfung in Etappe 9c.x (EBM Retroaktiv) oder als separater
+Retroaktiv-Commit vor Abschluss-Report.
+
 ---
 
 ## Changelog
@@ -304,3 +403,4 @@ bis 9b.3 den CH-Floater im AX-Betrag bestätigt hat.
 | 1.1 | 2026-04-20 | 9b.0 | §2 GEZE-Block: Maut-inklusiv, CHF-Floater als EUR-Surcharge, Reverse-Engineer-Ansatz; §3 GEZE-Zeile + engeres Muster-A-Binning für 9b.3 |
 | 1.2 | 2026-04-20 | 9b.1 | §6a Sanity-Gate 5 (bedingte Komponenten nicht-null); §7 Retroaktiv-Eintrag GEZE 5e (23d6a1a im Parser-Bug-State freigegeben) |
 | 1.3 | 2026-04-20 | 9b.2 | §5.0 tonnage_source-Pflichtfeld + 20%-Audit-Schwelle; GEZE-Befund 25,5% Tonnage=0 dokumentiert |
+| 1.4 | 2026-04-20 | 9b.3 | §2a Positions-Level vs Sendungs-Level: Aggregations-Key-Hierarchie, Muster-B-Aggregationsartefakt-Flag, Pflichtfelder aggregation_level/key_source; §7 EBM+Fischerwerke Retroaktiv-Aggregationsebene-Prüfung; §7 GEZE 9b.3-Ergebnis (CHF-Band-Match) |
