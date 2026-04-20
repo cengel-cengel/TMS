@@ -355,6 +355,79 @@ oder keine ERKA-Vereinbarung).
 
 ---
 
+## §3a Sonder-PLZ-Aufschlag (ab v1.7.1)
+
+### Definition
+
+Ein **Sonder-PLZ-Aufschlag** ist ein PLZ-spezifischer Festaufschlag auf den
+DLV-Basispreis, der **nicht im DLV-Dokument ausgewiesen** ist. Er erscheint als
+konsistenter positiver `fp`-Wert bei ≥ 2 Positionen derselben PLZ, während andere
+PLZs desselben Kunden/Landes keinen oder geringen fp zeigen.
+
+**Abgrenzung zu Muster-A:**
+
+| Merkmal | Muster-A | Sonder-PLZ-Aufschlag |
+|---|---|---|
+| Granularität | Kunden-/Lane-übergreifend | PLZ-spezifisch |
+| Wert | exakt +7,00 % ± 0,15 % | variabel +6–8 % (beobachtet) |
+| Ursache | ERKA-Indexvereinbarung | Thermo-/Sondergebiets-/Gefahrgut-Zuschlag |
+| Erkennung | abs(fp − 0.07) < 0.0015 | ≥ 2 Pos. derselben PLZ, abs(fp − fp_plz) < 0.005 |
+
+### Erkennungsregel
+
+```python
+# Pro (Kunde, Land, PLZ): wenn ≥ 2 Positionen mit fp-Konsistenz
+plz_fp_mean = mean(fp für Positionen mit dieser PLZ)
+plz_fp_std  = std(fp für Positionen mit dieser PLZ)
+if plz_fp_std < 0.005 and abs(plz_fp_mean) > 0.03 and n >= 2:
+    flag = "sonder_plz_aufschlag"
+```
+
+Positionen mit `sonder_plz_aufschlag` werden als **§8 (Klärungsfrage)** markiert,
+nicht als bestätigte Billing-Abweichung. Hypothese: Thermozuschlag,
+Gefahrgut-Handling oder PLZ-gebundener Sondertarif, der im DLV-Basispreis
+fehlt — mögliche Calculator-Lücke.
+
+**Retroaktiv-Check bei HELU/HERMA/Hornschuch:** PLZ-Cluster mit fp > 0.03 und
+Std < 0.005 prüfen. Falls gefunden: §8-Eintrag analog zu den CHT-Fällen.
+
+### Bekannte Sonder-PLZ-Fälle (Stand 9c.2a)
+
+| Kunde | Land | PLZ | fp | n | Hypothese |
+|---|---|---|---|---|---|
+| CHT | IT | 20098 | +0,061 | 3 | Thermozuschlag Sesto Ulteriano / Milan |
+| CHT | BE | 8540 | +0,063 | 1 | Thermozuschlag Kortrijk-West / Westflandern |
+| CHT | BE | 8560 | +0,063 | 1 | Thermozuschlag Kortrijk-West / Westflandern |
+| CHT | BE | 8400 | +0,064 | 1 | Thermozuschlag Kortrijk-West / Westflandern |
+
+Alle drei BE-PLZ liegen im Großraum Kortrijk (Westflandern) und zeigen
+konsistent +6,3–6,4 %. Zusammen mit IT/20098 (+6,1 %) deutet das auf
+einen **Thermo-/Sondergebietszuschlag von 75 EUR** hin, der auf den
+DLV-Basispreis prozentual skaliert wirkt, aber im DLV-Dokument nicht
+aufgeführt ist.
+
+**Sonderfall 924248/PLZ 7700 (+18,7 %, 1 Position):** Abweichend von den
++6 %-Fällen — zu hoch für Sonder-PLZ-Aufschlag, zu konsistent für Rauschen.
+Mögliche FTL-/Gefahrgut-/Priority-Sondertarifebene. Im 9c.4-Report als
+eigenständige Prioritäts-§8-Position, nicht mit Sonder-PLZ-Fällen zusammengeführt.
+
+### AX-Raten-Präzision (Hinweis ab v1.7.1)
+
+AX speichert DLV-Tarifsätze möglicherweise mit reduzierter Dezimalstellenpräzision
+(2dp statt 4dp des DLV-Dokuments). Dieses Muster wurde für CHT/BE bestätigt, für
+CHT/IT nicht (IT-Raten in AX: volle 4dp-Präzision). Konsequenz:
+
+- **Pro Land validieren:** Integration-Test zeigt, ob AX-Raten 2dp oder 4dp haben.
+  Indikation: Systematisches fp ≈ −0,0002 (nicht zufällig) bei `exact_dlv`-RNs.
+- **Calculator anpassen:** Wenn AX 2dp speichert, Calculator-Raten auf 2dp runden
+  (damit ±0,01-EUR-Kriterium anwendbar bleibt).
+- **§8-Dokumentation:** "AX speichert <Land>-Tarifsätze mit 2 Dezimalstellen;
+  DLV notiert 4dp. Calculator folgt AX-Präzision. KLÄRUNGSFRAGE: 2dp vertragskonform?"
+- **Retroaktiv-Prüfung:** Für alle weiteren CHT-Länder (AT/ES/GR) und Welle-3-
+  Kunden im Integration-Test prüfen, ob AX-Präzision 2dp oder 4dp.
+
+---
+
 ## §4 Muster-B-Erkennung
 
 ### Definition
@@ -722,3 +795,4 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 | 1.6 | 2026-04-20 | 9c.0 | §1 pre_dlv_2026-Phase + in_dlv_2025_fallback präzisiert; §2 CHT Diesel/Maut-Tabelle per Land (B-Check empirisch) + 9c.0 IT fp-Befund; §2a diesel_mode/maut_mode pro (Kunde, Land) mit Sanity-Check-Regel; CHT-Präzedenzfall BE/GR contracted vs IT/AT/ES not_contracted |
 | 1.6.1 | 2026-04-20 | 9c.0 | §2a Einzelfall-all_in-Ausnahme: Diesel=0+Maut=0 bei Fracht≈split_sum → all_in_exception-Flag; Schwelle ≤1%; CHT-BE-Präzedenzfall PLZ 8550/3600 |
 | 1.7 | 2026-04-20 | 9c.2a | §6b neu: RN-Level-Faktor-Detection (Gate 6); Classifier-Logik (rn_std<0.0005, rn_factor); §8-Listenformat für RN-Adjustment-Fälle; CHT/BE 9c.2a Befundtabelle; GEZE retroaktiv Gate-6-bestanden; §7 Welle-3-Retroaktiv-Pflichtprüfschema RN-Level-Faktor + Sonder-PLZ-Konsistenz |
+| 1.7.1 | 2026-04-20 | 9c.2a | §3a neu: Sonder-PLZ-Aufschlag — Definition, Abgrenzung zu Muster-A, Detection-Regel (plz_fp_std<0.005, abs(fp_mean)>0.03, n≥2), Known-Cases-Tabelle (CHT/IT/20098 +6.1%, CHT/BE/8540+8560+8400 +6.3-6.4% Kortrijk West), PRIORITY-§8-Eintrag 924248/7700 (+18.7%); AX-Raten-Präzisions-Hinweis: IT=4dp, BE=2dp, Pflicht-per-Land-Validierung |
