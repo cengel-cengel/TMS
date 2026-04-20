@@ -14,11 +14,20 @@ Unterfrachtführers (z. B. Kern). Ziel: Nachweis von Über- oder Unterfakturieru
 gegenüber der vertraglich vereinbarten Offerte.
 
 Die Prüfung ist **phasen-bewusst**: Jede Zeile wird einem Zeitfenster zugeordnet:
-- `pre_dlv` — vor DLV-Gültigkeitsbeginn
+- `pre_dlv` — vor DLV-Gültigkeitsbeginn (kein aktives DLV; kein Calculator-Check)
+- `pre_dlv_2026` — Leistungsdatum vor 01.01.2026 bei Kunden, deren ältestes
+  verfügbares DLV erst 2026 beginnt (z. B. CHT: DLV-Start 2026-01-01). Diese
+  Zeilen sind nicht unbeurteilbar — sie benötigen ein 2025-DLV, das ggf. noch
+  nicht extrahiert/gepflegt ist. fp-Werte zeigen systematischen Versatz vs.
+  2026-DLV, der als DLV-Version-Gap zu dokumentieren ist, nicht als Abweichung.
 - `in_dlv` / `in_dlv_2025` / `in_dlv_2026` — innerhalb eines Gültigkeitsfensters
-- `post_dlv` — nach DLV-Ablauf
+- `in_dlv_2025_fallback` — Datum nach DLV-Ablauf, aber kein Nachfolge-DLV
+  vorhanden; 2025-DLV bleibt aktiv (z. B. GEZE: kein 2026-DLV)
+- `post_dlv` — nach DLV-Ablauf mit Nachfolge-DLV (Fallback explizit deaktiviert)
 
-Calculator-Checks laufen **ausschließlich** auf `in_dlv`-Zeilen.
+Calculator-Checks laufen **ausschließlich** auf `in_dlv`-Zeilen. `pre_dlv_2026`-
+Zeilen werden im Report mit Versatz-Kennzeichnung ausgewiesen (kein Calculator-
+Befund, aber Indikator für fehlendes 2025-DLV).
 
 ---
 
