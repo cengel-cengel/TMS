@@ -65,7 +65,7 @@ def _parse_bands(path: Path) -> list[_Band]:
             except (ValueError, TypeError):
                 continue
             try:
-                rate = Decimal(str(round(float(col2), 4)))
+                rate = Decimal(str(round(float(col2), 2)))
             except (ValueError, TypeError):
                 continue
             unit = "per Sendung" if "sendung" in col3.lower() else "per 100 kg"
@@ -74,7 +74,7 @@ def _parse_bands(path: Path) -> list[_Band]:
         elif "kompl" in col1.lower() or "kompl" in col0.lower():
             # komplett LKW — flat per Sendung, catch-all for very heavy
             try:
-                rate = Decimal(str(round(float(col2), 4)))
+                rate = Decimal(str(round(float(col2), 2)))
                 bands.append(_Band(weight_limit=999999, rate=rate, unit="per Sendung"))
             except (ValueError, TypeError):
                 pass
