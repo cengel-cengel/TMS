@@ -202,7 +202,42 @@ fließen nicht in Calculator-Checks ein.
 
 ---
 
-## §7 Altzahl-Validierung
+## §6a Sanity-Gates für Calculator-Binnentests
+
+Ein Calculator gilt erst dann als **validiert**, wenn alle fünf Gates bestanden sind:
+
+| Gate | Prüfung | Fehlermodus |
+|---|---|---|
+| 1 | Mindest-Abdeckung: ≥ 2 Fälle pro Land/Zone-Kombination | Blind Spots in Zonen-Lookup |
+| 2 | Minimum-Floor: mind. 1 Fall, der durch das Minimum gedeckelt wird | Minimum-Logik nie aktiviert |
+| 3 | Rate-Bereich: mind. 1 Fall mit rate×billing_kg > minimum | Rate-Berechnung nie aktiv |
+| 4 | Gewichtsband-Grenze: mind. 1 Fall exakt auf einer Band-Grenze (z. B. billing_kg=300) | Off-by-one in Band-Lookup |
+| 5 | **Bedingte Komponenten nicht-null**: Alle optionalen Surcharges/Floater/Währungen müssen in mind. 1 Testfall einen Wert > 0 liefern | Stille Nullen durch Parser-Bug |
+
+**Gate 5 — Hintergrund (Präzedenzfall GEZE 9b.1):**
+
+Etappe 5e validierte den GEZE-Calculator mit 6/6 grünen Tests. Der CHF-Floater
+schien zu funktionieren. Tatsächlich las `_parse_chf_floater` Spalten 0–3 statt
+der korrekten 2–5, lieferte eine leere Tabelle, und `chf_amount` war immer 0.
+Die 6 Testfälle enthielten einen CH-Fall mit Rate 1.065 — der fällt in das
+Null-Prozent-Band (≥ 1.021), sodass auch mit korrektem Parser `chf_amount=0`
+erwartet worden wäre. Grüner Test, falscher Grund.
+
+**Konsequenz für künftige Calculator-Validierungen:**
+
+| Calculator | Bedingte Komponente | Gate-5-Testanforderung |
+|---|---|---|
+| GEZE | CHF-Floater | mind. 1 CH-Fall mit CHF/EUR < 1.021 (nicht-null Band) |
+| HERMA | VL-Aufschlag (Vorlauf) | mind. 1 Fall mit VL > 0 |
+| HELU | Country-Fallback | mind. 1 Fall, der Fallback auslöst |
+| CHT | Zonen-Lookup (Spanien, Italien) | mind. 1 Fall je Zone-Lookup-Pfad |
+| Hornschuch | Formel-Varianten | mind. 1 Fall je Formelzweig |
+
+---
+
+## §7 Altzahl-Validierung und Retroaktiv-Liste
+
+### EBM-Papst — Revision 9a.1.b
 
 Bekannte Altzahl aus Vorgänger-Analyse 9a.1.b: **−18.517 EUR** (scheinbare Unter-
 fakturierung EBM gesamt).
@@ -216,6 +251,27 @@ Korrekte Gesamt-Delta (9a.4.2, 339 beurteilbare Zeilen): **+41.283 EUR** — all
 positiv, erklärt durch Floater-Aufschlag auf DLV-Tarif. Keine systematische
 Unterfakturierung auf Lane-Ebene außer Muster-B (1 Zeile, −100,40 EUR).
 
+### GEZE — Retroaktiv-Eintrag 5e (Commit 23d6a1a)
+
+**Status: Funktional invalide, obwohl Tests grün.**
+
+Commit 23d6a1a ("Etappe 5e: GEZE calculator, 6/6 within 2%") wurde im
+CHF-Parser-Bug-State freigegeben. Die 6 Validierungssendungen enthielten einen
+CH-Fall (PLZ 5436, CHF-Rate 1.065), der zufällig in das Null-Prozent-Band fällt.
+Kein Testfall prüfte einen nicht-null CHF-Floater.
+
+**Post-9b.1-Prüfung erforderlich:**
+- Waren die 6 Validierungssendungen aus 5e allesamt non-CH oder im Null-Band?
+  → Wenn ja: keine echte Drift in den 5e-Zahlen, nur stille Null für CH.
+  → Wenn nein: 5e-Ergebnisse für CH-Zeilen nach unten verzerrt (chf_amount fehlte).
+- Die 9b.3-Analyse wird zeigen, ob AX-Abrechnungszeilen für CH einen
+  floater_pct > 0 aufweisen — das ist der indirekte Nachweis, dass ERKA
+  den CHF-Floater korrekt berechnet hat (und 5e ihn nur nicht prüfte).
+
+**Empfehlung:** 5e-Commit nicht rückwirkend ändern; stattdessen 9b.1-Fix
+(dd3d558) als Nachfolge-Commit dokumentieren. Keine Zahlen aus 5e zitieren,
+bis 9b.3 den CH-Floater im AX-Betrag bestätigt hat.
+
 ---
 
 ## Changelog
@@ -224,3 +280,4 @@ Unterfakturierung auf Lane-Ebene außer Muster-B (1 Zeile, −100,40 EUR).
 |---|---|---|---|
 | 1.0 | 2026-04-20 | 9a.4.2 | Initiale Erstellung; §3 floater_pct-Basis für Muster-A; §5a LDM-Fallback |
 | 1.1 | 2026-04-20 | 9b.0 | §2 GEZE-Block: Maut-inklusiv, CHF-Floater als EUR-Surcharge, Reverse-Engineer-Ansatz; §3 GEZE-Zeile + engeres Muster-A-Binning für 9b.3 |
+| 1.2 | 2026-04-20 | 9b.1 | §6a Sanity-Gate 5 (bedingte Komponenten nicht-null); §7 Retroaktiv-Eintrag GEZE 5e (23d6a1a im Parser-Bug-State freigegeben) |
