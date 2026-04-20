@@ -284,6 +284,22 @@ maut_mode(kunde, land)   ∈ {"unbundled", "all_in"}
 - `diesel_mode = "not_contracted"` UND `Erlöse_Diesel > 0` in > 0 Zeilen
   → Flag `"diesel_unexpected"` — mögliche Falschbuchung
 
+**Einzelfall-all_in-Ausnahme:** Innerhalb eines `(kunde, land)` mit
+`diesel_mode = "contracted"` können einzelne Zeilen `Erlöse_Diesel = 0`
+**und** `Erlöse_Maut = 0` aufweisen, während `Erlöse_Fracht` dem Gesamtbetrag
+vergleichbarer Zeilen entspricht. Diese Zeilen erhalten das Flag
+`pricing_mode: all_in_exception` — kein Datenfehler, sondern Buchungsformat-
+Ausnahme (Fracht+Diesel+Maut in einem einzigen Fracht-Betrag gebündelt).
+
+Schwelle: ≤ 1 % der Zeilen im `(kunde, land)`-Scope → Einzelfall-Ausnahme.
+Bei > 1 %: keine Ausnahme mehr, sondern Hinweis auf strukturelle Änderung →
+`diesel_mode` für diese Kombination neu evaluieren.
+
+**Präzedenzfall CHT (9c.0 B-Check):** BE PE PLZ 8550 (0,78 % von 258 BE-Zeilen)
+hat Diesel=0 und Maut=0 bei `Erlöse_Fracht = 167,91` ≈ Split-Gesamtbetrag
+vergleichbarer Zeilen (PLZ 8560: 146,96+14,64+6,38 = 167,98). Flag
+`all_in_exception` gesetzt.
+
 **Präzedenzfall CHT (9c.0 B-Check):** BE und GR haben Diesel vereinbart (Erlöse_Diesel
 immer > 0); IT, AT, ES, DE nicht (immer = 0). 2 BE-Zeilen ohne Diesel (von 258) →
 Flag `"diesel_expected_missing"`, Einzelfall-Abweichungen (Storno/Korrektur), kein Blocker.
