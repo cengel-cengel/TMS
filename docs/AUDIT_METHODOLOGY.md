@@ -24,6 +24,45 @@ Calculator-Checks laufen **ausschließlich** auf `in_dlv`-Zeilen.
 
 ## §2 DLV-Tarif-Formate
 
+### §2.0 Standard-Formeln (ab v1.5)
+
+#### Diesel-Regel (methodikweit verbindlich)
+
+**Diesel ist IMMER eine separate Komponente** — sie erscheint in den BI-Daten als
+eigene Spalte `Erlöse Diesel` und fließt **nie** in `floater_pct` ein.
+
+```
+# Fracht-Abweichung:
+floater_pct  = (Erlöse_Fracht − basispreis) / basispreis
+
+# Diesel-Abweichung (separat):
+diesel_delta = Erlöse_Diesel − diesel_soll
+# diesel_soll = 0, wenn DLV keinen Diesel-Satz modelliert
+# diesel_soll = calculierter Satz, wenn DLV Dieselfloater enthält
+```
+
+Diese Trennung verhindert, dass variable Dieselzuschläge als Muster-A-Treffer
+fehlinterpretiert werden (vgl. §3 Begründung, PL-Zeilen März 2026).
+
+#### Zwei-Fall-Regel für weitere Komponenten (Maut, Surcharges, Währung)
+
+| Fall | Bedingung | Behandlung |
+|---|---|---|
+| **A — unbundled** | Komponente im Calculator als eigener Wert UND BI-Spalte zuverlässig gefüllt | Eigenes Delta: `komponente_delta = Erlöse_X − soll_X` |
+| **B — all_in** | Komponente im Calculator inkludiert (z. B. Maut in basispreis) ODER BI-Spalte leer/unzuverlässig | In `floater_pct` enthalten; Komponentenliste dokumentieren |
+
+**Pflichtfelder pro Kunden-Block:**
+
+| Feld | Werte | Bedeutung |
+|---|---|---|
+| `pricing_mode` | `unbundled` \| `all_in` \| `hybrid` | Dominant angewendete Behandlung |
+| `all_in_components` | Liste | Welche Komponenten in `floater_pct` eingebettet sind |
+
+Beim Modus `hybrid` gilt `unbundled` für die aufgeführten Einzelkomponenten und
+`all_in` für den Rest.
+
+---
+
 ### Fischerwerke (Stellplatz-basiert)
 - Lookup-Tabelle: Anzahl Stellplätze → Flat-Rate per Sendung
 - Per-Route-Dateien (eine Datei pro Abrechnungsrelation)
