@@ -555,6 +555,93 @@ erwartet worden wäre. Grüner Test, falscher Grund.
 
 ---
 
+## §6c AX-Raten-Präzisions-Check (Pflichtschritt ab v1.7.2)
+
+### Motivation
+
+AX (Microsoft Dynamics) speichert Tarifraten nicht notwendigerweise mit voller
+DLV-Präzision. CHT/IT-Raten sind nativ 4-stellig in AX; CHT/BE-Raten werden
+mit 2 Dezimalstellen gespeichert (z. B. DLV-Rate 10.7120 → AX: 10.71).
+Wenn der Calculator volle DLV-Präzision benutzt, entstehen systematische
+Deltas für große Tonnagen (z. B. ×21 Hundertergewicht × 0.002 = 0.042 EUR
+überschreitet das ±0.01-Kriterium).
+
+### Pflicht-Vorgehensweise vor jedem neuen Calculator-Build
+
+Für jede neue (Kunde, Land)-Kombination:
+
+**Schritt 1 — DLV-Rate ablesen**
+```
+Aus DLV-Excel-Datei: 3–5 Bänder notieren (4dp exakt)
+```
+
+**Schritt 2 — AX-Rate rückrechnen**
+```python
+# Für 3–5 BI-Beispielrechnungen:
+ax_implied_rate = erloes_fracht / (billing_kg / 100)
+# Vergleich mit DLV-Rate:
+#   ax_implied_rate ≈ dlv_rate          → "native" (volle Präzision)
+#   ax_implied_rate ≈ round(dlv_rate,2) → "2dp"
+#   Sonstiges                           → "other" (Klärungsfrage §8)
+```
+
+**Schritt 3 — ax_rate_precision festlegen**
+
+| Befund | ax_rate_precision | Calculator-Konsequenz |
+|---|---|---|
+| AX-Rate = DLV-Rate (volle dp) | `"native"` | Keine Rundung, DLV-Rate direkt |
+| AX-Rate = round(DLV-Rate, 2) | `"2dp"` | `round(float(col2), 2)` in `_parse_bands()` |
+| AX-Rate = round(DLV-Rate, 3) | `"3dp"` | `round(float(col2), 3)` in `_parse_bands()` |
+| Kein klares Muster erkennbar | `"other"` | §8-Klärungsfrage, Calculator verwenden und Befund dokumentieren |
+
+**Schritt 4 — Dokumentation in Calculator-Docstring**
+
+```python
+"""
+...
+AX-Raten-Präzision: <ax_rate_precision>  (empirisch geprüft, 9c.2x)
+  DLV nativ: <beispiel_4dp>  →  AX gespeichert: <beispiel_ax_dp>
+  §8-Hinweis: "AX speichert <Land>-Raten mit <precision>. Calculator folgt AX-Praxis."
+"""
+```
+
+### Bekannte Befunde
+
+| Kunde | Land | ax_rate_precision | Belegt in | Referenz |
+|---|---|---|---|---|
+| CHT Germany | IT | `native` (4dp) | 9c.1: 63/63 match | 9c.2a IT-Retroaktiv-Check |
+| CHT Germany | BE | `2dp` | 9c.2a: 65/65 match nach Rundung | Backrechnung 924035/924148 |
+| CHT Germany | ES | offen | 9c.2b | — |
+| CHT Germany | GR | offen | 9c.2c | — |
+| CHT Germany | AT | offen | 9c.2d | — |
+
+### Zeitbezug-Befund CHT/BE rn_level_adjustment (§8-Daten)
+
+Aus Etappe 9c.2a, Gate-6-Klassifikation — Abrechnungsdaten der 4 adjustment-RNs
+versus 4 exact_dlv-RNs:
+
+| RN | Kategorie | Leistungsdaten | Monat | factor |
+|---|---|---|---|---|
+| 924035 | exact_dlv | 2026-01-12–13 | 2026-01 | 0.0000 |
+| 924069 | rn_adj | 2026-01-12–19 | 2026-01 | −0.0069 |
+| 924081 | rn_adj | 2026-01-19–23 | 2026-01 | +0.0296 |
+| 924102 | rn_adj | 2026-01-27–30 | 2026-01 | +0.0050 |
+| 924148 | exact_dlv | 2026-02-09–12 | 2026-02 | 0.0000 |
+| 924187 | exact_dlv | 2026-02-16–20 | 2026-02 | 0.0000 |
+| 924225 | exact_dlv | 2026-02-24–03-02 | 2026-02/03 | 0.0000 |
+| 924234 | rn_adj | 2026-03-02–06 | 2026-03 | +0.0042 |
+
+**Befund**: Kein sauberes temporales Clustering. Januar 2026 enthält sowohl
+exact_dlv (924035) als auch drei rn_adj-RNs. Februar 2026 ist vollständig exact_dlv.
+März 2026 hat einen rn_adj-Ausreißer (924234). Die Faktoren variieren pro RN
+(−0.69% bis +2.96%) ohne erkennbares Muster.
+
+**Konklusion**: Hypothese "AX-Konfigurations-Drift pro Abrechnungsperiode" nicht
+bestätigt. Mechanismus unbekannt. Klärungsfrage an Operations/Fachabteilung
+(Abrechnungskorrektur? Manuelle Nachbuchung? Konditionsübersteuerung im AX-System?).
+
+---
+
 ## §6b RN-Level-Faktor-Detection (Gate 6, ab v1.7)
 
 ### Motivation
@@ -796,3 +883,4 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 | 1.6.1 | 2026-04-20 | 9c.0 | §2a Einzelfall-all_in-Ausnahme: Diesel=0+Maut=0 bei Fracht≈split_sum → all_in_exception-Flag; Schwelle ≤1%; CHT-BE-Präzedenzfall PLZ 8550/3600 |
 | 1.7 | 2026-04-20 | 9c.2a | §6b neu: RN-Level-Faktor-Detection (Gate 6); Classifier-Logik (rn_std<0.0005, rn_factor); §8-Listenformat für RN-Adjustment-Fälle; CHT/BE 9c.2a Befundtabelle; GEZE retroaktiv Gate-6-bestanden; §7 Welle-3-Retroaktiv-Pflichtprüfschema RN-Level-Faktor + Sonder-PLZ-Konsistenz |
 | 1.7.1 | 2026-04-20 | 9c.2a | §3a neu: Sonder-PLZ-Aufschlag — Definition, Abgrenzung zu Muster-A, Detection-Regel (plz_fp_std<0.005, abs(fp_mean)>0.03, n≥2), Known-Cases-Tabelle (CHT/IT/20098 +6.1%, CHT/BE/8540+8560+8400 +6.3-6.4% Kortrijk West), PRIORITY-§8-Eintrag 924248/7700 (+18.7%); AX-Raten-Präzisions-Hinweis: IT=4dp, BE=2dp, Pflicht-per-Land-Validierung |
+| 1.7.2 | 2026-04-20 | 9c.2a | §6c neu: AX-Raten-Präzisions-Check — Pflichtschritt vor jedem neuen Calculator-Build; ax_rate_precision (native/2dp/3dp/other); Backrechnung-Methode; Known-Befunde-Tabelle (CHT/IT=native, CHT/BE=2dp); Zeitbezug-Befund CHT/BE rn_level_adjustment: kein temporales Clustering (Jan-2026 hat mix aus exact+rn_adj), Faktoren variieren pro RN, Mechanismus unbekannt → Klärungsfrage Operations |
