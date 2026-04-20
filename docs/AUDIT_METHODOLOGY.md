@@ -482,6 +482,90 @@ erwartet worden wäre. Grüner Test, falscher Grund.
 
 ---
 
+## §6b RN-Level-Faktor-Detection (Gate 6, ab v1.7)
+
+### Motivation
+
+In einigen Kunden-Ländern (erstmals CHT/BE, 9c.2a) weichen die tatsächlichen
+Erlöse_Fracht-Werte systematisch vom 2026-DLV ab — aber nicht über alle Zeilen
+gleichmäßig, sondern **pro Rechnungsnummer (RN) konsistent**. Das heißt: innerhalb
+eines RN haben alle Positionen denselben relativen Abstand zum berechneten
+Basispreis. Ursache: unbekannter Mechanismus auf Rechnungsebene (möglicherweise
+eine quartalsbezogene Frachtraten-Anpassung, die in AX je Invoice-Batch
+unterschiedlich eingestellt wurde).
+
+Dieses Muster ist **kein Calculator-Bug** und **kein Muster-A-Treffer** — es ist ein
+strukturelles Billing-Artefakt, das vor der Pass-Rate-Berechnung identifiziert und
+separat ausgewiesen werden muss.
+
+### Abgrenzung zu anderen Mustern
+
+| Muster | Granularität | Wert | Richtung | Bedeutung |
+|---|---|---|---|---|
+| Muster-A | Lane-übergreifend | exakt +7,00 % ± 0,15 % | positiv | ERKA-Indexaufschlag |
+| RN-Level-Faktor | pro RN | beliebig (beobachtet: −0,7 % bis +3,0 %) | positiv oder negativ | Unbekannter RN-Mechanismus |
+| Rundungsartefakt | pro Position | < 0,01 EUR absolut | beliebig | Dezimalstellen-Differenz |
+| Aggregationsartefakt | pro Gruppe | fp > 0 bei n_pos > 5 | positiv | Sendungs-Ebene fehlt |
+
+### Classifier-Logik (Gate 6)
+
+Vor der Pass-Rate-Berechnung wird **pro RN** geprüft:
+
+```python
+rn_factor = median(erloes_fracht / basispreis)   # ≈ 1 + fp
+rn_std    = std(erloes_fracht / basispreis)
+
+if rn_std < 0.0005:                        # alle Positionen im RN gleichmäßig
+    if abs(rn_factor - 1.0) < 0.0005:     # Faktor ≈ 1 → exaktes DLV
+        flag = "exact_dlv"                 # → zählt in Pass-Rate
+    else:
+        flag = "rn_level_adjustment"       # → aus Pass-Rate exkludiert
+else:                                      # heterogene Abweichungen im RN
+    flag = None                            # → per-Position ±0.01 EUR Check
+```
+
+**Pass-Kriterium (Gate 6):** ≥ 90 % der Positionen mit `flag is None` oder
+`flag == "exact_dlv"` haben `|Erlöse_Fracht − basispreis| ≤ 0,01 EUR`.
+
+Positionen mit `flag == "rn_level_adjustment"` werden:
+1. **Aus dem Pass-Rate-Zähler exkludiert** (weder Zähler noch Nenner)
+2. **Im §8-Abschnitt des Kunden-Reports gelistet** (pro RN: Faktor, n, delta_sum)
+3. **Nicht als Unterfakturierung gewertet**, solange keine Kontext-Information
+   (z. B. ein abweichendes Sonder-DLV) vorliegt
+
+### §8-Listenformat für RN-Level-Adjustment-Fälle
+
+```
+RN <xxx>: rn_factor=<f>, n=<n>, delta_sum=<EUR>
+  → Faktor <f-1:+.2%> auf alle <n> Positionen
+  → Hypothese: [quarterly_fracht_adjustment | AX_config_drift | andere]
+  → Priorität: [hoch (|f-1| > 2%) | mittel | niedrig]
+```
+
+**CHT/BE 9c.2a Befund:**
+
+| RN | rn_factor | n | delta_sum | Prio |
+|---|---|---|---|---|
+| 924081 | 1.0295 | 11 | +49,8 EUR | hoch (Overbilling) |
+| 924248 | 1.0290 | 13 | +60,0 EUR | hoch (Overbilling) |
+| 924069 | 0.9931 | 16 | −20,6 EUR | niedrig (Underbilling) |
+| 924102 | 1.0050 | 7 | +7,6 EUR | mittel |
+| 924234 | 1.0042 | 14 | +6,9 EUR | mittel |
+| 924132 | gemischt | 20 | variabel | §8 pos-Level |
+
+### Retroaktiv-Anwendung auf Welle-1/2 Kunden
+
+Gate 6 muss **retroaktiv** auf alle abgeschlossenen Calculator-Tests angewendet
+werden, sobald der zugehörige Kunden-Report erstellt wird. Indikation für
+RN-Level-Adjustments:
+- `rn_std < 0.0005` in mehr als 20 % der RNs im Testset
+- Systematische fp-Cluster in der Verteilung (Bimodalität oder Multimodalität)
+
+GEZE (9b.3): Muster-A-Treffer: 0. Aggregationsartefakt-Flags gesetzt für GB.
+→ Kein RN-Level-Adjustment erkannt. Gate 6 retroaktiv: bestanden.
+
+---
+
 ## §7 Altzahl-Validierung und Retroaktiv-Liste
 
 ### EBM-Papst — Revision 9a.1.b
@@ -595,6 +679,34 @@ Granularität der delta_sum-Darstellung.
 **Status:** Offen. Prüfung in Etappe 9c.x (EBM Retroaktiv) oder als separater
 Retroaktiv-Commit vor Abschluss-Report.
 
+### Welle-3-Kunden — Retroaktiv-Prüfung RN-Level-Faktor (post-9c.2a, v1.7)
+
+**Hintergrund:** Das in CHT/BE (9c.2a) entdeckte RN-Level-Adjustment-Muster
+(konsistente per-RN Faktoren ≠ 1.0 bei rn_std < 0.0005) kann potenziell auch
+bei Welle-3-Kunden auftreten. Insbesondere bei Kunden mit:
+- Quarterly-Floater-Mechanismen (ähnlich CHT BE-Dieselfloater)
+- Kundenspezifischen Preisanpassungs-Vereinbarungen
+- AX-Invoice-Batch-Konfigurationen, die pro Periode leicht variieren
+
+**Pflicht-Prüfschema für Welle-3-Integration-Tests (HELU, HERMA, Hornschuch u.a.):**
+
+Vor Pass-Rate-Berechnung jedes neuen Calculator-Tests:
+1. Berechne pro RN: `rn_factor = median(erloes_fracht / basispreis)`, `rn_std`
+2. Falls `rn_std < 0.0005 AND |rn_factor − 1| > 0.001`:
+   → RN als `rn_level_adjustment` flaggen, §6b-Classifier aktivieren
+3. Falls ≥ 3 RNs im Testset mit `rn_level_adjustment`:
+   → Muster-Report: welche Faktoren, welche Periodizität, Richtung
+   → Im Kunden-Report §8 ausweisen; nicht als Calculator-Bug werten
+
+**Besondere Aufmerksamkeit bei Sonder-PLZ-Konsistenz:**
+Analog zum CHT-IT-Befund (PLZ 20098: +6,1 % in 3 Zeilen, Calculator-Coverage-Frage)
+sollten bei HELU/HERMA/Hornschuch ähnliche Sonder-PLZ-Muster (z. B. Industriegebiete
+mit Thermozuschlag oder PLZ-gebundene Sondertarife) gesondert auf fp-Konsistenz
+geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeigen →
+§8-Flag "Sonder-PLZ-Muster", manuelle Klärung ob Calculator-Lücke oder DLV-Sondertarif.
+
+**Status:** Offen. Wird bei erstem Welle-3-Integration-Test aktiviert.
+
 ---
 
 ## Changelog
@@ -608,3 +720,5 @@ Retroaktiv-Commit vor Abschluss-Report.
 | 1.4 | 2026-04-20 | 9b.3 | §2a Positions-Level vs Sendungs-Level: Aggregations-Key-Hierarchie, Muster-B-Aggregationsartefakt-Flag, Pflichtfelder aggregation_level/key_source; §7 EBM+Fischerwerke Retroaktiv-Aggregationsebene-Prüfung; §7 GEZE 9b.3-Ergebnis (CHF-Band-Match) |
 | 1.5 | 2026-04-20 | 9c.0 | §2.0 Standard-Formeln: Diesel-always-separate, Zwei-Fall-Regel (unbundled/all_in), Pflichtfelder pricing_mode + all_in_components; §2 Kunden-Blöcke realigned (Fischerwerke/EBM/GEZE) + CHT-Block neu; §3 Muster-A-Formel auf neue Notation + EBM-Sonder-Block; §3 Kundentabelle GEZE+CHT aktualisiert; §7 EBM-Diesel-Retroaktiv-Check (Szenario Diesel=0 vs Diesel-in-betrag) |
 | 1.6 | 2026-04-20 | 9c.0 | §1 pre_dlv_2026-Phase + in_dlv_2025_fallback präzisiert; §2 CHT Diesel/Maut-Tabelle per Land (B-Check empirisch) + 9c.0 IT fp-Befund; §2a diesel_mode/maut_mode pro (Kunde, Land) mit Sanity-Check-Regel; CHT-Präzedenzfall BE/GR contracted vs IT/AT/ES not_contracted |
+| 1.6.1 | 2026-04-20 | 9c.0 | §2a Einzelfall-all_in-Ausnahme: Diesel=0+Maut=0 bei Fracht≈split_sum → all_in_exception-Flag; Schwelle ≤1%; CHT-BE-Präzedenzfall PLZ 8550/3600 |
+| 1.7 | 2026-04-20 | 9c.2a | §6b neu: RN-Level-Faktor-Detection (Gate 6); Classifier-Logik (rn_std<0.0005, rn_factor); §8-Listenformat für RN-Adjustment-Fälle; CHT/BE 9c.2a Befundtabelle; GEZE retroaktiv Gate-6-bestanden; §7 Welle-3-Retroaktiv-Pflichtprüfschema RN-Level-Faktor + Sonder-PLZ-Konsistenz |
