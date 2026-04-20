@@ -300,7 +300,8 @@ def _parse_chf_floater(path: Path) -> list[tuple[float, float, Decimal, Decimal]
     for i, row in df.iterrows():
         if i < 21:
             continue
-        v0, v1, v2, v3 = row.iloc[0], row.iloc[1], row.iloc[2], row.iloc[3]
+        # Data starts in col 2 (von CHF), col 3 (bis CHF), col 4 (Stückgut), col 5 (Komplett)
+        v0, v1, v2, v3 = row.iloc[2], row.iloc[3], row.iloc[4], row.iloc[5]
         if pd.isna(v0) or str(v0) in ("nan", "NaT", ""):
             break
         try:
