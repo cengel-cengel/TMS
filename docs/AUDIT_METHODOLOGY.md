@@ -155,10 +155,32 @@ Hypothese: Abrechnung erfolgte auf Basis von Stellplatz 1 statt Stellplatz 2
 
 ---
 
-## §5 Stellplatz-Ermittlung
+## §5 Billing-Dimension-Ermittlung
+
+### §5.0 Pflichtfeld `tonnage_source` und Audit-Schwelle
+
+Jede beurteilte Zeile muss ein Pflichtfeld `tonnage_source` (bzw. allgemein
+`billing_dim_source`) führen, das dokumentiert, woher die Billing-Dimension
+(Tonnage, Stellplätze, LDM) stammt:
+
+| Wert | Bedeutung |
+|---|---|
+| `direct` | Wert direkt aus Abrechnungsstrecken-Spalte, plausibel (>0) |
+| `ldm_fallback` | Tonnage=0, Wert aus LDM abgeleitet (EBM-Konvention) |
+| `unbeurteilbar` | Tonnage=0 UND LDM=0 → keine Billing-Basis vorhanden |
+
+**20 %-Audit-Schwelle:** Wenn `unbeurteilbar`-Anteil > 20 % der Core-Zeilen,
+ist der Befund mit einem Gate-Hinweis zu versehen. Der Befund ist **nicht gesperrt**
+— die beurteilbaren Zeilen werden normal ausgewertet — aber der Report muss die
+Lücke explizit ausweisen.
+
+**GEZE 9b.2 Befund:** 1.109/4.349 Zeilen (25,5 %) haben Tonnage=0 und LDM=0.
+Alle sind `unbeurteilbar`. Gate-1-Hinweis ist aktiv; 3.120 Zeilen (71,7 %) bleiben
+für 9b.3 beurteilbar. Ursache der Tonnage=0-Zeilen ist unklar (möglicherweise
+Positions-Aggregationsartefakt im AX-Export); Klärung bei ERKA/IT offen.
 
 ### Direkt aus Abrechnungsstrecken
-Bevorzugte Quelle: Spalte `Abrechnungsstellplätze` (integer).
+Bevorzugte Quelle: Spalte `Abrechnungsstellplätze` (integer) bzw. `Tonnage (eff.)`.
 
 ### §5a LDM-Fallback bei NaN-Stpl
 
@@ -281,3 +303,4 @@ bis 9b.3 den CH-Floater im AX-Betrag bestätigt hat.
 | 1.0 | 2026-04-20 | 9a.4.2 | Initiale Erstellung; §3 floater_pct-Basis für Muster-A; §5a LDM-Fallback |
 | 1.1 | 2026-04-20 | 9b.0 | §2 GEZE-Block: Maut-inklusiv, CHF-Floater als EUR-Surcharge, Reverse-Engineer-Ansatz; §3 GEZE-Zeile + engeres Muster-A-Binning für 9b.3 |
 | 1.2 | 2026-04-20 | 9b.1 | §6a Sanity-Gate 5 (bedingte Komponenten nicht-null); §7 Retroaktiv-Eintrag GEZE 5e (23d6a1a im Parser-Bug-State freigegeben) |
+| 1.3 | 2026-04-20 | 9b.2 | §5.0 tonnage_source-Pflichtfeld + 20%-Audit-Schwelle; GEZE-Befund 25,5% Tonnage=0 dokumentiert |
