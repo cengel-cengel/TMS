@@ -458,6 +458,33 @@ bis 9b.3 den CH-Floater im AX-Betrag bestätigt hat.
 5e-Commit-Bug hatte keine Auswirkung auf die tatsächliche Abrechnung (ERKA
 rechnete korrekt), nur auf die Validator-Prüfung.
 
+### EBM-Papst — Retroaktiv-Check Diesel-Einbettung (post-v1.5)
+
+**Offene Frage:** Ist Diesel in den EBM-Abrechnungsstrecken-`betrag`-Werten
+eingebettet, oder wurde für EBM kein Diesel-Floater verrechnet?
+
+**Kontext:** Die EBM-9a.4.2-Analyse verwendete Abrechnungsstrecken (`EBM.xlsx`)
+mit Spalten `betrag` und `toll` — keine separate Diesel-Spalte. Die
+`floater_pct = (betrag − toll) / tariff − 1`-Interpretation kann daher zwei
+verschiedene Dinge bedeuten:
+
+| Szenario | Bedeutung von floater_pct | Muster-A-Interpretation |
+|---|---|---|
+| **Diesel = 0** (EBM hat keinen Diesel-Floater) | Reiner ERKA-/Vertragsfloater | Muster-A-Treffer sind valide; 7 % = ERKA-Aufschlag |
+| **Diesel in betrag** (EBM-Diesel in `betrag` eingebettet) | ERKA-Floater + Diesel | Muster-A-Treffer könnten Diesel+Floater-Kombination sein |
+
+**Prüfschema:**
+1. EBM BI-Daten (bi_top20_data.pkl, KNR 410844) auf `Erlöse_Diesel`-Spalte prüfen:
+   - Wenn `Erlöse_Diesel > 0` für EBM-Zeilen: Diesel wird verrechnet, liegt aber
+     möglicherweise in `betrag` (Abrechnungsstrecken-Format) unsichtbar drin
+   - Wenn `Erlöse_Diesel = 0` für alle EBM-Zeilen: EBM hat keinen Diesel-Floater
+2. Cross-Check: `betrag / (tariff + toll)` für EBM Nicht-Floater-Monate (vor Jan 2026)
+   → wenn Ratio ≈ 1.000 (keine Drift): Diesel=0 bestätigt
+   → wenn Ratio ≈ 1.07–1.10 (systematische Drift vor Jan 2026): Diesel in betrag
+
+**Status:** Offen. Hohe Priorität vor Abschluss-Report, da Muster-A-Narrative
+für EBM davon abhängt. Prüfung in Etappe 9c.x oder separatem Retroaktiv-Commit.
+
 ### EBM-Papst und Fischerwerke — Retroaktiv-Prüfung Aggregationsebene (post-9b.3)
 
 **Offene Frage:** Wurden EBM Muster-A-Treffer (50 Zeilen, Jan 2026) und Fischerwerke
@@ -500,3 +527,4 @@ Retroaktiv-Commit vor Abschluss-Report.
 | 1.2 | 2026-04-20 | 9b.1 | §6a Sanity-Gate 5 (bedingte Komponenten nicht-null); §7 Retroaktiv-Eintrag GEZE 5e (23d6a1a im Parser-Bug-State freigegeben) |
 | 1.3 | 2026-04-20 | 9b.2 | §5.0 tonnage_source-Pflichtfeld + 20%-Audit-Schwelle; GEZE-Befund 25,5% Tonnage=0 dokumentiert |
 | 1.4 | 2026-04-20 | 9b.3 | §2a Positions-Level vs Sendungs-Level: Aggregations-Key-Hierarchie, Muster-B-Aggregationsartefakt-Flag, Pflichtfelder aggregation_level/key_source; §7 EBM+Fischerwerke Retroaktiv-Aggregationsebene-Prüfung; §7 GEZE 9b.3-Ergebnis (CHF-Band-Match) |
+| 1.5 | 2026-04-20 | 9c.0 | §2.0 Standard-Formeln: Diesel-always-separate, Zwei-Fall-Regel (unbundled/all_in), Pflichtfelder pricing_mode + all_in_components; §2 Kunden-Blöcke realigned (Fischerwerke/EBM/GEZE) + CHT-Block neu; §3 Muster-A-Formel auf neue Notation + EBM-Sonder-Block; §3 Kundentabelle GEZE+CHT aktualisiert; §7 EBM-Diesel-Retroaktiv-Check (Szenario Diesel=0 vs Diesel-in-betrag) |
