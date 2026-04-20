@@ -40,6 +40,50 @@ Calculator-Checks laufen **ausschließlich** auf `in_dlv`-Zeilen.
 - **PLZ-Länder** (PL/SK/SI/HR/EE): Vollständiger PLZ-String — `'PL-03-236'` → `'PL-03-236'`
 - **Merged-Einträge**: Pipe-separated → nimm erstes — `'EE-75301|EE-75306'` → `'EE-75301'`
 
+### GEZE GmbH (Gewichts-basiert, EUR/100 kg, Maut inkludiert)
+
+**DLV-Struktur:** Sheet "Exporttarife" — Country-Blocks mit Zonen-Zeilen.
+Pro Zone: Minimum-Betrag + Gewichtsbänder (bis 300 kg, bis 500 kg, … bis 3.000 kg)
+mit Rate EUR/100 kg. Länder: PT, GB, IE, IT, FR, AT, ES, CH.
+Gültig: 2025-01-01 – 2025-12-31 (kein separates 2026-DLV; 2025-Fallback bleibt aktiv).
+
+**Abrechnungsformel:**
+```
+billing_kg  = max(100, ceil(tonnage_kg / 100) * 100)
+basispreis  = max(minimum_zone, rate_per_100kg × billing_kg / 100)   # EUR
+chf_amount  = basispreis × chf_floater_fraction                       # EUR, nur CH
+Erlöse_Fracht_soll = basispreis + chf_amount
+```
+
+**Maut:** In `basispreis` inkludiert → `toll = 0` in der floater_pct-Formel.
+**Diesel:** Nicht im DLV modelliert — erscheint als separate Spalte `Erlöse Diesel`
+in den BI-Daten und fließt nicht in `floater_pct` ein.
+
+**floater_pct für GEZE:**
+```
+floater_pct = Erlöse_Fracht / basispreis - 1
+# non-CH: floater_pct ≈ Diesel-Floater (variabel, monatlich)
+# CH:     floater_pct ≈ CHF-Floater-Fraktion + ggf. Diesel-Floater
+```
+
+**CHF-Floater (nur Empfänger Land = CH):**
+Der CHF/EUR-Wechselkurs zum Sendungsdatum dient als **Lookup-Key** in die
+Prozentband-Tabelle (`Schweiz_Währungszuschlag_Geze.xlsx` bzw. Sheet
+"CH-Währungsfloater" im DLV). Die Tabelle gibt eine EUR-Prozent-Fraktion auf
+`basispreis` zurück — kein Währungsumtausch, alles in EUR.
+
+Bandbreite im aktuellen CHF-Sheet: **CHF/EUR 1,021 – 0,88** in 14 Stufen;
+Stückgut (≤ 3.000 kg): 0 % – 9,18 %; Komplett (> 3.000 kg): 0 % – separates
+Staffel (Forward-Fill für Lücken in der Komplett-Spalte).
+
+**Reverse-Engineer-Ansatz für 9b.3** (kein externer CHF/EUR-Kursdatensatz
+erforderlich): `floater_pct` aus Billing-Daten berechnen → CHF-Bandtabelle
+rückwärts durchlaufen → konsistente Bandeinordnung als Verifikation.
+
+**Zone-Lookup:** Länderspezifische PLZ-Präfix-Tabellen im Calculator
+(`geze.py`); IE = immer Zone 1; GB = Postcode-Area (WS/B/CV… → Zone 1,
+G/EH… → Zone 3, BT → Zone 4).
+
 ---
 
 ## §3 Muster-A-Erkennung
@@ -68,15 +112,21 @@ Die nahe liegende Alternative — `ratio = betrag / (tariff + toll)` mit Fenster
 und stammen aus 5 Lanes (IE/PL/EE/SK/HR) — konsistent mit einem systemweiten
 Aktivierungsdatum.
 
-### Kundenbelegte Muster-A-Funde (Stand 9a.4.2)
+### Kundenbelegte Muster-A-Funde (Stand 9b.0)
 
 | Kunde | KNR | Aktivierungsmonat | n Zeilen | Lanes |
 |---|---|---|---|---|
 | Fischerwerke | 409480 | März 2026 | ~31 | IT-Padova, IT-Copiano, FR, GB |
 | EBM-Papst | 410844 | Januar 2026 | 50 | IE, PL, EE, SK, HR |
+| GEZE GmbH | 406035 | offen (9b.3) | — | alle Lanes zu prüfen |
 
 Unterschiedliche Aktivierungszeitpunkte pro Kunde deuten auf kundenspezifische
 Vereinbarungen hin — gleicher Mechanismus, unterschiedliches Roll-out-Datum.
+
+**Muster-A-Check in 9b.3:** Binning-Fenster `abs(floater_pct - 0.07) < 0.00005`
+(enger als Standard 0,0015, da Diesel-Floater bei GEZE als separate Spalte
+erkennbar ist und kein Falsch-Positiv-Risiko besteht). Fund → dritter Kunde
+bestätigt Meta-Erkenntnis. Kein Fund → GEZE als Gegenbeleg ebenso dokumentieren.
 
 ---
 
@@ -173,3 +223,4 @@ Unterfakturierung auf Lane-Ebene außer Muster-B (1 Zeile, −100,40 EUR).
 | Version | Datum | Etappe | Änderung |
 |---|---|---|---|
 | 1.0 | 2026-04-20 | 9a.4.2 | Initiale Erstellung; §3 floater_pct-Basis für Muster-A; §5a LDM-Fallback |
+| 1.1 | 2026-04-20 | 9b.0 | §2 GEZE-Block: Maut-inklusiv, CHF-Floater als EUR-Surcharge, Reverse-Engineer-Ansatz; §3 GEZE-Zeile + engeres Muster-A-Binning für 9b.3 |
