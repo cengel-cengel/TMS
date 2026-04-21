@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-20
+**Stand:** 2026-04-21
 
 ---
 
@@ -357,7 +357,7 @@ wird zu einer Gruppe zusammengefasst → eine NL-Berechnung.
 | CHT Germany | BE | `position` | 9c.2a |
 | CHT Germany | ES | `position` | 9c.2b |
 | CHT Germany | GR | `rn` | 9c.2c (empirisch \|Δ\|<0,001 EUR) |
-| CHT Germany | AT | offen | 9c.2d |
+| CHT Germany | AT | `position` | 9c.2d (empirisch \|Σ_Δ\|<0,002 EUR) |
 
 ### Retroaktiv-Empfehlung Welle-2/3
 
@@ -366,6 +366,68 @@ Bei HELU (Two-Stage-Depots), Hornschuch (29 Lane-Sheets), HERMA (VL-Split):
 Schnelltest: Multi-Positions-RN identifizieren → Maut-Summe auf RN-Ebene vs
 Position-Ebene vergleichen. Wenn RN-Maut = `0.XX × billing_kg(RN_total) / 100`
 → `billing_scope = "rn"`.
+
+---
+
+## §2c Gewichtsrundungs-Regel (ab v1.8.1)
+
+### Parameter `kg_rounding_rule`
+
+Pro `(Kunde, Land)`-Kombination wird eine `kg_rounding_rule` empirisch bestätigt,
+die beschreibt, wie `actual_kg` vor dem Tarif-Band-Lookup behandelt wird:
+
+| `kg_rounding_rule` | Formel | Bekannte Fälle |
+|---|---|---|
+| `"ceil_to_100"` | `billing_kg = max(100, ceil(actual_kg / 100) * 100)` | CHT/IT, CHT/BE, CHT/ES, CHT/GR (HL+NL) |
+| `"actual_kg"` | `billing_kg = actual_kg` (direkt gegen Schwellen) | — |
+| `"actual_kg_fracht_only"` | Fracht: `actual_kg` direkt; Maut: `ceil(actual_kg / 100) * 100` | CHT/AT |
+
+### Strukturbefund CHT/AT (9c.2d)
+
+AT-DLV enthält zwar die Angabe `"Gewichtsrundung: 100:100"`, diese gilt jedoch
+**nur für die DE-Maut-Berechnung**, nicht für den Fracht-Band-Lookup:
+
+```
+# CHT/AT Fracht (kg_rounding_rule = "actual_kg_fracht_only"):
+band = first band where actual_kg ≤ band.weight_limit
+basispreis = band.flat_rate   # flat EUR pro Sendung, NICHT per-100kg
+
+# CHT/AT Maut:
+maut_kg    = max(100, ceil(actual_kg / 100) * 100)
+maut       = 0.56 EUR × maut_kg / 100
+```
+
+Empirisch bestätigt: 32,10 kg → bis-50-Band → 40,1574 EUR (nicht 51,70 EUR
+der bis-100-Band, die bei `ceil_to_100` entstünde).
+
+### Wichtig: AT-Fracht ist FLAT, nicht per-100kg
+
+Alle CHT/AT-Bänder sind `"pro Sendung"` (Pauschale), nicht `"per 100 kg"`:
+
+| Band | Zone 6 Rate | Interpretation |
+|---|---|---|
+| bis 50 kg | 40,16 EUR | 40,16 EUR flat, egal ob 1 kg oder 50 kg |
+| bis 100 kg | 51,70 EUR | 51,70 EUR flat für 50,001–100 kg |
+| bis 600 kg | 144,51 EUR | 144,51 EUR flat für 500,001–600 kg |
+
+Dies unterscheidet AT grundlegend von BE/ES/IT/GR (alle per-100-kg-Raten).
+
+### Pflicht-Prüfpunkte vor Calculator-Build
+
+Neben `ax_rate_precision` (§6c) und `billing_scope` (§2b) jetzt auch:
+1. Ist `kg_rounding_rule` `ceil_to_100` oder `actual_kg(_fracht_only)`?
+2. Sind Raten `flat` (pro Sendung) oder `per 100 kg`?
+3. Gibt es Split-Raten (unterschiedliche Logik für Fracht vs. Maut)?
+
+### Bekannte `kg_rounding_rule`-Zuordnungen
+
+| Kunde | Land | `kg_rounding_rule` | Fracht-Einheit | Belegt in |
+|---|---|---|---|---|
+| CHT Germany | IT | `ceil_to_100` | per 100 kg | 9c.1 |
+| CHT Germany | BE | `ceil_to_100` | per 100 kg (+ flat ≤100 kg) | 9c.2a |
+| CHT Germany | ES | `ceil_to_100` | per 100 kg | 9c.2b |
+| CHT Germany | GR | `ceil_to_100` | per 100 kg (HL+NL) | 9c.2c |
+| CHT Germany | AT | `actual_kg_fracht_only` | flat per Sendung | 9c.2d |
 
 ---
 
@@ -676,7 +738,7 @@ AX-Raten-Präzision: <ax_rate_precision>  (empirisch geprüft, 9c.2x)
 | CHT Germany | BE | `2dp` | 9c.2a: 65/65 match nach Rundung | Backrechnung 924035/924148 |
 | CHT Germany | ES | `2dp` | 9c.2b: 28/30 match | Backrechnung Zone-1-Raten |
 | CHT Germany | GR | `2dp` | 9c.2c: HL/NL |Δ|<0,001 | Backrechnung RN 4251017331/4251019887 |
-| CHT Germany | AT | offen | 9c.2d | — |
+| CHT Germany | AT | `2dp` | 9c.2d: all \|Δ_pos\|<0,004 | Backrechnung Schritt-1 Spot-Check (4 RNs, 9 Pos.) |
 
 ### Zeitbezug-Befund CHT/BE rn_level_adjustment (§8-Daten)
 
@@ -948,3 +1010,4 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 | 1.7.1 | 2026-04-20 | 9c.2a | §3a neu: Sonder-PLZ-Aufschlag — Definition, Abgrenzung zu Muster-A, Detection-Regel (plz_fp_std<0.005, abs(fp_mean)>0.03, n≥2), Known-Cases-Tabelle (CHT/IT/20098 +6.1%, CHT/BE/8540+8560+8400 +6.3-6.4% Kortrijk West), PRIORITY-§8-Eintrag 924248/7700 (+18.7%); AX-Raten-Präzisions-Hinweis: IT=4dp, BE=2dp, Pflicht-per-Land-Validierung |
 | 1.7.2 | 2026-04-20 | 9c.2a | §6c neu: AX-Raten-Präzisions-Check — Pflichtschritt vor jedem neuen Calculator-Build; ax_rate_precision (native/2dp/3dp/other); Backrechnung-Methode; Known-Befunde-Tabelle (CHT/IT=native, CHT/BE=2dp); Zeitbezug-Befund CHT/BE rn_level_adjustment: kein temporales Clustering (Jan-2026 hat mix aus exact+rn_adj), Faktoren variieren pro RN, Mechanismus unbekannt → Klärungsfrage Operations |
 | 1.8 | 2026-04-21 | 9c.2c | §2b neu: billing_scope Parameter ("position"\|"rn"); Prorating-Logik (HL+Maut on RN-Level, NL pro Empfänger-Gruppe, Verteilung by actual_kg); Empfänger-Gruppe = (RN, Empfänger_Name) nicht (RN, PLZ) — empirisch bestätigt GR 9c.2c, \|Δ\|<0,001 EUR über alle Positionen; §6c Known-Befunde aktualisiert: CHT/ES=2dp (9c.2b), CHT/GR=2dp (9c.2c); billing_scope-Tabelle (CHT/IT/BE/ES=position, CHT/GR=rn); Retroaktiv-Empfehlung HELU/HERMA/Hornschuch |
+| 1.8.1 | 2026-04-21 | 9c.2d | §2c neu: kg_rounding_rule Parameter ("ceil_to_100"\|"actual_kg"\|"actual_kg_fracht_only"); Strukturbefund CHT/AT: "Gewichtsrundung 100:100" gilt nur für DE-Maut, Fracht nutzt actual_kg direkt gegen Schwellen; AT-Fracht ist FLAT pro Sendung (nicht per-100-kg); Pflicht-Prüftabelle (kg_rounding_rule + Fracht-Einheit + Split-Logik); Known-Befunde-Tabelle CHT/AT=actual_kg_fracht_only (9c.2d); §2b billing_scope-Tabelle: CHT/AT=position (9c.2d, empirisch \|Σ_Δ\|<0,002 EUR, 4 RNs); §6c Known-Befunde: CHT/AT=2dp (9c.2d, \|Δ_pos\|<0,004 EUR) |
