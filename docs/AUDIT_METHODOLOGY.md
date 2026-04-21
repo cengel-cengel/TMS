@@ -306,6 +306,69 @@ Flag `"diesel_expected_missing"`, Einzelfall-Abweichungen (Storno/Korrektur), ke
 
 ---
 
+## §2b Billing-Scope (ab v1.8)
+
+### Parameter `billing_scope`
+
+Jeder Calculator deklariert einen `billing_scope`-Parameter, der beschreibt, auf
+welcher Aggregationsebene die Tarifberechnung stattfindet:
+
+| Wert | Bedeutung | Calculator-Signatur |
+|---|---|---|
+| `"position"` | Jede Position wird separat berechnet mit ihrer eigenen Rate-/Band-Zuordnung. Default für Single-Stage-Länder. | `calculate(empf_plz, tonnage_kg) → TariffResult` |
+| `"rn"` | Alle Positionen einer Rechnungsnummer bilden ein Billing-Aggregat. HL und Maut einmalig pro RN; NL pro Empfänger-Gruppe. Resultat proportional zu `actual_kg` verteilt. | `calc_rn(list[RNPosition]) → dict[position_id → TariffResult]` |
+
+### Prorating-Logik (`billing_scope = "rn"`)
+
+```python
+# Schritt 1: RN-Level-Berechnung
+rn_total_kg   = sum(pos.actual_kg for pos in positions)
+rn_billing_kg = max(100, ceil(rn_total_kg / 100) * 100)
+rn_hl         = max(HL_MIN, min(HL_MAX, hl_rate(rn_billing_kg) * rn_billing_kg / 100))
+rn_maut       = MAUT_PER_100KG * rn_billing_kg / 100
+
+# Schritt 2: NL pro Empfänger-Gruppe
+groups = group_by(positions, key='empfaenger_name')
+for name, grp:
+    grp_billing_kg = max(100, ceil(sum(p.actual_kg for p in grp) / 100) * 100)
+    zone           = lookup_zone(grp[0].empf_plz)
+    group_nl[name] = max(NL_MIN[zone], nl_rate(zone, grp_billing_kg) * grp_billing_kg / 100)
+
+# Schritt 3: Prorating auf Positions-Ebene
+hl_per_position   = rn_hl   × (tonnage_i / rn_total_kg)
+maut_per_position = rn_maut × (tonnage_i / rn_total_kg)
+nl_per_position   = group_nl[empfaenger_name_i] × (tonnage_i / group_total_kg)
+```
+
+### Empfänger-Gruppe
+
+**Schlüssel: `(Rechnungsnummer, Empfänger_Name)` — nicht `(Rechnungsnummer, PLZ)`.**
+
+Begründung (empirisch 9c.2c GR): Zwei Empfänger mit identischer PLZ 57013
+(„Apothikes Makedonias", „TEX-FIN Sidiropoulou") erhalten separate NL-Berechnungen.
+Gleicher Empfänger an selber PLZ (Baxevanidis S.A., 57022, verschiedene Positionen)
+wird zu einer Gruppe zusammengefasst → eine NL-Berechnung.
+
+### Bekannte `billing_scope`-Zuordnungen
+
+| Kunde | Land | `billing_scope` | Belegt in |
+|---|---|---|---|
+| CHT Germany | IT | `position` | 9c.1 |
+| CHT Germany | BE | `position` | 9c.2a |
+| CHT Germany | ES | `position` | 9c.2b |
+| CHT Germany | GR | `rn` | 9c.2c (empirisch \|Δ\|<0,001 EUR) |
+| CHT Germany | AT | offen | 9c.2d |
+
+### Retroaktiv-Empfehlung Welle-2/3
+
+Bei HELU (Two-Stage-Depots), Hornschuch (29 Lane-Sheets), HERMA (VL-Split):
+`billing_scope` muss in der Findings-First-Phase empirisch geprüft werden.
+Schnelltest: Multi-Positions-RN identifizieren → Maut-Summe auf RN-Ebene vs
+Position-Ebene vergleichen. Wenn RN-Maut = `0.XX × billing_kg(RN_total) / 100`
+→ `billing_scope = "rn"`.
+
+---
+
 ## §3 Muster-A-Erkennung
 
 ### Definition
@@ -611,8 +674,8 @@ AX-Raten-Präzision: <ax_rate_precision>  (empirisch geprüft, 9c.2x)
 |---|---|---|---|---|
 | CHT Germany | IT | `native` (4dp) | 9c.1: 63/63 match | 9c.2a IT-Retroaktiv-Check |
 | CHT Germany | BE | `2dp` | 9c.2a: 65/65 match nach Rundung | Backrechnung 924035/924148 |
-| CHT Germany | ES | offen | 9c.2b | — |
-| CHT Germany | GR | offen | 9c.2c | — |
+| CHT Germany | ES | `2dp` | 9c.2b: 28/30 match | Backrechnung Zone-1-Raten |
+| CHT Germany | GR | `2dp` | 9c.2c: HL/NL |Δ|<0,001 | Backrechnung RN 4251017331/4251019887 |
 | CHT Germany | AT | offen | 9c.2d | — |
 
 ### Zeitbezug-Befund CHT/BE rn_level_adjustment (§8-Daten)
@@ -884,3 +947,4 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 | 1.7 | 2026-04-20 | 9c.2a | §6b neu: RN-Level-Faktor-Detection (Gate 6); Classifier-Logik (rn_std<0.0005, rn_factor); §8-Listenformat für RN-Adjustment-Fälle; CHT/BE 9c.2a Befundtabelle; GEZE retroaktiv Gate-6-bestanden; §7 Welle-3-Retroaktiv-Pflichtprüfschema RN-Level-Faktor + Sonder-PLZ-Konsistenz |
 | 1.7.1 | 2026-04-20 | 9c.2a | §3a neu: Sonder-PLZ-Aufschlag — Definition, Abgrenzung zu Muster-A, Detection-Regel (plz_fp_std<0.005, abs(fp_mean)>0.03, n≥2), Known-Cases-Tabelle (CHT/IT/20098 +6.1%, CHT/BE/8540+8560+8400 +6.3-6.4% Kortrijk West), PRIORITY-§8-Eintrag 924248/7700 (+18.7%); AX-Raten-Präzisions-Hinweis: IT=4dp, BE=2dp, Pflicht-per-Land-Validierung |
 | 1.7.2 | 2026-04-20 | 9c.2a | §6c neu: AX-Raten-Präzisions-Check — Pflichtschritt vor jedem neuen Calculator-Build; ax_rate_precision (native/2dp/3dp/other); Backrechnung-Methode; Known-Befunde-Tabelle (CHT/IT=native, CHT/BE=2dp); Zeitbezug-Befund CHT/BE rn_level_adjustment: kein temporales Clustering (Jan-2026 hat mix aus exact+rn_adj), Faktoren variieren pro RN, Mechanismus unbekannt → Klärungsfrage Operations |
+| 1.8 | 2026-04-21 | 9c.2c | §2b neu: billing_scope Parameter ("position"\|"rn"); Prorating-Logik (HL+Maut on RN-Level, NL pro Empfänger-Gruppe, Verteilung by actual_kg); Empfänger-Gruppe = (RN, Empfänger_Name) nicht (RN, PLZ) — empirisch bestätigt GR 9c.2c, \|Δ\|<0,001 EUR über alle Positionen; §6c Known-Befunde aktualisiert: CHT/ES=2dp (9c.2b), CHT/GR=2dp (9c.2c); billing_scope-Tabelle (CHT/IT/BE/ES=position, CHT/GR=rn); Retroaktiv-Empfehlung HELU/HERMA/Hornschuch |

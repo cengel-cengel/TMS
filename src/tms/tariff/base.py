@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Literal, NamedTuple, Optional
 
 
 @dataclass
@@ -39,6 +39,7 @@ class TariffResult:
 class TariffCalculator(ABC):
     customer_name: str
     pricing_basis: Literal["kg", "stellplaetze", "lademeter"]
+    billing_scope: str = "position"
 
     @abstractmethod
     def calculate(
@@ -52,4 +53,41 @@ class TariffCalculator(ABC):
         ldm: float | None = None,
     ) -> TariffResult:
         """Return TariffResult for a shipment. Raises LookupError if no rate found."""
+        ...
+
+
+class RNPosition(NamedTuple):
+    """Input record for RN-level (billing_scope='rn') calculators.
+
+    All positions of one invoice (RN) are passed together so that
+    HL/Maut can be computed on total RN weight and NL per Empfänger-Gruppe.
+    """
+    position_id: int | str
+    empf_plz: str
+    empf_land: str
+    empfaenger_name: str
+    actual_kg: float
+
+
+class RNLevelCalculator(ABC):
+    """Base for calculators where HL/Maut are shared across an entire RN
+    and NL is computed per Empfänger-Gruppe (RN, Empfänger_Name).
+
+    billing_scope = "rn"
+    """
+
+    customer_name: str
+    pricing_basis: str = "kg"
+    billing_scope: str = "rn"
+
+    @abstractmethod
+    def calc_rn(
+        self,
+        positions: list[RNPosition],
+    ) -> dict[int | str, TariffResult]:
+        """Compute prorated TariffResult per position_id for all positions in one RN.
+
+        Raises LookupError if zone/rate cannot be determined.
+        Raises ValueError if positions list is empty or has invalid data.
+        """
         ...
