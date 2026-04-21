@@ -1,5 +1,5 @@
 # Zwischenstand — TMS Migration Audit
-**Stand:** 2026-04-21 | **Branch:** `claude/audit-billing-migration-wfgWR` | **Methodik:** v1.8.1
+**Stand:** 2026-04-21 | **Branch:** `claude/audit-billing-migration-wfgWR` | **Methodik:** v1.8.2
 
 ---
 
@@ -12,13 +12,14 @@
 | Fischerwerke GmbH | 409480 | Zwischenstand | 9a.3.2 | Muster-A +3.057 EUR; Muster-B −4.825 EUR | mittel |
 | Sika-Gruppe | 491063/511241/527406 | Abgeschlossen | 8i | 8 Unterfakturierung-Familien, 7 Coverage-Gaps | **HOCH** |
 | CHT Germany GmbH | 486073 | Abgeschlossen | 9c.2d | 5 Länder, alle ≥93.3 % | niedrig |
-| HERMA GmbH | 423650 | Früh-Analyse | build | 73 Cluster, Σ-Verlust −167.554 EUR | offen |
+| HERMA GmbH | 423650 | Nicht gestartet | — | Früh-Indikator: −167 kEUR (nicht DLV-validiert — siehe §6) | offen |
 
 **Wesentliche Querschnittsbefunde:**
 - Muster-A (+7 % ERKA-Index): bestätigt für Fischerwerke (Mrz 2026) und EBM-Papst (Jan 2026) — systemübergreifend, kundenseitig terminiert. Klärung mit ERKA noch offen.
-- Muster-B (Unterfakturierung): belegt bei Fischerwerke (IE/ES/BE/IT-Copiano/GR/GB), Sika (4 Familien AX < DLV), HERMA (73 Cluster, −167 kEUR).
+- Muster-B (Unterfakturierung): belegt bei Fischerwerke (IE/ES/BE/IT-Copiano/GR/GB), Sika (2 Familien AX < DLV, 4 Familien Dinas < AX < DLV). EBM-Papst: 1 Zeile (−100 EUR).
 - CHT: 5 Länder kalkulatorisch validiert; DLV-Version-Gap in pre_dlv_2026-Zeilen konsistent (~−2 % bis −2.9 %) — Typ-B-Befund (informativ).
 - Sika Re-Run: höchste Priorität vor Onboarding neuer Kunden.
+- HERMA: Im Rahmen der Früh-Analysen wurde eine nominale Dinas-AX-Differenz von −167 kEUR identifiziert. Diese Zahl ist nicht DLV-validiert und enthält potenziell methodische Artefakte (rn_level_adjustment, Floater, billing_scope), die bei einem vollständigen Calculator-Build herausgefiltert werden. Die endgültige Zahl wird nach Abschluss des HERMA-Rollouts bekannt sein. **Keine operative Verwendung dieser Zahl bis DLV-Validierung abgeschlossen.**
 
 ---
 
@@ -239,62 +240,43 @@ Erfolgskriterium ≥90 %: alle 5 Länder bestanden.
 
 ---
 
-## §6 HERMA GmbH (KNR 423650)
+## §6 Nicht-bearbeitete Kunden (Top-20)
 
-**Billing-Basis:** Weight (max(Tonnage, LDM×ldm_factor, Vol×vol_factor)), per Sendung (Flat-Rate)
-**DLV:** BiddingMatrix 2023–2026 (Haftmaterial/Etiketten, mit/ohne Vorholung)
-**Etappen-Status:** Früh-Analyse (build_herma_report.py) — kein abgeschlossener Etappen-Report
-**Script:** `src/build_herma_report.py`
+Die folgenden Kunden haben noch keinen abgeschlossenen Audit-Durchlauf. Kein Calculator-Check, keine DLV-Validierung, keine belastbaren Befunde.
 
-### Scope-Kaskade (Dinas-Vergleich)
+### HERMA GmbH (KNR 423650) — Früh-Indikator vorhanden
 
-| Kennzahl | Wert |
-|---|---|
-| POST-Zeilen gesamt | 4.331 |
-| Calculator OK (Soll gesetzt) | 3.684 POST + 238 PRE |
-| Cluster mit |ΔEff| > 5 % | **73** |
-| Σ-Verlust (Cluster) | **−167.554 EUR** |
+**Status:** Nicht gestartet (kein Etappen-Report, kein Calculator-Build auf Positions-Ebene)
+**Billing-Basis:** Weight (max(Tonnage, LDM×ldm_factor, Vol×vol_factor)), Flat per Sendung
+**DLV:** BiddingMatrix 2023–2026 (Haftmaterial/Etiketten, mit/ohne Vorholung); Infrastruktur: `src/tms/tariff/calculators/herma.py` vorhanden
+**Früh-Indikator:** Dinas-AX-Effektivpreisvergleich via `build_herma_report.py` zeigt 73 Cluster mit |ΔEff| > 5 %, nominale Differenz −167.554 EUR.
 
-### Top-5 Cluster nach effektiver Preisabweichung
-
-| Cluster | Eff.Dinas (EUR) | Eff.AX (EUR) | DLV-Soll (EUR) | Δ (%) |
-|---|---|---|---|---|
-| FR\|33\|bis 250kg | 89,02 | 10,39 | n/a | −88,3 % |
-| PT\|20\|bis 100kg | 127,92 | 21,94 | 44,65 | −82,9 % |
-| GB\|SA\|bis 150kg | 663,27 | 126,13 | 21,40 | −81,0 % |
-| FR\|43\|bis 1000kg | 125,58 | 26,86 | n/a | −78,6 % |
-| IT\|47\|bis 500kg | 56,21 | 12,18 | 23,90 | −78,3 % |
-
-**Hinweis:** Die Σ-Verlust-Berechnung basiert auf Dinas-Vergleich (PRE vs POST Effektivpreise). DLV-Referenz fehlt für FR/33, FR/43 (n/a). Methodisch ist dieser Report als Früh-Indikator zu werten — kein abgeschlossener Calculator-Check auf Positions-Ebene.
-
-**Retroaktiv-Risiko:** offen — 73 Cluster mit signifikanter Abweichung; DLV-basierter Calculator-Check noch ausstehend.
+> **⚠ VORBEHALT:** Diese Zahl ist **nicht DLV-validiert**. Sie enthält potenziell
+> methodische Artefakte (rn_level_adjustment, Muster-A-Floater, Sonder-PLZ-Pattern,
+> billing_scope-Artefakte), die bei einem ordnungsgemäßen Calculator-Build
+> herausgefiltert werden würden. **Keine operative Verwendung dieser Zahl in
+> 9c.4 oder Etappe 10 bis DLV-Validierung abgeschlossen.**
 
 **Nächste Schritte:** Vollständiger Calculator-Build analog zu CHT/EBM/GEZE; DLV-Parsing für FR/43 und PT/20 priorisieren.
 
 ---
 
-## §7 Nicht-bearbeitete Kunden (Top-20, Auswahl)
+### Weitere Kunden (kein Früh-Indikator)
 
-Die folgenden Kunden aus dem Top-20-Inventar haben noch keinen aktiven Audit-Durchlauf erhalten. Für diese Kunden gilt: kein Calculator-Check, keine DLV-Parsing, keine Befunde.
-
-| Kunde | KNR (wenn bekannt) | Billing-Basis (erwartet) | DLV vorhanden | Priorität |
+| Kunde | KNR | Billing-Basis (erwartet) | DLV / Infrastruktur | Priorität |
 |---|---|---|---|---|
-| Bitzer Kühlmaschinenbau | — | Weight (kg) | nicht erhoben | Welle 1 |
-| Groz-Beckert | — | Weight (kg) | nicht erhoben | Welle 1 |
-| Helu-Kabel | — | Weight (kg) | nicht erhoben | nicht erhoben |
-| Hornschuch | — | Weight (kg) | nicht erhoben | nicht erhoben |
-| SSC (Sika Supply Center) | 511241 | Stellplatz | teilweise (via Sika 8i) | Sika Re-Run |
-| Sika ATM CH | 527406 | Stellplatz | teilweise (via Sika 8i) | Sika Re-Run |
+| Bitzer Kühlmaschinenbau | nicht erhoben | Weight (kg) | nicht erhoben | Welle 1 |
+| Groz-Beckert | nicht erhoben | Weight (kg) | nicht erhoben | Welle 1 |
+| HELU-Kabel | nicht erhoben | Weight (kg) | `calculators/helu.py` vorhanden | Welle 2 |
+| Hornschuch | nicht erhoben | Weight (kg) | `calculators/hornschuch.py` vorhanden | Welle 2 |
 
-**Hinweis:** SSC und Sika ATM CH sind Teil der Sika-Gruppe (§4) und wurden im Sika-Abschlussbericht 8i erfasst. Ein separater Calculator-Run ausstehend.
-
-Weitere Kunden im Top-20-Inventar: Daten und KNRs nicht erhoben. Vervollständigung ausstehend.
+Weitere Kunden im Top-20-Inventar: KNRs und Billing-Basis nicht erhoben.
 
 ---
 
-## §8 Querschnitt-Analysen
+## §7 Querschnitt-Analysen
 
-### §8A Methodik-Entwicklung
+### §7A Methodik-Entwicklung
 
 | Version | Datum | Wesentliche Änderungen |
 |---|---|---|
@@ -309,10 +291,11 @@ Weitere Kunden im Top-20-Inventar: Daten und KNRs nicht erhoben. Vervollständig
 | v1.7.2 | 2026-04-20 | §6c AX-Raten-Präzisions-Check + Zeitbezug-Befund |
 | v1.8 | 2026-04-20 | §2b billing_scope-Tabelle; §6a–§6c RN-Level-Calculator-Pipeline |
 | v1.8.1 | 2026-04-21 | §2c kg_rounding_rule; AT Strukturbefund; Flat-Rate-Dokumentation |
+| v1.8.2 | 2026-04-21 | §9a Multi-Agent-Workflow-Regeln; Ground-Truth-Pflicht; Halluzinierungsincident dokumentiert |
 
-**Aktuelle Version:** v1.8.1 (`8c12df2`)
+**Aktuelle Version:** v1.8.2 (`88f9591`)
 
-### §8B Cross-Customer Pattern-Aggregation
+### §7B Cross-Customer Pattern-Aggregation
 
 **Muster-A (+7 % ERKA-Index):**
 - EBM-Papst: aktiviert Jan 2026 (50 Zeilen, 5 Lanes)
@@ -324,7 +307,7 @@ Weitere Kunden im Top-20-Inventar: Daten und KNRs nicht erhoben. Vervollständig
 - Fischerwerke: 41 Zeilen, −4.825 EUR (IE/ES/BE/IT-Copiano/GR/GB)
 - EBM-Papst: 1 Zeile, −100,40 EUR (EE Lehmja)
 - Sika: 8 Familien, davon 2 mit AX < DLV (echter Fehler)
-- HERMA: 73 Cluster, −167.554 EUR (Früh-Indikator, noch kein DLV-Check)
+- HERMA: 73 Cluster, nominale Differenz −167 kEUR — **nicht DLV-validiert**, nicht als Muster-B zu werten bis Calculator-Build abgeschlossen (siehe §6)
 
 **DLV-Version-Gap (CHT, alle Länder):**
 - pre_dlv_2026-Zeilen zeigen konsistenten negativen Versatz ~−2 % bis −2.9 %
@@ -332,32 +315,32 @@ Weitere Kunden im Top-20-Inventar: Daten und KNRs nicht erhoben. Vervollständig
 - Klassifiziert als Typ-B-Befund (informativ, kein Handlungsbedarf)
 - Nicht zu verwechseln mit Unterfakturierung
 
-### §8C Retroaktiv-Risiko-Matrix
+### §7C Retroaktiv-Risiko-Matrix
 
 | Kunde | Risiko | Begründung |
 |---|---|---|
 | Sika-Gruppe | **HOCH** | AX < DLV belegt (Familien 1+2); Coverage-Gaps mit POST-Aktivität |
 | Fischerwerke | mittel | Muster-B belastbar; GR 2026 ohne Referenz (167 kEUR offen) |
-| HERMA | offen | 73 Cluster −167 kEUR (Früh-Indikator; DLV-Check ausstehend) |
+| HERMA | offen | Früh-Indikator −167 kEUR nominal, **nicht DLV-validiert** — kein belastbares Risiko-Rating möglich |
 | GEZE | offen | 12 Muster-B-Kandidaten unvalidiert |
 | EBM-Papst | niedrig | 1 Muster-B-Zeile; positiver Gesamt-Delta |
 | CHT | niedrig | Alle 5 Länder ≥90 %; Abweichungen methodisch klassifiziert |
 
-### §8D Direkter Schaden (Muster-B, quantifiziert)
+### §7D Direkter Schaden (Muster-B, quantifiziert)
 
 | Kunde | EUR-Summe | Basis | Konfidenz |
 |---|---|---|---|
 | Fischerwerke | −4.825 EUR | 41 Zeilen in_dlv, belastbar | hoch |
 | Sika (Muster A, AX<DLV) | nicht isoliert erhoben | 2 Familien × POST-Periode | mittel |
 | EBM-Papst | −100 EUR | 1 Zeile | hoch |
-| HERMA | −167.554 EUR | 73 Cluster, Dinas-Basis | niedrig (Früh-Indikator) |
+| HERMA | nicht verwendet | Dinas-Vergleich, nicht DLV-validiert — gesperrt bis Calculator-Build | — |
 | **Quantifiziert gesamt** | **−4.925 EUR (excl. HERMA/Sika)** | | |
 
 ---
 
-## §9 Prognose und Empfehlungen
+## §8 Prognose und Empfehlungen
 
-### §9A Prognose Audit-Completion
+### §8A Prognose Audit-Completion
 
 | Kunde | Verbleibende Arbeit | Aufwand-Schätzung |
 |---|---|---|
@@ -367,7 +350,7 @@ Weitere Kunden im Top-20-Inventar: Daten und KNRs nicht erhoben. Vervollständig
 | HERMA Calculator | DLV-Parser; Calculator-Build; Integration Test | 2–3 Sessions |
 | Bitzer/Groz-Beckert | Vollständiger Durchlauf (Welle 1) | je 2–3 Sessions |
 
-### §9B Empfehlungen (priorisiert)
+### §8B Empfehlungen (priorisiert)
 
 1. **Sika Re-Run sofort** — HOCH-Risiko; Familien 1+2 (AX < DLV) erfordern Sofortkorrektur in AX.
 2. **ERKA-Indexschreiben anfordern** — RF-1 (Fischerwerke) und EBM-Papst betroffen; klärt ob Muster-A archiviert oder unabgestimmt.
@@ -375,11 +358,11 @@ Weitere Kunden im Top-20-Inventar: Daten und KNRs nicht erhoben. Vervollständig
 4. **HERMA Calculator-Build** — Größtes unquantifiziertes Risiko (−167 kEUR Früh-Indikator).
 5. **Bitzer/Groz-Beckert onboarden** — Welle 1 abschließen.
 
-### §9C QA-Hinweis
+### §8C QA-Hinweis
 
 Bei Verwendung von Read-only-Agenten (Explore) für die Extraktion von Build-Script-Ausgaben: diese Agenten können Python nicht ausführen und produzieren plausibel wirkende aber falsche Zahlen (dokumentiert in `docs/qa_agent_hallucination_2026-04-21.md`). Alle Zahlenwerte in diesem Dokument wurden ausschließlich aus direkten `python src/build_9c*.py`-Ausgaben entnommen.
 
 ---
 
-*Erstellt: 2026-04-21 | Script-Basis: build_9c*, build_herma_report.py | Methodik: v1.8.1*
+*Erstellt: 2026-04-21 | Zuletzt aktualisiert: 2026-04-21 | Script-Basis: build_9c*, build_herma_report.py | Methodik: v1.8.2*
 *Branch: `claude/audit-billing-migration-wfgWR` | Commit-Basis: `8c12df2`*
