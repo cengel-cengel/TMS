@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-21
+**Stand:** 2026-04-21 | **Version:** v1.8.2
 
 ---
 
@@ -994,6 +994,52 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 
 ---
 
+## §9a Multi-Agent-Workflow-Regeln (ab v1.8.2)
+
+### Hintergrund
+
+Bei der Zwischenstand-Erstellung 2026-04-21 wurde ein Read-only-Explore-Agent gebeten,
+numerische Werte aus Python-Build-Scripts zu extrahieren. Der Agent kann Scripts lesen,
+aber nicht ausführen. Er produzierte plausibel wirkende, aber falsche Zahlen
+(Incident-Details: `docs/qa_agent_hallucination_2026-04-21.md`).
+
+### Regeln
+
+**R1 — Ground-Truth-Pflicht:**
+Alle numerischen Werte in Audit-Dokumenten (Scope-Kaskaden, Match-Raten, EUR-Summen)
+müssen aus direkten Script-Ausführungen stammen:
+```bash
+python src/build_9c*.py 2>&1
+```
+Niemals aus Agent-Inferenz oder Code-Lektüre ohne Ausführung.
+
+**R2 — Keine numerische Delegation an Read-only-Agenten:**
+Aufträge wie "extrahiere die Zahlen aus diesem Script" dürfen nicht an Explore-,
+claude-code-guide- oder andere Read-only-Agenten delegiert werden, wenn das Script
+zur Laufzeit auf externe Daten (pickle-Dateien, Excel-Sheets) zugreift.
+Erlaubt: statische Konfigurationswerte (Konstanten, Schwellenwerte direkt im Code).
+
+**R3 — Unsicherheits-Kennzeichnung:**
+Nicht erhobene Werte werden explizit als `nicht erhoben` markiert — nie als
+berechnete Schätzung.
+
+**R4 — Cross-Check vor Dokument-Commit:**
+Vor dem Commit eines numerischen Zwischenstand-Dokuments: mindestens 3 Stichproben
+aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
+
+### Erlaubte Agent-Aufgaben
+
+| Aufgabe | Erlaubt für Read-only-Agent |
+|---|---|
+| Code-Struktur erklären | ja |
+| Statische Konstanten lesen | ja |
+| Datei-Existenz prüfen | ja |
+| Build-Script-Ausgaben extrahieren | **nein** |
+| Numerische Zusammenfassungen aus Laufzeit-Daten | **nein** |
+| Plotting/Visualisierung aus Laufzeit-Daten | **nein** |
+
+---
+
 ## Changelog
 
 | Version | Datum | Etappe | Änderung |
@@ -1011,3 +1057,4 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 | 1.7.2 | 2026-04-20 | 9c.2a | §6c neu: AX-Raten-Präzisions-Check — Pflichtschritt vor jedem neuen Calculator-Build; ax_rate_precision (native/2dp/3dp/other); Backrechnung-Methode; Known-Befunde-Tabelle (CHT/IT=native, CHT/BE=2dp); Zeitbezug-Befund CHT/BE rn_level_adjustment: kein temporales Clustering (Jan-2026 hat mix aus exact+rn_adj), Faktoren variieren pro RN, Mechanismus unbekannt → Klärungsfrage Operations |
 | 1.8 | 2026-04-21 | 9c.2c | §2b neu: billing_scope Parameter ("position"\|"rn"); Prorating-Logik (HL+Maut on RN-Level, NL pro Empfänger-Gruppe, Verteilung by actual_kg); Empfänger-Gruppe = (RN, Empfänger_Name) nicht (RN, PLZ) — empirisch bestätigt GR 9c.2c, \|Δ\|<0,001 EUR über alle Positionen; §6c Known-Befunde aktualisiert: CHT/ES=2dp (9c.2b), CHT/GR=2dp (9c.2c); billing_scope-Tabelle (CHT/IT/BE/ES=position, CHT/GR=rn); Retroaktiv-Empfehlung HELU/HERMA/Hornschuch |
 | 1.8.1 | 2026-04-21 | 9c.2d | §2c neu: kg_rounding_rule Parameter ("ceil_to_100"\|"actual_kg"\|"actual_kg_fracht_only"); Strukturbefund CHT/AT: "Gewichtsrundung 100:100" gilt nur für DE-Maut, Fracht nutzt actual_kg direkt gegen Schwellen; AT-Fracht ist FLAT pro Sendung (nicht per-100-kg); Pflicht-Prüftabelle (kg_rounding_rule + Fracht-Einheit + Split-Logik); Known-Befunde-Tabelle CHT/AT=actual_kg_fracht_only (9c.2d); §2b billing_scope-Tabelle: CHT/AT=position (9c.2d, empirisch \|Σ_Δ\|<0,002 EUR, 4 RNs); §6c Known-Befunde: CHT/AT=2dp (9c.2d, \|Δ_pos\|<0,004 EUR) |
+| 1.8.2 | 2026-04-21 | QA | §9a neu: Multi-Agent-Workflow-Regeln; Halluzinierungsincident dokumentiert (Explore-Agent produzierte falsche Build-Script-Zahlen: GR n_total 1074→102, ES Match 100%→93.3%, BE rn_adj 18→111); Ground-Truth-Regel: numerische Werte ausschließlich aus direkten python-Ausgaben; Keine Delegation numerischer Extraktion an Read-only-Agenten |
