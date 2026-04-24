@@ -14,6 +14,16 @@ def _nonempty(val: object) -> bool:
     return s not in ("", "nan", "NaN", "None")
 
 
+def _nonempty_numeric(val: object) -> bool:
+    """Return True if val is a non-NaN, non-None number. Zero is valid."""
+    if val is None:
+        return False
+    try:
+        return not pd.isna(float(val))
+    except (TypeError, ValueError):
+        return False
+
+
 def classify_ax_rows(df: pd.DataFrame) -> pd.DataFrame:
     """Add boolean classification columns to an AX billing DataFrame.
 
@@ -95,3 +105,89 @@ def aggregate_dinas_per_invoice(
         .agg(**agg_spec)
         .reset_index()
     )
+
+
+def reconstruct_ax_master(
+    master_row: pd.Series,
+    sub_rows: pd.DataFrame,
+    *,
+    physical_cols: Sequence[str] = (
+        "Tonnage (eff.)",
+        "Lademeter",
+        "Stellplätze",
+        "Volumen",
+        "Colli",
+    ),
+    erloes_cols: Sequence[str] = (
+        "Erlöse Fracht",
+        "Erlöse Diesel",
+        "Erlöse Maut",
+        "Erlöse Nebengebühr",
+        "Erlöse Peak",
+        "Erlöse Lademittel",
+    ),
+    rn_col: str = "Rechnungsnummer",
+) -> dict:
+    """Reconstruct effective values for a master row from its sub-rows.
+
+    Rules (v1.9.2 §2e Rule E):
+    - Physical parameters: master value if non-NaN/non-None; sum(subs) as
+      fallback only when the master field is empty. Zero is a valid master value.
+    - Revenue columns: always sum(sub_rows) — master carries no own revenues.
+    - Invoice numbers: collected from sub_rows[rn_col], deduplicated and sorted.
+    - Master vs sub-sum discrepancies in physical fields are data redundancy,
+      not audit findings.
+
+    Parameters
+    ----------
+    master_row:
+        The single master row (pd.Series).
+    sub_rows:
+        DataFrame containing all sub-rows that belong to this master.
+    physical_cols:
+        Columns for which the master value leads (sub-sum is fallback only).
+    erloes_cols:
+        Revenue columns always taken from subs (master has no own revenues).
+    rn_col:
+        Column holding invoice numbers; deduplicated list returned as
+        ``"rechnungsnummern"`` in the output dict.
+
+    Returns
+    -------
+    dict mapping column names to reconstructed values, plus
+    ``"rechnungsnummern"`` (sorted list of unique invoice numbers from subs).
+    """
+    result: dict = {}
+
+    for col in physical_cols:
+        master_val = master_row.get(col) if hasattr(master_row, "get") else (
+            master_row[col] if col in master_row.index else None
+        )
+        if _nonempty_numeric(master_val):
+            result[col] = float(master_val)
+        elif col in sub_rows.columns:
+            result[col] = pd.to_numeric(sub_rows[col], errors="coerce").fillna(0.0).sum()
+        else:
+            result[col] = 0.0
+
+    for col in erloes_cols:
+        if col in sub_rows.columns:
+            result[col] = pd.to_numeric(sub_rows[col], errors="coerce").fillna(0.0).sum()
+        else:
+            result[col] = 0.0
+
+    if rn_col in sub_rows.columns:
+        rns = (
+            sub_rows[rn_col]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .pipe(lambda s: s[s.str.len() > 0])
+            .unique()
+            .tolist()
+        )
+        result["rechnungsnummern"] = sorted(rns)
+    else:
+        result["rechnungsnummern"] = []
+
+    return result

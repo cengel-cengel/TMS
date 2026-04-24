@@ -8,6 +8,7 @@ from tms.billing.aggregation import (
     aggregate_dinas_per_invoice,
     classify_ax_rows,
     filter_comparison_set,
+    reconstruct_ax_master,
 )
 
 
@@ -204,3 +205,106 @@ class TestAggregateDinasPerInvoice:
         )
         assert "rn" in result.columns
         assert len(result) == 3
+
+
+# ---------------------------------------------------------------------------
+# reconstruct_ax_master — v1.9.2 §2e Rule E
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def master_sub_group():
+    """Real-world-shaped master + 3 sub rows (physical on master, revenues on subs)."""
+    master = pd.Series(
+        {
+            "Auftragsnummer": "7092010001835006",
+            "Mastersendung": 7092010001835006.0,
+            "Unterauftrag": "7091200280103007, 7091200280104004, 7091200280107005",
+            "Tonnage (eff.)": 361.9,
+            "Lademeter": 0.0,
+            "Stellplätze": 0.0,
+            "Volumen": 0.0,
+            "Colli": 4.0,
+            "Erlöse Fracht": 0.0,
+            "Erlöse Diesel": 0.0,
+            "Rechnungsnummer": "0",
+        }
+    )
+    subs = pd.DataFrame(
+        {
+            "Auftragsnummer": [
+                "7091200280104004",
+                "7091200280107005",
+                "7091200280103007",
+            ],
+            "Tonnage (eff.)": [0.0, 0.0, 0.0],
+            "Lademeter": [0.0, 0.0, 0.0],
+            "Stellplätze": [0.0, 0.0, 0.0],
+            "Volumen": [0.0, 0.0, 0.0],
+            "Colli": [0.0, 0.0, 0.0],
+            "Erlöse Fracht": [70.1578, 9.6501, 17.4723],
+            "Erlöse Diesel": [0.0, 0.0, 0.0],
+            "Rechnungsnummer": ["2557006-2", "2557006-2", "2557006-2"],
+        }
+    )
+    return master, subs
+
+
+class TestReconstructAxMaster:
+    def test_physical_master_leads(self, master_sub_group):
+        master, subs = master_sub_group
+        result = reconstruct_ax_master(master, subs)
+        # Master has Tonnage=361.9; subs sum to 0 → master wins
+        assert abs(result["Tonnage (eff.)"] - 361.9) < 0.001
+
+    def test_revenue_always_from_subs(self, master_sub_group):
+        master, subs = master_sub_group
+        result = reconstruct_ax_master(master, subs)
+        expected = 70.1578 + 9.6501 + 17.4723
+        assert abs(result["Erlöse Fracht"] - expected) < 0.001
+
+    def test_rechnungsnummern_from_subs(self, master_sub_group):
+        master, subs = master_sub_group
+        result = reconstruct_ax_master(master, subs)
+        assert result["rechnungsnummern"] == ["2557006-2"]
+
+    def test_master_zero_physical_is_valid(self):
+        """Explicit zero on master is a valid value — not a fallback trigger."""
+        master = pd.Series({"Tonnage (eff.)": 0.0, "Erlöse Fracht": 0.0, "Rechnungsnummer": "X"})
+        subs = pd.DataFrame({"Tonnage (eff.)": [100.0, 200.0], "Erlöse Fracht": [50.0, 60.0], "Rechnungsnummer": ["RN-A", "RN-B"]})
+        result = reconstruct_ax_master(master, subs, physical_cols=("Tonnage (eff.)",), erloes_cols=("Erlöse Fracht",))
+        # Master is 0.0 (valid, non-NaN) → use master, not subs sum
+        assert result["Tonnage (eff.)"] == 0.0
+
+    def test_nan_master_falls_back_to_sub_sum(self):
+        """NaN master field triggers sub-sum fallback."""
+        master = pd.Series({"Tonnage (eff.)": float("nan"), "Erlöse Fracht": 0.0, "Rechnungsnummer": "X"})
+        subs = pd.DataFrame({"Tonnage (eff.)": [120.0, 80.0], "Erlöse Fracht": [30.0, 40.0], "Rechnungsnummer": ["RN-1", "RN-1"]})
+        result = reconstruct_ax_master(master, subs, physical_cols=("Tonnage (eff.)",), erloes_cols=("Erlöse Fracht",))
+        assert abs(result["Tonnage (eff.)"] - 200.0) < 0.001
+
+    def test_revenue_ignores_master_value(self):
+        """Master Erlöse Fracht is non-zero but revenues still come from subs."""
+        master = pd.Series({"Erlöse Fracht": 999.0, "Tonnage (eff.)": 100.0, "Rechnungsnummer": "X"})
+        subs = pd.DataFrame({"Erlöse Fracht": [50.0, 25.0], "Tonnage (eff.)": [0.0, 0.0], "Rechnungsnummer": ["RN-1", "RN-1"]})
+        result = reconstruct_ax_master(master, subs, physical_cols=("Tonnage (eff.)",), erloes_cols=("Erlöse Fracht",))
+        # Revenue always from subs, even if master has a value
+        assert abs(result["Erlöse Fracht"] - 75.0) < 0.001
+
+    def test_multiple_rn_deduplicated_and_sorted(self):
+        """Multiple unique invoice numbers in subs are deduplicated and sorted."""
+        master = pd.Series({"Tonnage (eff.)": 100.0, "Erlöse Fracht": 0.0})
+        subs = pd.DataFrame({
+            "Tonnage (eff.)": [0.0, 0.0, 0.0],
+            "Erlöse Fracht": [10.0, 20.0, 30.0],
+            "Rechnungsnummer": ["RN-3", "RN-1", "RN-3"],
+        })
+        result = reconstruct_ax_master(master, subs, physical_cols=("Tonnage (eff.)",), erloes_cols=("Erlöse Fracht",))
+        assert result["rechnungsnummern"] == ["RN-1", "RN-3"]
+
+    def test_empty_subs_returns_master_physical(self):
+        """Empty sub DataFrame: physical from master, revenues = 0."""
+        master = pd.Series({"Tonnage (eff.)": 500.0, "Erlöse Fracht": 0.0})
+        subs = pd.DataFrame(columns=["Tonnage (eff.)", "Erlöse Fracht", "Rechnungsnummer"])
+        result = reconstruct_ax_master(master, subs, physical_cols=("Tonnage (eff.)",), erloes_cols=("Erlöse Fracht",))
+        assert abs(result["Tonnage (eff.)"] - 500.0) < 0.001
+        assert result["Erlöse Fracht"] == 0.0

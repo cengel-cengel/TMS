@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-24 | **Version:** v1.9.1
+**Stand:** 2026-04-24 | **Version:** v1.9.2
 
 ---
 
@@ -517,6 +517,52 @@ falsche Pass-Raten.
 (63 FP) und HERMA (30 FN) wurden Proxy-Fehler durch `enrich_master_sub()` ohne
 sichtbaren Pass-Rate-Effekt kompensiert. Ohne diese Schutzlogik wären signifikante
 Pass-Rate-Verschiebungen aufgetreten (→ `docs/is_sub_regression_analysis.md`).
+
+### E — Master-Rekonstruktion (ab v1.9.2)
+
+Wenn eine Master-Zeile mit Sub-Zeilen in den Calculator eingespeist wird, gelten
+folgende Vorrangregeln:
+
+```
+für jeden physischen Parameter (Tonnage, LDM, Stellplätze, Volumen, Colli):
+    wenn master[feld] ist nicht NaN und nicht None:
+        wert = master[feld]          # Master führt; 0 ist ein gültiger Wert
+    sonst:
+        wert = sum(sub[feld])        # Fallback nur bei leerem Master-Feld
+
+für jeden Erlös-Parameter (Erlöse Fracht, Diesel, Maut, …):
+    wert = sum(sub[erlös])           # Immer aus Subs — Master trägt keine Erlöse
+
+Rechnungsnummern:
+    rns = deduplizierte, sortierte Liste aller RNs aus Sub-Zeilen
+```
+
+**Inkonsistenz Master-Wert ≠ Sub-Summe ist kein Finding.** Sie ist strukturelle
+Datenredundanz in AX (Master speichert aggregierte physische Parameter der
+Gesamtsendung; Subs tragen die Einzel-Rechnungsbeträge).
+
+Implementierung: `reconstruct_ax_master()` in `src/tms/billing/aggregation.py`.
+
+```python
+from tms.billing import reconstruct_ax_master
+
+result = reconstruct_ax_master(
+    master_row=master,   # pd.Series
+    sub_rows=subs,       # pd.DataFrame
+)
+# result["Tonnage (eff.)"]   → master-Wert (falls vorhanden), sonst sum(subs)
+# result["Erlöse Fracht"]    → sum(subs) immer
+# result["rechnungsnummern"] → sortierte RN-Liste aus Subs
+```
+
+**Validierungsbeispiel (GEZE, Auftrag 7092010001835006):**
+
+| Feld | Master | Sub-Summe (3 Subs) | Rekonstruiert |
+|------|--------|--------------------|---------------|
+| Tonnage (eff.) | **361,9 kg** | 0,0 kg | **361,9 kg** (Master führt) |
+| Lademeter | 0,0 | 0,0 | 0,0 |
+| Erlöse Fracht | 0,0 EUR | **97,28 EUR** | **97,28 EUR** (immer Subs) |
+| Rechnungsnummern | — | 2557006-2 | `['2557006-2']` |
 
 ---
 
@@ -1149,3 +1195,4 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.8.2 | 2026-04-21 | QA | §9a neu: Multi-Agent-Workflow-Regeln; Halluzinierungsincident dokumentiert (Explore-Agent produzierte falsche Build-Script-Zahlen: GR n_total 1074→102, ES Match 100%→93.3%, BE rn_adj 18→111); Ground-Truth-Regel: numerische Werte ausschließlich aus direkten python-Ausgaben; Keine Delegation numerischer Extraktion an Read-only-Agenten |
 | 1.9 | 2026-04-24 | v1.9 | §2e neu: Aggregations-Regel für Dinas-AX-Vergleich — A) AX-Sub-Filter via Mastersendung-Feld (is_sub = has_ms & ~has_ua), kein Tonnage-Proxy; B) Dinas-Aggregation pro Rechnung: innerhalb jeder Rechnung nach (Sender_PLZ, Empf_PLZ, Ladedatum) gruppieren, nie rechnungsübergreifend; C) Vergleich Dinas-Aggregat ↔ AX-Master über Sender+Empfänger+Ladedatum |
 | 1.9.1 | 2026-04-24 | v1.9 | §2e Rule D neu: Zweistufigkeit der AX-Filterung — filter_comparison_set() (Stufe 1, Sub-Rows) ist nicht ausreichend ohne nachgelagerte Unbeurteilbar-Filterung (Stufe 2, Tonnage=0 UND LDM=0); obligatorische Prüftabelle für neue Kunden-Rollouts; empirischer Befund aus Regression-Analyse dokumentiert |
+| 1.9.2 | 2026-04-24 | v1.9 | §2e Rule E neu: Master-Rekonstruktion — Master führt bei physischen Parametern (Tonnage, LDM, Stellplätze, Volumen, Colli); Sub-Summe als Fallback nur bei NaN/None-Master-Feld; 0 ist gültiger Master-Wert (kein Fallback-Trigger); Erlöse immer aus Sub-Summe; Rechnungsnummern aus Sub-Liste; Master-vs-Sub-Inkonsistenz = Datenredundanz, kein Finding; Implementierung: reconstruct_ax_master() in src/tms/billing/aggregation.py; Validierung: GEZE Auftrag 7092010001835006 (Tonnage=361,9 Master, Erlöse=97,28 Sub-Summe) |
