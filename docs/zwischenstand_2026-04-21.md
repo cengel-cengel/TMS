@@ -1,5 +1,5 @@
 # Zwischenstand — TMS Migration Audit
-**Stand:** 2026-04-21 | **Branch:** `claude/audit-billing-migration-wfgWR` | **Methodik:** v1.8.2
+**Stand:** 2026-04-24 | **Branch:** `claude/audit-billing-migration-wfgWR` | **Methodik:** v1.9.3
 
 ---
 
@@ -8,7 +8,7 @@
 | Kunde | KNR(s) | Status | Etappe | Delta / Befund | Retroaktiv-Risiko |
 |---|---|---|---|---|---|
 | EBM-Papst Mulfingen | 410844 | Abgeschlossen | 9a.4 | +41.283 EUR (Floater) | niedrig |
-| GEZE GmbH | 406035 | Abgeschlossen | 9b.4 | +51.187 EUR (Floater); 12 Muster-B offen | offen |
+| GEZE GmbH | 406035 | **v1.9 abgeschlossen** | 9b.4 + v1.9 | +48.023 EUR (DLV-Delta); 14 Muster-B, 1 Artefakt | offen |
 | Fischerwerke GmbH | 409480 | Zwischenstand | 9a.3.2 | Muster-A +3.057 EUR; Muster-B −4.825 EUR | mittel |
 | Sika-Gruppe | 491063/511241/527406 | Abgeschlossen | 8i | 8 Unterfakturierung-Familien, 7 Coverage-Gaps | **HOCH** |
 | CHT Germany GmbH | 486073 | Abgeschlossen | 9c.2d | 5 Länder, alle ≥93.3 % | niedrig |
@@ -62,44 +62,60 @@
 
 **Billing-Basis:** Weight (Tonnage eff. in kg), per 100 kg Schritte; Maut/Mobility-Package inklusiv
 **DLV:** `20250305_Geze_Export_incl.*.xlsx` — 2025-Fallback aktiv (kein 2026-DLV)
-**Abgeschlossene Etappen:** 9b.3–9b.4 | **Report:** `docs/9b4_geze_report.md`
+**Abgeschlossene Etappen:** 9b.3–9b.4 + v1.9 (Schritte 1–8)
+**Reports:** `docs/9b4_geze_report.md`, `docs/geze_v19_regression_result.md`,
+`docs/geze_v19_reconstruction_step5.md`, `docs/v1_9_geze_dinas_comparison.md`
 
-### Scope-Kaskade
+### Scope-Kaskade v1.9 (POST)
 
-| Phase | Gruppen | Positionen | Erlöse Fracht |
-|---|---|---|---|
-| in_dlv_2025 | 773 | — | 187.791 EUR |
-| in_dlv_2025_fallback | 325 | — | 73.095 EUR |
-| **Gesamt beurteilbar** | **1.098** | **3.120** | **260.886 EUR** |
-| Tonnage=0 (Gate-1) | 1.109 / 4.349 pos | 25,5 % | — |
+| Stufe | Zeilen / Gruppen | Erlöse Fracht |
+|---|---|---|
+| AX POST Gesamt | 7.752 | — |
+| − is_sub (v1.9 Filter) | −153 FP-Subs | −17.613 EUR |
+| + reconstruct_ax_master() | 586 Master rekonstruiert | +109.053 EUR (Sub-Erlöse) |
+| RN-valid + Erlöse>0 | 3.181 Zeilen | — |
+| Beurteilbar | 3.052 Zeilen | — |
+| **Gruppen (RN×Land×PLZ)** | **1.098** | **252.232 EUR** |
 
-Gate-1 aktiv: 25,5 % Tonnage=0 überschreitet 20 %-Schwelle. Kein DLV-Check auf diesen Zeilen.
-
-### Befunde nach Land
+### Befunde nach Land (v1.9)
 
 | Land | Gruppen | DLV-Soll | Ist | Delta | Muster-A | Muster-B |
 |---|---|---|---|---|---|---|
 | AT | 163 | 18.248 EUR | 22.825 EUR | +4.577 EUR | 0 | 2 |
 | CH | 95 | 15.524 EUR | 21.495 EUR | +5.971 EUR | 0 | 0 |
 | ES | 245 | 30.310 EUR | 33.883 EUR | +3.573 EUR | 0 | 2 |
-| FR | 149 | 67.478 EUR | 78.859 EUR | +11.381 EUR | 0 | 4 |
-| GB | 8 | 27.050 EUR | 46.338 EUR | +19.288 EUR | 0 | 1 |
+| FR | 149 | 63.575 EUR | 74.211 EUR | +10.636 EUR | 0 | 5 |
+| GB | 8 | 27.088 EUR | 44.501 EUR | +17.414 EUR | 0 | 1 |
 | IE | 4 | 2.392 EUR | 2.405 EUR | +13 EUR | 0 | 0 |
-| IT | 363 | 41.403 EUR | 46.977 EUR | +5.574 EUR | 0 | 4 |
+| IT | 363 | 39.777 EUR | 44.807 EUR | +5.030 EUR | 0 | 4 |
 | PT | 71 | 7.295 EUR | 8.105 EUR | +810 EUR | 0 | 0 |
-| **Gesamt** | **1.098** | **209.699 EUR** | **260.886 EUR** | **+51.187 EUR** | **0** | **13** |
+| **Gesamt** | **1.098** | **204.209 EUR** | **252.232 EUR** | **+48.023 EUR** | **0** | **14** |
 
-**Muster-A:** 0 Treffer — GEZE weist keinen systemischen ERKA-Indexaufschlag auf. Negativer Befund schärft das Bild: Muster-A ist kundenseitig aktiviert (EBM Jan 2026, Fischerwerke Mrz 2026), nicht verfrachterspezifisch.
+**Muster-A:** 0 Treffer — GEZE weist keinen systemischen ERKA-Indexaufschlag auf.
 
-**Muster-B:** 13 Kandidaten (delta_raw < −10 EUR). Nach Artefakt-Prüfung: 1 Aggregationsartefakt (GB/WS13 8SY, n_pos=27), 12 Kandidaten manuell zu prüfen (kein abgeschlossener Befund).
+**Muster-B (v1.9):** 14 Gruppen (1 mehr als ALT=13 durch v1.9-Filterung).
+- Rang 1 (GB/WS138SY, −967 EUR, n_pos=27): **Bekanntes Aggregationsartefakt** (9b4-bestätigt)
+- Ränge 2–14: 13 unvalidierte Kandidaten (FR 5, IT 4, AT 2, ES 2)
+- Gesamt Muster-B-Delta: −1.778 EUR
 
-**CHF-Floater:** korrekt in Erlöse Fracht eingerechnet; 51/95 CH-Gruppen im Neutralband, 3 Gruppen mit aktivem Floater (CHF/EUR 0,908–0,957).
+**Gesamt-Delta-Beobachtung:** +48 kEUR (AX > DLV-Tarif). GB +64 %, CH +38 %
+deuten auf Währungsaufschläge (GBP/CHF→EUR) hin — noch nicht validiert.
 
-**Retroaktiv-Risiko:** offen — 12 Muster-B-Kandidaten unvalidiert, kein abgeschlossener Klärungsstatus.
+**CHF-Floater:** korrekt in Erlöse Fracht eingerechnet; 51/95 CH-Gruppen im Neutralband.
 
-**Offene Punkte:** Manuelle Prüfung der 12 Muster-B-Kandidaten. 2026-DLV bei GEZE anfordern (aktuell 2025-Fallback).
+**Retroaktiv-Risiko:** offen — 13 unvalidierte Muster-B-Kandidaten.
 
-**Offene Audit-Komponente (v1.9-Findings):** Dinas-AX-Vergleich auf Basis der Aggregations-Regel (§2e) wurde für GEZE noch nicht durchgeführt. Empirische Validierung zeigt 8,54 % des Dinas-Gesamt-Volumens (4.242 EUR) in 15 Multi-Group-Rechnungen, die bei einer Aggregations-korrekten Prüfung methodisch ausgewertet werden müssen. Status: offene Audit-Komponente.
+**Offene Punkte:**
+- Manuelle Prüfung der 13 Muster-B-Kandidaten (v1.9-Liste)
+- 2026-DLV bei GEZE anfordern (aktuell 2025-Fallback)
+- Dinas-AX-Matching POST (Schritt 7) erfordert POST-Dinas-PDFs (ab Sep 2025)
+
+**Dinas-Aggregation (Schritt 6):** Validiert — 792 Positionen → 759 Routing-Keys,
+15 Multi-Group-Rechnungen korrekt aggregiert. Keine AX-Matching-Blockierung.
+
+**v1.9-Methodologie:** is_sub-Filter statt Tonnage>0-Proxy. 586 Master
+rekonstruiert. Gruppen-Stabilität bestätigt (1.073 Gruppen, alle 12→13 Muster-B
+aus 9b4 im Scope).
 
 ---
 
