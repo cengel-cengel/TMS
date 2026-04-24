@@ -8,6 +8,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 import sys; sys.path.insert(0, 'src')
 from dinas_pdf_parser import parse_one, flatten
+from tms.billing import aggregate_dinas_per_invoice
 
 BI_PKL    = Path('output/bi_top20_data.pkl')
 NK_XLSX   = Path('data/extracted/v1/Noerpel AI/SIka/Nebenbedingungen DINAS/NK Sika.xlsx')
@@ -157,6 +158,20 @@ else:
     dinas_cache = pd.DataFrame(rows)
     dinas_cache.to_pickle(CACHE)
     print(f'Cache gespeichert: {len(dinas_cache)} Positionen')
+
+# v1.9 §2e Rule B: per-Rechnung Routing-Key-Aggregation (Sika 9d)
+# Routing-Key = (rechnung_nr, empf_land, empf_plz, leistungsdatum)
+dinas_rk_agg = aggregate_dinas_per_invoice(
+    dinas_cache,
+    rn_col='rechnung_nr',
+    sender_plz_col='empf_land',
+    empf_plz_col='empf_plz',
+    date_col='leistungsdatum',
+    agg_cols=['fracht', 'diesel', 'maut_ssd', 'gesamtbetrag', 'stellplaetze', 'ldm'],
+)
+_n_multi = (dinas_rk_agg['n_positionen'] > 1).sum()
+print(f'Dinas RK-Aggregat: {len(dinas_rk_agg)} Gruppen '
+      f'({_n_multi} mit >1 Position je Routing-Key)')
 
 def _norm(v):
     s = re.sub(r'\D', '', str(v)).lstrip('0')
