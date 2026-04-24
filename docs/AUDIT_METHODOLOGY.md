@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-21 | **Version:** v1.8.2
+**Stand:** 2026-04-24 | **Version:** v1.9
 
 ---
 
@@ -428,6 +428,58 @@ Neben `ax_rate_precision` (§6c) und `billing_scope` (§2b) jetzt auch:
 | CHT Germany | ES | `ceil_to_100` | per 100 kg | 9c.2b |
 | CHT Germany | GR | `ceil_to_100` | per 100 kg (HL+NL) | 9c.2c |
 | CHT Germany | AT | `actual_kg_fracht_only` | flat per Sendung | 9c.2d |
+
+---
+
+## §2e Aggregations-Regel für Dinas-AX-Vergleich (ab v1.9)
+
+### A — AX-Sub-Filter
+
+`is_sub` wird ausschließlich über das Feld `Mastersendung` ("zusammengefasst in")
+bestimmt. Kein Tonnage-Proxy. Sub-Zeilen werden nicht isoliert verglichen, sondern
+in ihre Master-Zeile aggregiert.
+
+```python
+has_ms = df['Mastersendung'].apply(
+    lambda v: bool(v and str(v).strip() not in ('', 'nan', 'NaN')))
+has_ua = df['Unterauftrag'].apply(
+    lambda v: bool(v and str(v).strip() not in ('', 'nan', 'NaN')))
+
+is_sub        = has_ms & ~has_ua   # Sub-Zeile: Mastersendung gesetzt, kein eigener UA
+is_master     = has_ua             # Master-Zeile: hat Unterauftrag
+is_standalone = ~has_ms & ~has_ua  # Einzelzeile: kein Master, kein Sub
+```
+
+Vergleichs-Set = `is_master | is_standalone`.
+Sub-Zeilen werden herausgefiltert; ihre Erlöse liegen auf der Master-Zeile.
+
+### B — Dinas-Aggregation pro Rechnung
+
+Die Aggregation erfolgt **rechnungsweise**. Innerhalb jeder Rechnung werden Positionen
+mit gleichem `(Sender_PLZ, Empfänger_PLZ, Ladedatum)` zu einer Dinas-Aggregations-
+Einheit zusammengefasst. Positionen aus verschiedenen Rechnungen werden **nie**
+zusammengefasst.
+
+```python
+key = ['Rechnungsnummer', 'Sender_PLZ', 'Empfänger_PLZ', 'Ladedatum']
+dinas_aggregat = dinas_pos.groupby(key, dropna=False).agg(
+    n_positionen=('Rechnungsnummer', 'count'),
+    gewicht_kg=('Gewicht_kg', 'sum'),
+    lademeter=('Lademeter', 'sum'),
+    stellplaetze=('Stellplätze', 'sum'),
+    erloese_fracht=('Erlöse_Fracht', 'sum'),
+    erloese_diesel=('Erlöse_Diesel', 'sum'),
+    erloese_maut=('Erlöse_Maut', 'sum'),
+).reset_index()
+```
+
+### C — Vergleich
+
+Dinas-Aggregations-Einheit ↔ AX-Master-aggregierte Zeile.
+Matching über `Sender_PLZ + Empfänger_PLZ + Ladedatum`.
+
+Einzelsendungen (Dinas ohne gleich-geschlüsselte Partner in derselben Rechnung,
+AX ohne Sub-Struktur) werden als Einzelvergleich gegen AX-Einzelzeilen geführt.
 
 ---
 
@@ -1058,3 +1110,4 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.8 | 2026-04-21 | 9c.2c | §2b neu: billing_scope Parameter ("position"\|"rn"); Prorating-Logik (HL+Maut on RN-Level, NL pro Empfänger-Gruppe, Verteilung by actual_kg); Empfänger-Gruppe = (RN, Empfänger_Name) nicht (RN, PLZ) — empirisch bestätigt GR 9c.2c, \|Δ\|<0,001 EUR über alle Positionen; §6c Known-Befunde aktualisiert: CHT/ES=2dp (9c.2b), CHT/GR=2dp (9c.2c); billing_scope-Tabelle (CHT/IT/BE/ES=position, CHT/GR=rn); Retroaktiv-Empfehlung HELU/HERMA/Hornschuch |
 | 1.8.1 | 2026-04-21 | 9c.2d | §2c neu: kg_rounding_rule Parameter ("ceil_to_100"\|"actual_kg"\|"actual_kg_fracht_only"); Strukturbefund CHT/AT: "Gewichtsrundung 100:100" gilt nur für DE-Maut, Fracht nutzt actual_kg direkt gegen Schwellen; AT-Fracht ist FLAT pro Sendung (nicht per-100-kg); Pflicht-Prüftabelle (kg_rounding_rule + Fracht-Einheit + Split-Logik); Known-Befunde-Tabelle CHT/AT=actual_kg_fracht_only (9c.2d); §2b billing_scope-Tabelle: CHT/AT=position (9c.2d, empirisch \|Σ_Δ\|<0,002 EUR, 4 RNs); §6c Known-Befunde: CHT/AT=2dp (9c.2d, \|Δ_pos\|<0,004 EUR) |
 | 1.8.2 | 2026-04-21 | QA | §9a neu: Multi-Agent-Workflow-Regeln; Halluzinierungsincident dokumentiert (Explore-Agent produzierte falsche Build-Script-Zahlen: GR n_total 1074→102, ES Match 100%→93.3%, BE rn_adj 18→111); Ground-Truth-Regel: numerische Werte ausschließlich aus direkten python-Ausgaben; Keine Delegation numerischer Extraktion an Read-only-Agenten |
+| 1.9 | 2026-04-24 | v1.9 | §2e neu: Aggregations-Regel für Dinas-AX-Vergleich — A) AX-Sub-Filter via Mastersendung-Feld (is_sub = has_ms & ~has_ua), kein Tonnage-Proxy; B) Dinas-Aggregation pro Rechnung: innerhalb jeder Rechnung nach (Sender_PLZ, Empf_PLZ, Ladedatum) gruppieren, nie rechnungsübergreifend; C) Vergleich Dinas-Aggregat ↔ AX-Master über Sender+Empfänger+Ladedatum |
