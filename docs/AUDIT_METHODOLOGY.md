@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-24 | **Version:** v1.9.2
+**Stand:** 2026-04-24 | **Version:** v1.9.3
 
 ---
 
@@ -452,6 +452,22 @@ is_standalone = ~has_ms & ~has_ua  # Einzelzeile: kein Master, kein Sub
 
 Vergleichs-Set = `is_master | is_standalone`.
 Sub-Zeilen werden herausgefiltert; ihre Erlöse liegen auf der Master-Zeile.
+
+**Implementations-Detail Sub-Klassifikation:**
+Das AX-Feld `Unterauftrag` enthält eine Liste von Sub-Auftragsnummern als
+**komma-separierter String** (z.B. `"7091200280103007, 7091200280104004"`),
+nicht als numerischen Wert. Die Klassifikation muss mit einem String-Check
+erfolgen (non-empty string nach Whitespace-Strip), nicht mit einem numerischen
+Check. Ein numerischer Check (`float()`) würde auf komma-separierten Strings
+mit `ValueError` scheitern und Master-Zeilen fehlerhaft als Sub klassifizieren.
+
+`classify_ax_rows()` verwendet korrekt `_nonempty()` (string-check).
+`_nonempty_numeric()` ist ausschließlich für physische Parameter relevant
+(Tonnage, Lademeter etc.), wo numerische Gültigkeit über den Fallback entscheidet.
+
+Empirisch bestätigt: Alle 586 GEZE-Master-Zeilen haben komma-separierte
+Unterauftrag-Strings. Ein `float()`-Check hätte alle als Sub klassifiziert
+(→ `docs/master_sub_empirical_patterns.md`).
 
 ### B — Dinas-Aggregation pro Rechnung
 
@@ -1195,4 +1211,5 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.8.2 | 2026-04-21 | QA | §9a neu: Multi-Agent-Workflow-Regeln; Halluzinierungsincident dokumentiert (Explore-Agent produzierte falsche Build-Script-Zahlen: GR n_total 1074→102, ES Match 100%→93.3%, BE rn_adj 18→111); Ground-Truth-Regel: numerische Werte ausschließlich aus direkten python-Ausgaben; Keine Delegation numerischer Extraktion an Read-only-Agenten |
 | 1.9 | 2026-04-24 | v1.9 | §2e neu: Aggregations-Regel für Dinas-AX-Vergleich — A) AX-Sub-Filter via Mastersendung-Feld (is_sub = has_ms & ~has_ua), kein Tonnage-Proxy; B) Dinas-Aggregation pro Rechnung: innerhalb jeder Rechnung nach (Sender_PLZ, Empf_PLZ, Ladedatum) gruppieren, nie rechnungsübergreifend; C) Vergleich Dinas-Aggregat ↔ AX-Master über Sender+Empfänger+Ladedatum |
 | 1.9.1 | 2026-04-24 | v1.9 | §2e Rule D neu: Zweistufigkeit der AX-Filterung — filter_comparison_set() (Stufe 1, Sub-Rows) ist nicht ausreichend ohne nachgelagerte Unbeurteilbar-Filterung (Stufe 2, Tonnage=0 UND LDM=0); obligatorische Prüftabelle für neue Kunden-Rollouts; empirischer Befund aus Regression-Analyse dokumentiert |
+| 1.9.3 | 2026-04-24 | v1.9 | §2e Rule A Implementations-Detail: Unterauftrag ist komma-separierter String, kein numerischer Wert; _nonempty() (string-check) korrekt, _nonempty_numeric() (float-check) würde Master fälschlich als Sub klassifizieren; empirisch bestätigt an 586 GEZE-Master-Zeilen |
 | 1.9.2 | 2026-04-24 | v1.9 | §2e Rule E neu: Master-Rekonstruktion — Master führt bei physischen Parametern (Tonnage, LDM, Stellplätze, Volumen, Colli); Sub-Summe als Fallback nur bei NaN/None-Master-Feld; 0 ist gültiger Master-Wert (kein Fallback-Trigger); Erlöse immer aus Sub-Summe; Rechnungsnummern aus Sub-Liste; Master-vs-Sub-Inkonsistenz = Datenredundanz, kein Finding; Implementierung: reconstruct_ax_master() in src/tms/billing/aggregation.py; Validierung: GEZE Auftrag 7092010001835006 (Tonnage=361,9 Master, Erlöse=97,28 Sub-Summe) |

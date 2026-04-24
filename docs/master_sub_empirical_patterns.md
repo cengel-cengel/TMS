@@ -159,5 +159,52 @@ bei GEZE (nie ausgelöst), schützt aber bei Fischerwerke.
 
 ---
 
-*Erstellt: 2026-04-24 | Grundlage: bi_top20_data.pkl | Kunden: GEZE, Fischer, HERMA, CHT*
+## §8 Rollout-Implikationen pro Kunde
+
+### Bekannte Kunden (Phase 1)
+
+| Kunde | Fallback-Verhalten | Erwartung bei reconstruct_ax_master() | Rollout-Hinweis |
+|-------|-------------------|--------------------------------------|-----------------|
+| **GEZE** | Nie (100 % Master führt) | Tonnage immer von Master; Erlöse immer von Subs | Kein Fallback-Risiko; Validierung einfach |
+| **HERMA** | Fast nie (0,5 % Ausnahmen) | Wie GEZE; 2 Subs mit Tonnage>0 sind FP-Zeilen, werden gefiltert | Analog GEZE |
+| **Fischerwerke** | Lademeter: ~29 % Fälle | Fallback für LDM relevant; Stellplätze immer auf Master | Lademeter-Ergebnisse nach Rollout prüfen |
+| **EBM-Papst** | Noch nicht analysiert | Erwarte GEZE-ähnliches Muster (Tonnage-Abrechnung) | Vor Rollout empirisch prüfen |
+| **CHT** | n/a (kein Master-Sub-Pattern in BI) | reconstruct_ax_master() nicht anwendbar | Separate AX-Struktur |
+
+### Neue Kunden Welle 1 (noch nicht analysiert)
+
+| Kunde | Billing-Basis | Erwartete Fallback-Relevanz | Zu prüfen vor Rollout |
+|-------|--------------|---------------------------|----------------------|
+| Bitzer | Weight (kg) | Vermutlich GEZE-ähnlich (Tonnage auf Master) | Empirisch bestätigen |
+| Groz-Beckert | Weight (kg) | Vermutlich GEZE-ähnlich | Empirisch bestätigen |
+| HELU | Weight (kg) | Vermutlich GEZE-ähnlich | Multi-Country: je Land prüfen |
+| Hornschuch | Weight (kg) | Vermutlich GEZE-ähnlich | Empirisch bestätigen |
+
+**Vorgehen für neue Kunden:** Vor Integration die Felder aus §3–§5 analog
+prüfen (5–10 Master-Sub-Gruppen, Verteilung nonzero Master vs. Subs). Diese
+Matrix dann ergänzen.
+
+### Implikationen für Rollout-Erwartungen
+
+1. **GEZE/HERMA-Muster (Master führt immer):** `reconstruct_ax_master()` verhält
+   sich deterministisch — kein Überraschungs-Potenzial durch Fallback-Trigger.
+   Regression-Tests zeigen stabile Ergebnisse.
+
+2. **Fischerwerke-Muster (Lademeter Fallback):** Fallback für Lademeter ist
+   legitim und korrekt. Die 43 Sub-Zeilen mit LDM>0 decken die Fälle ab, wo
+   der Master LDM leer lässt. Erwarte geringe Abweichung zu altem Proxy.
+
+3. **CHT (kein Master-Sub):** `filter_comparison_set()` reicht; kein
+   `reconstruct_ax_master()` nötig. Tonnage>0-Proxy war für CHT korrekt
+   (alle 38 CHT-Subs haben Tonnage=0, laut Regression-Analyse).
+
+4. **Fallback für Stellplätze (Fischerwerke):** 87/109 Master haben
+   Stellplätze-Wert; für restliche 22 greift der Fallback. Bei Fischerwerke
+   ist Stellplatz das Abrechnungs-Merkmal — Validierung der Stellplatz-Summen
+   nach Rollout priorisieren.
+
+---
+
+*Erstellt: 2026-04-24 | Aktualisiert: 2026-04-24 (§8 Rollout-Implikationen)*
+*Grundlage: bi_top20_data.pkl | Kunden: GEZE, Fischer, HERMA, CHT*
 *Keine Code-Änderungen.*
