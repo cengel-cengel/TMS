@@ -147,5 +147,51 @@ Diese Kette ist für Kunden relevant, die weder `enrich_master_sub()` noch
 
 ---
 
+## §7 Resilienz-Analyse
+
+### Befund
+
+Die Formulierung "Kein aktiver Pass-Rate-Impact" ist technisch korrekt, verdeckt
+aber eine strukturell wichtige Beobachtung:
+
+**Die Tonnage>0-Proxy-Logik war bei drei Kunden strukturell fehlerhaft:**
+
+| Kunde | Falsch klassifizierte Zeilen | EUR-Volumen | Schutz-Mechanismus |
+|-------|------------------------------|-------------|-------------------|
+| GEZE (406035) | 153 FP + 37 FN = 190 gesamt | 20.383 EUR | Kein aktiver BI-Vergleich |
+| Fischerwerke (409480) | 63 FP | 19.717 EUR | `enrich_master_sub()` |
+| HERMA (423650) | 2 FP + 30 FN = 32 gesamt | 7.149 EUR | `enrich_master_sub()` |
+
+**Total: ≥ 285 falsch klassifizierte Zeilen, ≈ 47.249 EUR.**
+
+Ohne `enrich_master_sub()` oder einen expliziten Schutz-Mechanismus wären bei
+Fischerwerke und HERMA signifikante Pass-Rate-Verschiebungen aufgetreten:
+- Fischerwerke: 63 Sub-Rows mit Tonnage>0 in der Vergleichsmenge → fehlerhafte
+  fp-Werte (Sub-Erlöse sind anteilige Master-Beträge, keine selbständig
+  bereinigte Fracht) → unkontrollierter §8-Kandidaten-Strom
+- HERMA: 30 `unbeurteilbar`-Zeilen im Calculator → Calculator-Fehler oder
+  Null-Outputs → Pass-Rate-Einbruch
+
+### Schlussfolgerung
+
+Die historisch korrekten Pass-Raten bei Fischerwerke und HERMA sind **nicht**
+auf die Korrektheit des Tonnage-Proxys zurückzuführen, sondern auf die Redundanz
+durch `enrich_master_sub()`. Der Proxy war ein latenter Fehler, der durch eine
+nachgelagerte Funktion kompensiert wurde — ohne diese Kompensation hätte er
+sichtbare Auswirkungen gehabt.
+
+Dies unterstreicht die Notwendigkeit der v1.9-Zweistufigkeit (§2e Rule D):
+
+> `filter_comparison_set()` (Stufe 1) + `~unbeurteilbar` (Stufe 2) ersetzen
+> gemeinsam `enrich_master_sub()` als explizite, dokumentierte Schutzlogik
+> statt impliziter, versteckter Kompensation.
+
+Bei GEZE — dem einzigen Kunden ohne aktive Schutzlogik — wurde der Fehler
+nur dadurch unsichtbar, dass kein aktiver BI-Pass-Rate-Vergleich implementiert
+ist. Etappe 9b.2 muss zwingend die v1.9-Vollkette verwenden.
+
+---
+
+*Aktualisiert: 2026-04-24 (§7 Resilienz-Analyse ergänzt)*
 *Erstellt: 2026-04-24 | Grundlage: bi_top20_data.pkl POST-Daten*
 *Keine Code-Änderungen an bestehenden Report-Scripts.*

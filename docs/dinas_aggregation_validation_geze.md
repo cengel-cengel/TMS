@@ -59,36 +59,72 @@ Sammelrechnung mit mehreren Positionen pro Zielland-Routing-Key.
 > der Rechnungen betreffen: §8-Relevanz der Aggregation klarer."
 
 **Ergebnis: 11,6 % der Rechnungen haben mindestens eine Mehrfach-Gruppe —
-STOP-Kriterium überschritten.**
+STOP-Kriterium formal ausgelöst.**
 
-Allerdings betreffen die Mehrfach-Gruppen nur **3,0 % aller Routing-Keys**
-und **4,2 % aller Positionen** (33 von 792). Der EUR-Impact ist begrenzt:
-Die größte Gruppe (RN 57019719, CY) hat 763,02 EUR Fracht — plausibel für
-einen Zypern-Inbound mit mehreren Teillieferungen in einer Rechnung.
+### EUR-Impact-Quantifizierung (Schritt 1 Nachklärung)
+
+| Metrik | Wert | Anteil |
+|--------|------|--------|
+| Dinas Gesamt-Fracht (792 Positionen) | 49.665 EUR | — |
+| Fracht in Mehrfach-Gruppen (56 Positionen) | 4.242 EUR | **8,54 %** |
+| Geschätzte EUR der 33 „eingesparten" Positionen | 2.500 EUR | **5,03 %** |
+| Davon im Vergleichs-Sheet `geze_dinas_vergleich.xlsx` | 2.897 EUR | **18,9 % des Sheets** |
+
+Der Anteil von 8,54 % am Dinas-Gesamtvolumen ist **nicht vernachlässigbar**
+(Grenzwert war implizit ~5 %). Das Sheet `geze_dinas_vergleich.xlsx` enthält
+78 von 149 Zeilen aus Multi-Group-RNs (52 % der Zeilen, 18,9 % des Volumens).
+
+### Spot-Check: Überschneidung mit bestehenden GEZE-Findings
+
+**Ergebnis: Keine Überschneidung mit aktiven Findings.**
+
+Die bestehenden GEZE-Findings stammen ausschließlich aus:
+- `build_9b1_geze_calculator_test.py` — Unit-Tests gegen DLV (keine Dinas-
+  Daten beteiligt)
+- `build_9b3_geze_phase_rollout.py` — Cluster-Phase-Statistik (keine
+  Einzel-Sendungs-§8-Funde)
+- Gate-6 retroaktiv: kein `rn_level_adjustment` bei GEZE (§7 AUDIT_METHODOLOGY)
+
+Das Explorer-Sheet `geze_dinas_vergleich.xlsx` ist kein offizielles Findings-
+Dokument — es existiert als Vorarbeit ohne aktiven Pass-Rate-Nachweis.
+
+**Die 15 Multi-Group-RNs berühren keine bestehenden §8-Einträge oder
+reportierten Findings.** Der 8,54 %-Anteil ist latent und wird erst aktiv,
+wenn Etappe 9b.2 (GEZE BI-Vergleich) gestartet wird.
+
+### Entscheidung: GEZE-Zwischenstand-Eintrag anpassen?
+
+**Nein — kein Revisionsbedarf für bestehende GEZE-Dokumente.**
+
+Begründung:
+1. Keine aktiven Pass-Rate-Berechnungen auf Dinas-Basis für GEZE
+2. Keine reportierten §8-Findings, die Dinas-Einzelsendungs-Vergleich voraussetzen
+3. Der 8,54 %-Anteil wird als latentes Risiko in §5 dokumentiert
+
+Revisionsbedarf entsteht erst, wenn Etappe 9b.2 gestartet wird.
 
 ### Methodische Einordnung
 
 Die Mehrfach-Gruppen entstehen aus Sammelrechnungen (mehrere Abholtermine
 gleicher Empfänger-PLZ auf einer Rechnung). Unter der aktuellen Dinas-Aggregation
-pro `rechnung_nr` (wie in `dinas_cluster.py`) werden diese korrekt in einer
-Cluster-Einheit erfasst. Die v1.9-Aggregation nach `(rechnung_nr, empf_plz,
-leistungsdatum)` ist feingranularer — sie unterscheidet innerhalb einer
-Rechnung zwischen unterschiedlichen Leistungsdaten.
-
-Für GEZE ist **kein aktiver BI-Pass-Rate-Vergleich** implementiert — der
-Aggregationsfehler ist latent (vgl. `aggregation_codebase_audit.md`).
-Die Mehrfach-Gruppen erhalten §8-Kandidaten-Status für Etappe 9b.2 (GEZE
-BI-Vergleich), sobald dieser gestartet wird.
+pro `rechnung_nr` (wie in `dinas_cluster.py`) werden diese in einer Cluster-Einheit
+erfasst. Die v1.9-Aggregation nach `(rechnung_nr, empf_plz, leistungsdatum)` ist
+feingranularer — sie unterscheidet innerhalb einer Rechnung zwischen
+unterschiedlichen Leistungsdaten.
 
 ### Empfehlung
 
 > **Wenn Etappe 9b.2 (GEZE BI-Vergleich) gestartet wird:**
-> 1. `filter_comparison_set()` für AX-Seite verwenden (is_sub via Mastersendung)
+> 1. `filter_comparison_set()` für AX-Seite (is_sub via Mastersendung)
 > 2. `dinas_rk_agg` aus `aggregate_dinas_per_invoice()` als Dinas-Vergleichsbasis
-> 3. Die 15 Rechnungen mit Mehrfach-Gruppen gesondert prüfen (manuell oder
->    automatisch mit n_positionen > 1 Flag)
+> 3. Die 15 Multi-Group-RNs gesondert markieren (`n_positionen > 1`)
+> 4. Die 78 Vergleichszeilen im Explorer-Sheet neu aggregieren bevor Pass-Rate
+>    berechnet wird (18,9 % des Volumens betroffen)
+> 5. §8-Dokumentation der Mehrfach-Gruppen: "Dinas-Rechnung enthält ≥2 Positionen
+>    mit gleichem Routing-Key — AX-Master-Matchingpflicht gemäß v1.9 §2e"
 
 ---
 
+*Aktualisiert: 2026-04-24 (EUR-Impact-Quantifizierung und Spot-Check ergänzt)*
 *Erstellt: 2026-04-24 | Kein Code-Eingriff in bestehende GEZE-Scripts.*
 *Datenbasis: dinas_cache_406035.pkl (792 Positionen, 129 Rechnungen)*
