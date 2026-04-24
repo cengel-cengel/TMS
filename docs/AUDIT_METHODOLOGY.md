@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-24 | **Version:** v1.9
+**Stand:** 2026-04-24 | **Version:** v1.9.1
 
 ---
 
@@ -480,6 +480,43 @@ Matching über `Sender_PLZ + Empfänger_PLZ + Ladedatum`.
 
 Einzelsendungen (Dinas ohne gleich-geschlüsselte Partner in derselben Rechnung,
 AX ohne Sub-Struktur) werden als Einzelvergleich gegen AX-Einzelzeilen geführt.
+
+### D — Zweistufigkeit der AX-Filterung (ab v1.9.1)
+
+`filter_comparison_set()` (Rule A) ist die **erste notwendige Stufe** — sie entfernt
+Sub-Zeilen. Sie entfernt aber **nicht** unbeurteilbare Standalone-Zeilen
+(Tonnage = 0 UND Lademeter = 0, §5.0).
+
+Für jeden neuen Kunden-Rollout ist eine **zweite Stufe** obligatorisch:
+
+```python
+# Stufe 1: Sub-Rows entfernen (v1.9 §2e Rule A)
+df = filter_comparison_set(df)
+
+# Stufe 2: Unbeurteilbare entfernen (§5.0)
+is_unbeurteilbar = (
+    (pd.to_numeric(df['Tonnage (eff.)'], errors='coerce').fillna(0) <= 0) &
+    (pd.to_numeric(df['Lademeter'],      errors='coerce').fillna(0) <= 0)
+)
+df_vergleich = df[~is_unbeurteilbar]
+```
+
+Die zweite Stufe wird bei bestehenden Kunden durch `enrich_master_sub()` oder
+äquivalente Schutzlogik abgedeckt. Fehlt sie in neuen Scripts, landen
+Standalone-Zeilen mit Tonnage = 0 im Calculator-Vergleich und produzieren
+falsche Pass-Raten.
+
+**Obligatorische Prüfpunkte bei jedem neuen Kunden-Rollout:**
+
+| Prüfpunkt | Methode | Fehlermodus bei Fehlen |
+|-----------|---------|------------------------|
+| Stufe 1: `filter_comparison_set()` aktiv? | `is_sub` via Mastersendung | Sub-Erlöse fälschlich in Pass-Rate |
+| Stufe 2: `~unbeurteilbar`-Filter aktiv? | Tonnage ≤ 0 AND LDM ≤ 0 | Tonnage=0-Zeilen scheitern im Calculator |
+
+**Empirischer Befund (v1.9 Regression-Analyse):** Bei GEZE (153 FP), Fischerwerke
+(63 FP) und HERMA (30 FN) wurden Proxy-Fehler durch `enrich_master_sub()` ohne
+sichtbaren Pass-Rate-Effekt kompensiert. Ohne diese Schutzlogik wären signifikante
+Pass-Rate-Verschiebungen aufgetreten (→ `docs/is_sub_regression_analysis.md`).
 
 ---
 
@@ -1111,3 +1148,4 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.8.1 | 2026-04-21 | 9c.2d | §2c neu: kg_rounding_rule Parameter ("ceil_to_100"\|"actual_kg"\|"actual_kg_fracht_only"); Strukturbefund CHT/AT: "Gewichtsrundung 100:100" gilt nur für DE-Maut, Fracht nutzt actual_kg direkt gegen Schwellen; AT-Fracht ist FLAT pro Sendung (nicht per-100-kg); Pflicht-Prüftabelle (kg_rounding_rule + Fracht-Einheit + Split-Logik); Known-Befunde-Tabelle CHT/AT=actual_kg_fracht_only (9c.2d); §2b billing_scope-Tabelle: CHT/AT=position (9c.2d, empirisch \|Σ_Δ\|<0,002 EUR, 4 RNs); §6c Known-Befunde: CHT/AT=2dp (9c.2d, \|Δ_pos\|<0,004 EUR) |
 | 1.8.2 | 2026-04-21 | QA | §9a neu: Multi-Agent-Workflow-Regeln; Halluzinierungsincident dokumentiert (Explore-Agent produzierte falsche Build-Script-Zahlen: GR n_total 1074→102, ES Match 100%→93.3%, BE rn_adj 18→111); Ground-Truth-Regel: numerische Werte ausschließlich aus direkten python-Ausgaben; Keine Delegation numerischer Extraktion an Read-only-Agenten |
 | 1.9 | 2026-04-24 | v1.9 | §2e neu: Aggregations-Regel für Dinas-AX-Vergleich — A) AX-Sub-Filter via Mastersendung-Feld (is_sub = has_ms & ~has_ua), kein Tonnage-Proxy; B) Dinas-Aggregation pro Rechnung: innerhalb jeder Rechnung nach (Sender_PLZ, Empf_PLZ, Ladedatum) gruppieren, nie rechnungsübergreifend; C) Vergleich Dinas-Aggregat ↔ AX-Master über Sender+Empfänger+Ladedatum |
+| 1.9.1 | 2026-04-24 | v1.9 | §2e Rule D neu: Zweistufigkeit der AX-Filterung — filter_comparison_set() (Stufe 1, Sub-Rows) ist nicht ausreichend ohne nachgelagerte Unbeurteilbar-Filterung (Stufe 2, Tonnage=0 UND LDM=0); obligatorische Prüftabelle für neue Kunden-Rollouts; empirischer Befund aus Regression-Analyse dokumentiert |
