@@ -664,15 +664,35 @@ ist fehlerhaft.
    [Tabelle mit 13 Spalten]
 ```
 
-#### Root-Cause-Klassifikation
+#### Periodenversatz PRE-Dinas / POST-AX (strukturell)
 
-| AX-Δ | Dinas-Δ | Diagnose |
-|------|---------|---------|
-| ≈ 0 | ≈ 0 | Korrekt — beide tariftreu |
-| < 0 | ≈ 0 | **AX-Unterfakturierung** — Dinas hat korrekt abgerechnet, AX-Buchung fehlt/falsch |
-| < 0 | < 0 | Tarifabweichung auf beiden Seiten — möglicher DLV-Referenz-Fehler |
-| > 0 | ≈ 0 | AX-Überfakturierung — Dinas korrekt, AX überhöht |
-| > 0 | > 0 | Systemisches Pricing-Muster — möglicher Aufschlag (Muster-A/Sonder-PLZ) |
+Der Cluster-Vergleich ist als **Migrations-Audit** konzipiert: Dinas-Einheiten
+stammen aus der PRE-Phase (Dinas-System), AX-Einheiten aus der POST-Phase
+(AX-System). Dies ist kein methodisches Problem, sondern die Kernanforderung
+des Audits.
+
+> *"Die Dinas-Einheiten stammen aus der PRE-Migrations-Phase, die AX-Einheiten
+> aus der POST-Migrations-Phase. Für jede Einheit wird das DLV-Soll anhand
+> des zur jeweiligen Leistungsperiode gültigen Tarifs berechnet. Beide Δ-Werte
+> sind damit innerhalb ihres Zeitraums tariftreu bewertet.*
+>
+> *Abweichungen zwischen Dinas-Erlös und AX-Erlös bei gleichen Cluster-Parametern
+> sind nur dann durch Tarif-Änderung erklärbar, wenn eine solche Änderung zwischen
+> dem gültigen PRE-DLV und dem gültigen POST-DLV dokumentiert ist. Ansonsten
+> deuten sie auf AX-Konfigurations-Fehler hin."*
+
+Periodenversatz-Hinweis ist im Cluster-Header explizit auszuweisen.
+
+#### Root-Cause-Klassifikation (vier Muster)
+
+| Muster | Dinas-Δ | AX-Δ | Diagnose |
+|--------|---------|------|---------|
+| 1 | ≈ 0 | ≈ 0 | Korrekt — Cluster nicht im Report (Ausschluss-Kriterium) |
+| 2 | ≈ 0 | < 0 | **AX-Konfigurations-Fehler** — Dinas war korrekt, AX rechnet falsch |
+| 3 | < 0 | < 0 | Tarif-Problem oder systematische Abweichung auf beiden Seiten |
+| 4 | < 0 | ≈ 0 | Migration hat Unterfakturierung behoben (Dinas war bereits unter DLV) |
+
+Pro Cluster ist das zutreffende Muster auszuweisen.
 
 ---
 
@@ -1307,4 +1327,4 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.9.1 | 2026-04-24 | v1.9 | §2e Rule D neu: Zweistufigkeit der AX-Filterung — filter_comparison_set() (Stufe 1, Sub-Rows) ist nicht ausreichend ohne nachgelagerte Unbeurteilbar-Filterung (Stufe 2, Tonnage=0 UND LDM=0); obligatorische Prüftabelle für neue Kunden-Rollouts; empirischer Befund aus Regression-Analyse dokumentiert |
 | 1.9.3 | 2026-04-24 | v1.9 | §2e Rule A Implementations-Detail: Unterauftrag ist komma-separierter String, kein numerischer Wert; _nonempty() (string-check) korrekt, _nonempty_numeric() (float-check) würde Master fälschlich als Sub klassifizieren; empirisch bestätigt an 586 GEZE-Master-Zeilen |
 | 1.9.2 | 2026-04-24 | v1.9 | §2e Rule E neu: Master-Rekonstruktion — Master führt bei physischen Parametern (Tonnage, LDM, Stellplätze, Volumen, Colli); Sub-Summe als Fallback nur bei NaN/None-Master-Feld; 0 ist gültiger Master-Wert (kein Fallback-Trigger); Erlöse immer aus Sub-Summe; Rechnungsnummern aus Sub-Liste; Master-vs-Sub-Inkonsistenz = Datenredundanz, kein Finding; Implementierung: reconstruct_ax_master() in src/tms/billing/aggregation.py; Validierung: GEZE Auftrag 7092010001835006 (Tonnage=361,9 Master, Erlöse=97,28 Sub-Summe) |
-| 1.9.4 | 2026-04-24 | v1.9 | §2e Rule F neu: Vergleichs-Cluster-Format — Vergleichseinheiten AX-Master-Sendung vs. Dinas-Rechnungs-Aggregat; Cluster-Key (Sender-PLZ, Empf-PLZ, Tarifgruppe, Gewichtsklasse); Stichproben-Regel Top-5 × Top-5 (AX nach Δ, Dinas nach billing_axis-Nähe); Ähnlichkeits-Score kundenseitig (Tonnage/LDM/Stellplätze je Billing-Basis); identische 13-Spalten-Tabellen für AX und Dinas; DLV-Soll + Δ auch für Dinas berechnet (ermöglicht Root-Cause-Klassifikation: Dinas-Δ ≈ 0 / AX-Δ < 0 = AX-Buchungsfehler isoliert); NK_Total in Haupt-Tabelle mit Detailaufschlüsselung im Anhang; Cluster-Ausschluss-Kriterium: ohne AX-Unterfakturierung nicht dargestellt |
+| 1.9.4 | 2026-04-24 | v1.9 | §2e Rule F neu: Vergleichs-Cluster-Format — Vergleichseinheiten AX-Master-Sendung vs. Dinas-Rechnungs-Aggregat; Cluster-Key (Sender-PLZ, Empf-PLZ, Tarifgruppe, Gewichtsklasse); Stichproben-Regel Top-5 × Top-5 (AX nach Δ, Dinas nach billing_axis-Nähe); Ähnlichkeits-Score kundenseitig (Tonnage/LDM/Stellplätze je Billing-Basis); identische 13-Spalten-Tabellen für AX und Dinas; DLV-Soll + Δ auch für Dinas berechnet (ermöglicht Root-Cause-Klassifikation: Dinas-Δ ≈ 0 / AX-Δ < 0 = AX-Buchungsfehler isoliert); NK_Total in Haupt-Tabelle mit Detailaufschlüsselung im Anhang; Cluster-Ausschluss-Kriterium: ohne AX-Unterfakturierung nicht dargestellt; Periodenversatz PRE-Dinas/POST-AX ist strukturelle Kerncharakteristik des Migrations-Audits — vier Root-Cause-Muster formalisiert (1=korrekt, 2=AX-Konfig-Fehler, 3=Tarif-Problem, 4=Migration hat Fehler behoben) |
