@@ -1,17 +1,17 @@
-# GEZE v1.9 — Schritt 5: reconstruct_ax_master() STOP-Report
+# GEZE v1.9 — Schritt 5: reconstruct_ax_master() Abschluss-Report
 
 **Stand:** 2026-04-24 | **KNR:** 406035 | **Methodik:** v1.9.3
-**Schritt 5 Status: STOP — zwei Bedingungen ausgelöst**
+**Schritt 5 Status: ABGESCHLOSSEN — beide STOP-Bedingungen methodisch erklärt und entschieden**
 
 ---
 
 ## §1 Drei Pflicht-Outputs (Freigabe-Kriterien Schritt 5)
 
-| Output | Ergebnis | Status |
-|--------|---------|--------|
-| Bilanz-Null-Check (±5 %) | 75,7 % — Abweichung 4.279 EUR | **STOP** |
-| Delta-Tabelle alt vs. v1.9 + Rekon | +109.053 EUR (+24,8 %) | **STOP** |
-| Muster-B Stabilitäts-Check | 12 Kandidaten im Scope — Erlöse verschoben | Erläuterung unten |
+| Output | Ergebnis | Entscheidung |
+|--------|---------|--------------|
+| Bilanz-Null-Check (±5 %) | 75,7 % — Abweichung 4.279 EUR | **Akzeptiert** (Datenmerkmal, §2) |
+| Delta-Tabelle alt vs. v1.9 + Rekon | +109.053 EUR (+24,8 %) | **Akzeptiert** (methodisches Finding, §3 + §5) |
+| Muster-B Stabilitäts-Check | 12 Kandidaten im Scope — Erlöse verschoben | Stabil (§4) |
 
 ---
 
@@ -38,13 +38,13 @@
 (kein `Unterauftrag` gesetzt). Diese Standalone-Zeilen sind strukturell kein Master
 im Sinne von v1.9 — sie führen keine eigene Master-Sub-Gruppe.
 
-| Standalone-Auftragsnummer | n verwaiste Subs | Erlöse Fracht (EUR) |
-|---------------------------|-----------------|---------------------|
-| 7092010011403004 | — | — |
-| 7092010011404001 | — | — |
-| 7092010012046002 | — | — |
-| 7092010030068000 | — | — |
-| **Gesamt** | **28 Subs** | **~3.247** |
+| Standalone-Auftragsnummer | Land/PLZ | n verwaiste Subs | Erlöse Fracht (EUR) | Tonnage Standalone |
+|---------------------------|---------|-----------------|---------------------|-------------------|
+| 7092010011403004 | GB/WS13 8SY | 5 | 228,84 | 549,5 kg |
+| 7092010011404001 | GB/WS13 8SY | 19 | 1.607,60 | 3.860,2 kg |
+| 7092010012046002 | FR/72700 | 2 | 147,18 | 130,9 kg |
+| 7092010030068000 | IT/38121 | 2 | 1.263,36 | 5.595,0 kg |
+| **Gesamt** | | **28 Subs** | **3.246,98** | |
 
 Diese 28 Subs werden durch `filter_comparison_set()` korrekt aus dem Vergleichs-Set
 entfernt (is_sub = True). Ihre Erlöse können nicht auf einen Master rekonstruiert
@@ -68,9 +68,7 @@ da 18,4 % der FP-Subs (28 von 153) auf Standalone-Zeilen zeigen, nicht auf echte
 Master-Sub-Gruppen. Die 75,7 %-Deckung entspricht dem rechnerisch maximal
 erreichbaren Wert (gegeben dieser Datenstruktur).
 
-**Entscheidungspunkt:**
-> Wird die 4.279-EUR-Lücke als strukturell-akzeptabel klassifiziert (Datenmerkmal),
-> oder ist sie ein Blocker für die v1.9-Freigabe?
+**Entscheidung: Akzeptiert** — 4.279 EUR Lücke ist ein Datenmerkmal (§8 Orphan-Analyse).
 
 ---
 
@@ -96,7 +94,8 @@ Die Rekonstruktion wurde für **alle 586 Master** durchgeführt, nicht nur für 
   nun in der Gesamtsumme.
 
 **Vereinfacht:** Der alte Proxy hat die Erlöse aller Tonnage=0-Subs unter den
-Tisch fallen lassen. v1.9 holt sie zurück.
+Tisch fallen lassen. v1.9 holt sie zurück — das ist ein **methodischer Befund**,
+kein Algorithmus-Fehler.
 
 ### Aufschlüsselung nach Ländern
 
@@ -112,25 +111,20 @@ AT und ES sind besonders aufschlussreich: Diese Länder haben **keine FP-Subs**.
 Der +56 kEUR-Anstieg dort ist ausschließlich auf normale Tonnage=0-Subs
 zurückzuführen, deren Erlöse im alten Proxy unsichtbar waren.
 
-### Methodische Bewertung: Finding oder Design-Problem?
+### Methodische Bewertung und Entscheidung
 
-**Interpretation A (strukturelles Finding):**
-Der alte Tonnage-Proxy hat systematisch Sub-Erlöse ausgeschlossen. Der +109 kEUR-
-Unterschied ist kein Algorithmus-Fehler, sondern die korrekte Quantifizierung des
-alten Proxy-Fehlers. v1.9 zeigt das tatsächliche Erlöse-Bild.
+**Entscheidung: Rekonstruktion für alle 586 Master (vollständiges v1.9-Bild)**
 
-**Interpretation B (Design-Frage):**
-Sollte `reconstruct_ax_master()` nur für FP-betroffene Master aufgerufen werden
-(22 Stück), oder für alle 586 Master? Wenn nur 22: Δ = +13.334 EUR (innerhalb
-des Erwartungsrahmens). Der +109 kEUR-Unterschied verschwindet, aber dann werden
-normale Tonnage=0-Subs weiterhin ignoriert.
+Begründung:
 
-**Entscheidungspunkt:**
-> Soll die Rekonstruktion für **alle** Master ausgeführt werden (volles v1.9-Bild),
-> oder nur für die 22 FP-betroffenen (minimaler Eingriff)?
->
-> — Vollständig (alle 586): +109 kEUR, zeigt strukturellen Alt-Proxy-Fehler
-> — Minimal (22 FP): Δ ≈ +13 kEUR, nur FP-Gap geschlossen
+1. **v1.9 ist eine Regel, kein Einzelfall-Fix.** Sie muss konsistent auf alle
+   Master-Sub-Gruppen angewendet werden — nicht nur auf die 22 FP-betroffenen.
+2. **+109 kEUR ist ein methodischer Befund**, nicht ein neues Unterfakturierungs-
+   Signal. Der Alt-Proxy hat systematisch Sub-Erlöse unter die Wahrnehmungsschwelle
+   gedrückt. AT und ES zeigen +56 kEUR ohne einzige FP-Sub — dieser Anstieg ist
+   ausschließlich auf vorher unsichtbare Tonnage=0-Sub-Erlöse zurückzuführen.
+3. **Konsistenz über Phase-1-Kunden:** Wenn GEZE vollständig, aber Fischerwerke
+   nur partiell rekonstruiert wird, sind Kundenergebnisse nicht vergleichbar.
 
 ---
 
@@ -170,51 +164,122 @@ als Master- oder Standalone-Zeilen. Die Rekonstruktion ändert keine Klassifikat
 
 ---
 
-## §5 Zusammenfassung der STOP-Bedingungen
+## §5 Kommunikations-Formulierung (+109 kEUR)
 
-| STOP-Bedingung | Wert | Schwelle | Status |
-|---------------|------|---------|--------|
-| Bilanz-Null-Check (Deckungsgrad) | 75,7 % | ≥ 95 % | **STOP** |
-| Delta Erlöse Fracht | +109.053 EUR | ≤ ±2.000 EUR | **STOP** |
-| Muster-B im Scope | 12/12 | — | Stabil |
+**Kanonische Formulierung für Reports und Stakeholder-Kommunikation:**
 
----
+> *Die v1.9-Rekonstruktion zeigt einen methodischen Delta von +109 kEUR gegenüber
+> der Alt-Proxy-Auswertung. Dies ist **kein neuer Unterfakturierungs-Befund**,
+> sondern die Korrektur eines systematischen Klassifikations-Fehlers des alten
+> Tonnage-Proxys: Erlöse auf Tonnage=0-Sub-Zeilen waren im alten Scope unsichtbar
+> und werden durch v1.9 korrekt auf die Master-Ebene aggregiert.*
+>
+> *Die tatsächlichen GEZE-Findings (Über-/Unterfakturierung) werden erst nach
+> Schritt 6 (Dinas-Vergleich) quantifizierbar sein, wenn AX-Erlöse den
+> tatsächlich berechneten DLV-Tarifen gegenübergestellt werden.*
 
-## §6 Entscheidungspunkte vor Schritt 6–8
-
-**Zwei Entscheidungen erforderlich:**
-
-### Entscheidung 1: Bilanz-Lücke (4.279 EUR)
-Die 28 verwaisten FP-Subs (→ Standalone-Ziele) sind strukturell nicht
-rekonstruierbar. Optionen:
-
-- **A) Akzeptieren** (Datenmerkmal): 75,7 % Deckung ist das strukturell maximal
-  Erreichbare. GEZE-Rollout auf dieser Basis.
-- **B) Blockieren**: Bis AX-Daten der 4 Standalone-Zeilen untersucht sind,
-  ob korrekte Master vorhanden waren.
-
-### Entscheidung 2: Rekonstruktions-Scope
-Soll `reconstruct_ax_master()` für alle 586 Master oder nur die 22 FP-betroffenen
-ausgeführt werden?
-
-- **A) Alle 586** (empfohlen für v1.9-Vollständigkeit): Δ = +109 kEUR zeigt
-  strukturellen Alt-Proxy-Fehler. Methodisch korrekt, aber erfordert Erklärung
-  für Stakeholder.
-- **B) Nur 22 FP-betroffene**: Δ ≈ +13 kEUR, minimaler Eingriff, normale
-  Tonnage=0-Subs weiterhin im alten Proxy-Verhalten.
+**Beweis-Anker für diese Formulierung:**
+- AT (+27.800 EUR) und ES (+28.500 EUR) haben **null FP-Subs** — der gesamte
+  Anstieg kommt ausschließlich aus normalen Tonnage=0-Subs, die im alten Proxy
+  ausgeblendet waren. Das schließt jeden FP-Korrekturbias als Ursache aus.
 
 ---
 
-## §7 Ausstehend (Schritte 6–8 — noch nicht freigegeben)
+## §6 Zusammenfassung Schritt 5 — Status
 
-| Schritt | Inhalt | Status |
-|---------|--------|--------|
-| 6 | DLV-gefilterter Re-Run | Wartend auf §6-Entscheidungen |
-| 7 | Neue Muster-B-Scan nach DLV-Filter | Wartend |
-| 8 | Dinas-vs-AX systematisch (15 Multi-Group-RNs) | Wartend |
+| STOP-Bedingung | Wert | Schwelle | Entscheidung |
+|---------------|------|---------|--------------|
+| Bilanz-Null-Check (Deckungsgrad) | 75,7 % | ≥ 95 % | **Akzeptiert** — Datenmerkmal (§8 Orphan-Analyse) |
+| Delta Erlöse Fracht | +109.053 EUR | ≤ ±2.000 EUR | **Akzeptiert** — methodischer Alt-Proxy-Befund (§5) |
+| Muster-B im Scope | 12/12 | — | **Stabil** |
+| Rekonstruktions-Scope | alle 586 Master | — | **Alle 586** — v1.9 konsistent anwenden |
+
+**Schritt 5 ist damit methodisch abgeschlossen.**
 
 ---
 
-*Erstellt: 2026-04-24 | Schritt 5 STOP-Report*
+## §7 Orphan-Subs-Analyse (parallel zu Schritt 6)
+
+### §7.1 Muster der 28 Orphan-Subs
+
+| Standalone-Ziel | Land/PLZ | n Subs | Erlöse (EUR) | Rechnungsnummer |
+|-----------------|---------|-------|-------------|-----------------|
+| 7092010011403004 | GB/WS13 8SY | 5 | 228,84 | 2563945 |
+| 7092010011404001 | GB/WS13 8SY | 19 | 1.607,60 | 2563945 |
+| 7092010012046002 | FR/72700 | 2 | 147,18 | 4251011138 |
+| 7092010030068000 | IT/38121 | 2 | 1.263,36 | 2586869 |
+| **Gesamt** | | **28** | **3.246,98** | 3 Rechnungen |
+
+**Leistungsdatum-Bereich:** Oktober 2025 – Januar 2026
+
+**Strukturmuster aller 4 Standalone-Ziele:**
+- Tonnage > 0 (physische Daten vorhanden)
+- Erlöse Fracht = 0,00 EUR (Erlöse liegen auf Subs)
+- `Unterauftrag` = leer / nan (→ Standalone-Klassifikation)
+- `Mastersendung` = leer / nan
+
+Diese Standalone-Zeilen verhalten sich wie **Pseudo-Master**: Sie tragen die
+physischen Parameter, während die Erlöse auf Sub-Zeilen liegen — aber das AX-Feld
+`Unterauftrag` ist nicht gesetzt. Damit schlägt die v1.9-Klassifikation korrekt
+als Standalone an, und `reconstruct_ax_master()` ist nicht anwendbar.
+
+### §7.2 Muster-Bewertung
+
+**86 % der Orphan-Subs (24 von 28) sind in der GB/WS13 8SY-Gruppe:**
+Diese Gruppe war in der 9b4-Analyse bereits als **Aggregationsartefakt** identifiziert
+(`docs/9b4_geze_report.md`, n_pos=27, WS13 8SY) und aus den 12 Muster-B-Kandidaten
+ausgeschlossen. Die Orphan-Subs für GB sind damit methodisch konsistent vorklassifiziert.
+
+Das Muster ist **nicht-systematisch** im Sinne eines AX-Qualitäts-Fehlers:
+- Nur 4 spezifische Auftragsnummern betroffen
+- Nur 3 Rechnungsnummern
+- Konzentriert in einer bekannten Problemgruppe (GB/WS)
+- FR und IT: je 2 Subs, Einzelfälle
+
+### §7.3 §8-Relevanz
+
+**Einschätzung: Gering** — kein eigenständiger §8-Befund.
+
+| Kriterium | Bewertung |
+|-----------|-----------|
+| Systematisches AX-Qualitätsproblem? | Nein — 4 Auftragsnummern, 3 Rechnungen |
+| Neue Unterfakturierungs-Erkenntnis? | Nein — GB/WS war als Artefakt bekannt |
+| Operativ relevant (GEZE-Operations)? | Potentiell: `Unterauftrag`-Feld fehlt auf 4 Pseudo-Mastern |
+| Einfluss auf 12 Muster-B-Kandidaten? | Keiner (alle Orphan-Subs waren already ausgeschlossen) |
+
+**Empfehlung:** Als Fußnote in §8 dokumentieren: "4 Standalone-Zeilen ohne
+`Unterauftrag`-Feld, deren Sub-Erlöse (3.247 EUR) in v1.9 nicht rekonstruierbar
+sind. Ursache: fehlendes AX-Feld. Kein Findungs-Impact."
+
+### §7.4 Fischerwerke und HERMA — Vergleich
+
+| Kunde | Orphan-Subs | Orphan-EUR | Standalone-Ziele |
+|-------|------------|-----------|-----------------|
+| GEZE | 28 | 3.247 EUR | 4 (GB×2, FR×1, IT×1) |
+| Fischerwerke | 2 | 445,51 EUR | 1 (ES/43300) |
+| HERMA | 0 | 0 EUR | — |
+
+Das Orphan-Muster existiert auch bei Fischerwerke (kleinmaßstäbig, 1 Pseudo-Master
+in ES), nicht aber bei HERMA. Es ist kein GEZE-spezifisches Phänomen, aber
+quantitativ marginal für Fischerwerke.
+
+---
+
+## §8 Freigabe Schritte 6–8
+
+**Freigabe erteilt** für Schritte 6–8 (DLV-gefilterter Re-Run, Muster-B-Scan,
+Dinas-vs-AX).
+
+### STOP-Kriterien Schritt 6
+
+| Trigger | Konsequenz |
+|---------|-----------|
+| Orphan-Subs-Muster zeigt >50 % aus einer Periode/Region | STOP — Operations-Klärung |
+| Muster-B-Kandidaten wandern nach DLV-Vergleich in andere Kategorien | STOP — methodische Prüfung |
+| Pass-Rate verändert sich durch Dinas-Vergleich um > 5 Prozentpunkte | STOP — Einschätzung einholen |
+
+---
+
+*Erstellt: 2026-04-24 | Aktualisiert: 2026-04-24 (Orphan-Analyse + Entscheidungen)*
 *Grundlage: bi_top20_data.pkl POST-Daten | classify_ax_rows() v1.9.3*
 *Keine Code-Änderungen an bestehenden Report-Scripts.*
