@@ -99,6 +99,8 @@ Gate-1 aktiv: 25,5 % Tonnage=0 überschreitet 20 %-Schwelle. Kein DLV-Check auf 
 
 **Offene Punkte:** Manuelle Prüfung der 12 Muster-B-Kandidaten. 2026-DLV bei GEZE anfordern (aktuell 2025-Fallback).
 
+**Offene Audit-Komponente (v1.9-Findings):** Dinas-AX-Vergleich auf Basis der Aggregations-Regel (§2e) wurde für GEZE noch nicht durchgeführt. Empirische Validierung zeigt 8,54 % des Dinas-Gesamt-Volumens (4.242 EUR) in 15 Multi-Group-Rechnungen, die bei einer Aggregations-korrekten Prüfung methodisch ausgewertet werden müssen. Status: offene Audit-Komponente.
+
 ---
 
 ## §3 Fischerwerke GmbH (KNR 409480)
