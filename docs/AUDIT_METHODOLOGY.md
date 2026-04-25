@@ -696,6 +696,69 @@ Pro Cluster ist das zutreffende Muster auszuweisen.
 
 ---
 
+## §2f Pipeline-Integrations-Flow (ab v1.9)
+
+Standardisierter Ablauf für alle AX-vs-Dinas-Vergleiche (generalisiert aus GEZE-Integration).
+
+### Ablauf-Übersicht
+
+```
+AX-Rohdaten
+    ▼
+[1] classify_ax_rows()          → Spalten: is_sub, is_master, is_standalone
+    ▼
+[2] Sub-Rows trennen, Master-Gruppen bilden
+    ▼
+[3] reconstruct_ax_master()     → physisch: Master-primär; Erlöse: Sub-Summe (§2e Rule E)
+    ▼
+[4] Vergleichs-Set: rekonstruierte Master + Standalones zusammenführen
+    ▼
+[5] Stage-2-Filter ~unbeurteilbar: Tonnage ≤ 0 AND LDM ≤ 0 (§2e Rule D)
+    ▼
+[6] Dinas-Matching: aggregate_dinas_per_invoice() + Routing-Key-Join (§2e Rule C)
+    ▼
+[7] Calculator + Muster-A/B-Erkennung + §8-Kandidaten
+```
+
+### STOP-Kriterien mid-Integration
+
+| Trigger | Nach Schritt | Konsequenz |
+|---------|-------------|------------|
+| Scope-Δ > 5 kEUR nach Sub-Exclusion | 5 | STOP — methodische Abstimmung |
+| > 3 Muster-B-Kandidaten sind Sub-Rows | 2 | STOP — Findings-Review |
+| > 5 % der Master: `reconstruct_ax_master()` liefert NaN | 4 | Datenproblem untersuchen |
+| Stage-2-Filter entfernt > 200 Zeilen | 6 | STOP — Legitimität prüfen |
+
+**Wichtig (§2e Rule A):** `Unterauftrag` ist ein String-Feld (komma-separierte Liste).
+`_nonempty()` (string-check) verwenden, nicht `float()` — sonst werden Master fälschlich
+als Sub klassifiziert. Empirisch bestätigt an 586 GEZE-Master-Zeilen.
+
+Detaillierter Schritt-für-Schritt-Flow mit Datentypen: `docs/v1_9_pipeline_integration_flow.md`
+
+---
+
+## §2g Billing-Axis-Tabelle per Kunde (ab v1.9.4)
+
+Definiert die primäre Billing-Dimension für Cluster-Ähnlichkeits-Scores (§2e Rule F)
+und DLV-Kalkulationen. `billing_axis` bestimmt, nach welchem Merkmal Dinas-Einheiten
+zum AX-Median sortiert werden.
+
+| Kunde | KNR | `billing_axis` | Einheit | Tarifbasis |
+|-------|-----|----------------|---------|------------|
+| GEZE GmbH | 406035 | `tonnage` | kg | EUR/100 kg pro Zone |
+| EBM-Papst | 410844 | `lademeter` | LDM | Stellplatz-Matrix (1 Stp = 0,4 LDM) |
+| Fischerwerke | 409480 | `stellplaetze` | Stp | Stellplatz-Pauschal |
+| HERMA GmbH | 423650 | `ldm` | LDM | LDM-Progressiv |
+| CHT Germany | 486073 | `tonnage` | kg | EUR/100 kg pro Zone |
+| Sika DE | 491063 | `tonnage` | kg | EUR/100 kg |
+
+**Pflicht vor Kunden-Rollout:** `billing_axis` empirisch bestätigen:
+1. §5.0 `tonnage_source`-Prüfung (Gate-1: ≤ 20 % Tonnage=0)
+2. BI-Daten: welche Spalte hat die geringste Null-Quote?
+3. DLV-Kalkulator-Parameter: welche Dimension ist der Pflicht-Eingabe?
+
+---
+
 ## §3 Muster-A-Erkennung
 
 ### Definition
@@ -815,6 +878,92 @@ CHT/IT nicht (IT-Raten in AX: volle 4dp-Präzision). Konsequenz:
   DLV notiert 4dp. Calculator folgt AX-Präzision. KLÄRUNGSFRAGE: 2dp vertragskonform?"
 - **Retroaktiv-Prüfung:** Für alle weiteren CHT-Länder (AT/ES/GR) und Welle-3-
   Kunden im Integration-Test prüfen, ob AX-Präzision 2dp oder 4dp.
+
+---
+
+## §3b Empirische Master-Sub-Muster (ab v1.9.2)
+
+Beschreibt, wie physische Parameter und Erlöse zwischen Master- und Sub-Zeilen in AX
+verteilt sind. Empirisch bestätigt an GEZE (586 Master), Fischerwerke (109), HERMA (183), CHT.
+
+### Normalmuster: Physische Parameter
+
+| Feld | Master | Sub | Muster |
+|------|--------|-----|--------|
+| Tonnage (eff.) | Immer vorhanden | Meist 0 | **Master führt** |
+| Colli | Immer vorhanden | Meist 0 | Master führt |
+| Lademeter | Manchmal leer (Fischerwerke: 29 %) | Manchmal gefüllt | Fallback greift bei LDM |
+| Stellplätze | Meist vorhanden | Manchmal gefüllt | Master führt; Fallback möglich |
+| Erlöse Fracht | Meist 0 (Artefakte) | Prädominant | **Immer Sub-Summe** |
+| Erlöse Diesel | Meist 0 | Auf Subs | Immer Sub-Summe |
+
+### Fallback-Relevanz per Kunde
+
+| Kunde | Fallback-Häufigkeit | Praktische Relevanz |
+|-------|---------------------|---------------------|
+| GEZE | **Nie** (0/586 Gruppen) | Irrelevant; defensiver Safety-Catch |
+| HERMA | **Fast nie** (2/183) | Marginal; 2 FP-Subs werden gefiltert |
+| Fischerwerke | **Lademeter: ~29 %** (32/109) | Methodisch sinnvoll für LDM |
+| CHT | **n/a** | Kein Master-Sub-Pattern in BI-Daten; reconstruct nicht anwendbar |
+
+**Schlussfolgerung:** `reconstruct_ax_master()` ist für GEZE und HERMA ein defensiver
+Safety-Catch (nie ausgelöst). Bei Fischerwerke ist der LDM-Fallback methodisch korrekt.
+
+**Neue Kunden:** Vor Integration 5–10 Master-Sub-Gruppen prüfen und in diese Tabelle eintragen.
+Datenbasis: `docs/master_sub_empirical_patterns.md`
+
+---
+
+## §3c Orphan-Sub-Pattern (ab v1.9.2)
+
+### Definition
+
+Ein **Orphan-Sub** ist eine Sub-Zeile, deren `Mastersendung`-Wert auf eine Zeile zeigt,
+die im Datensatz als **Standalone** klassifiziert ist — d.h. die Ziel-Zeile hat kein
+`Unterauftrag`-Feld gesetzt und führt keine eigene Master-Gruppe.
+
+### Ursache
+
+AX kann Sendungen als "Teil einer Mastersendung" markieren, ohne dass die Ziel-Auftragsnummer
+im vorliegenden Export eine eigene Master-Gruppe führt. Typische Ursachen:
+- Ziel liegt in anderem Abrechnungszeitraum / gefiltertem Export-Scope
+- Einzelsendung, die nachträglich als Master referenziert wurde
+
+Kein Bug in `classify_ax_rows()` — Datenmerkmal des AX-Exports.
+
+### Empirischer Befund: GEZE (v1.9.2)
+
+28 von 153 FP-Sub-Zeilen sind Orphan-Subs (Mastersendung zeigt auf 4 Standalone-Zeilen):
+
+| Standalone-Auftragsnummer | Land/PLZ | n Orphan-Subs | Erlöse Fracht |
+|---------------------------|---------|---------------|---------------|
+| 7092010011403004 | GB/WS13 8SY | 5 | 228,84 EUR |
+| 7092010011404001 | GB/WS13 8SY | 19 | 1.607,60 EUR |
+| 7092010012046002 | FR/72700 | 2 | 147,18 EUR |
+| 7092010030068000 | IT/38121 | 2 | 1.263,36 EUR |
+| **Gesamt** | | **28** | **3.246,98 EUR** |
+
+### Behandlung im v1.9-Framework
+
+`filter_comparison_set()` entfernt Orphan-Subs korrekt (is_sub = True).
+Die Erlöse der Orphan-Subs können **nicht** auf einen Master rekonstruiert werden.
+
+**Konsequenz für Bilanz-Null-Check:** Deckungsgrad strukturell < 100 % wenn Orphan-Subs
+vorhanden. Abweichung durch Orphan-Subs ist als **Datenmerkmal** zu dokumentieren,
+nicht als Algorithmus-Fehler. GEZE: −4.279 EUR (75,7 % Deckung) = erwartet.
+
+### Pflicht-Check bei neuen Kunden
+
+Wenn Bilanz-Null-Check < 95 %: Orphan-Sub-Analyse durchführen:
+```python
+standalone_keys = set(standalones['Auftragsnummer'].apply(
+    lambda v: round(float(v)) if pd.notna(v) else None
+).dropna())
+orphans = subs[subs['Mastersendung'].apply(
+    lambda v: round(float(v)) in standalone_keys if pd.notna(v) else False
+)]
+print(f"Orphan-Subs: {len(orphans)}, EUR: {orphans['Erlöse Fracht'].sum():.2f}")
+```
 
 ---
 
@@ -1259,6 +1408,63 @@ geprüft werden. Falls ≥ 2 Zeilen mit identischer PLZ konsistent fp ≠ 0 zeig
 
 ---
 
+## §8 Kunden-Report-Format — Klärungsposten (Standard ab v1.7)
+
+### Zweck und Abgrenzung
+
+§8 ist der Abschnitt jedes Kunden-Reports, der **offene Befunde** zusammenfasst,
+die manuelle Klärung oder Operations-Abstimmung erfordern.
+
+**NICHT in §8 (methodisch erklärt):**
+- Muster-A (ERKA-Floater 7 %; erwartet)
+- `rn_level_adjustment` als solches (Gate 6 erklärt den Typ; aber die Tabelle erscheint in §8)
+- Rundungsartefakte ≤ ±1 EUR
+- AX-Raten-Präzisions-Δ wenn Calculator bereits angepasst (nur noch Klärungsfrage)
+
+**IN §8:**
+- Sonder-PLZ-Aufschlag (unbekannte Ursache)
+- RN-Level-Adjustment-Übersicht (kompakte Tabelle aller RNs)
+- AX-Raten-Präzisions-Klärungsfrage (vertragskonform?)
+- Muster-B-Funde ohne Erklärung
+- M2-Cluster-Befund (AX-Konfigurations-Fehler nach Migration)
+
+### §8-Eintrag-Typen
+
+| Typ | Auslöser | Priorität |
+|-----|----------|-----------|
+| Sonder-PLZ-Aufschlag | `plz_fp_std < 0,005` UND `|fp_mean| > 0,03` UND n ≥ 2 | Normal |
+| Sonder-PLZ PRIORITY | `|fp_mean| > 0,15` ODER Ursache unklar nach Klärung | **PRIORITY** |
+| RN-Level-Adjustment-Tabelle | rn_std < 0,0005 UND `|rn_factor − 1| > 0,001` (§6b) | Tabelle |
+| AX-Raten-Präzision | `ax_rate_precision ≠ "native"` (§6c) | Klärungsfrage |
+| Muster-B unerklärt | `delta_raw < −10 EUR` UND NOT Muster-A | Klärungskandidat |
+| M2-Cluster-Befund | Dinas-Δ ≈ 0 UND AX-Δ < 0 (§2e Rule F Muster 2) | Höchste Priorität |
+
+### Standard-Einzeleintrag-Format
+
+```
+### §8.x — [Typ]: [Kunde] / [PLZ oder RN-Nummer]
+Datum: [Leistungsdatum]  | Δ: [EUR]  | n: [Anzahl betroffene Positionen]
+Befund: [1–2 Sätze was beobachtet]
+Klärungsfrage: [konkrete Frage an Operations / ERKA]
+Status: offen | bestätigt | abgeklärt
+```
+
+### RN-Level-Adjustment §8-Listenformat
+
+Für Kunden mit ≥ 1 `rn_level_adjustment` (§6b): kompakte Tabelle aller betroffenen RNs:
+
+```
+§8 RN-Ebene-Anpassungen (Gate 6, n=[Anzahl RNs])
+| RN       | rn_factor | n_pos | delta_sum_EUR | Periodizität | Status |
+|----------|-----------|-------|---------------|-------------|--------|
+| [RN-Nr]  | [Faktor]  | [n]   | [EUR]         | [jan/mix]   | offen  |
+```
+
+Wenn Faktor als Diesel-Floater operationsseitig bekannt: Gate 6 schließt,
+Eintrag mit "bestätigt" markieren — kein Calculator-Bug.
+
+---
+
 ## §9a Multi-Agent-Workflow-Regeln (ab v1.8.2)
 
 ### Hintergrund
@@ -1327,4 +1533,5 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.9.1 | 2026-04-24 | v1.9 | §2e Rule D neu: Zweistufigkeit der AX-Filterung — filter_comparison_set() (Stufe 1, Sub-Rows) ist nicht ausreichend ohne nachgelagerte Unbeurteilbar-Filterung (Stufe 2, Tonnage=0 UND LDM=0); obligatorische Prüftabelle für neue Kunden-Rollouts; empirischer Befund aus Regression-Analyse dokumentiert |
 | 1.9.3 | 2026-04-24 | v1.9 | §2e Rule A Implementations-Detail: Unterauftrag ist komma-separierter String, kein numerischer Wert; _nonempty() (string-check) korrekt, _nonempty_numeric() (float-check) würde Master fälschlich als Sub klassifizieren; empirisch bestätigt an 586 GEZE-Master-Zeilen |
 | 1.9.2 | 2026-04-24 | v1.9 | §2e Rule E neu: Master-Rekonstruktion — Master führt bei physischen Parametern (Tonnage, LDM, Stellplätze, Volumen, Colli); Sub-Summe als Fallback nur bei NaN/None-Master-Feld; 0 ist gültiger Master-Wert (kein Fallback-Trigger); Erlöse immer aus Sub-Summe; Rechnungsnummern aus Sub-Liste; Master-vs-Sub-Inkonsistenz = Datenredundanz, kein Finding; Implementierung: reconstruct_ax_master() in src/tms/billing/aggregation.py; Validierung: GEZE Auftrag 7092010001835006 (Tonnage=361,9 Master, Erlöse=97,28 Sub-Summe) |
-| 1.9.4 | 2026-04-24 | v1.9 | §2e Rule F neu: Vergleichs-Cluster-Format — Vergleichseinheiten AX-Master-Sendung vs. Dinas-Rechnungs-Aggregat; Cluster-Key (Sender-PLZ, Empf-PLZ, Tarifgruppe, Gewichtsklasse); Stichproben-Regel Top-5 × Top-5 (AX nach Δ, Dinas nach billing_axis-Nähe); Ähnlichkeits-Score kundenseitig (Tonnage/LDM/Stellplätze je Billing-Basis); identische 13-Spalten-Tabellen für AX und Dinas; DLV-Soll + Δ auch für Dinas berechnet (ermöglicht Root-Cause-Klassifikation: Dinas-Δ ≈ 0 / AX-Δ < 0 = AX-Buchungsfehler isoliert); NK_Total in Haupt-Tabelle mit Detailaufschlüsselung im Anhang; Cluster-Ausschluss-Kriterium: ohne AX-Unterfakturierung nicht dargestellt; Periodenversatz PRE-Dinas/POST-AX ist strukturelle Kerncharakteristik des Migrations-Audits — vier Root-Cause-Muster formalisiert (1=korrekt, 2=AX-Konfig-Fehler, 3=Tarif-Problem, 4=Migration hat Fehler behoben) |
+| 1.9.4 | 2026-04-24 | v1.9 | §2e Rule F neu: Vergleichs-Cluster-Format (nur Rule F, kein §2f/§2g/§3b/§3c/§8 enthalten) |
+| 1.9.5 | 2026-04-25 | v1.9 | §2f neu: Pipeline-Integrations-Flow (7-Schritt-Ablauf, STOP-Kriterien); §2g neu: billing_axis-Tabelle per Kunde (GEZE/EBM/Fischer/HERMA/CHT/Sika); §3b neu: Empirische Master-Sub-Muster (Fallback-Relevanz-Tabelle GEZE/HERMA/Fischer/CHT); §3c neu: Orphan-Sub-Pattern (Definition, GEZE 28 Subs/3.247 EUR, Pflicht-Check-Code); §8 neu: Kunden-Report-Format Standard — Klärungsposten-Typen, Eintrag-Format, RN-Adj-Listenformat |
