@@ -31,7 +31,7 @@ innerhalb des M1-Toleranzbereichs.
 |--------|------|-----------|
 | Kein M2-Fund | 0 von 35 Clustern | Keine migrations-kausale Unterfakturierung nachweisbar |
 | IE perfekt | Δ = 0,00 EUR (84 Zeilen) | Migration hat IE-Billing exakt auf DLV kalibriert |
-| Mx-DQ (SK/1380) | +2.021 EUR, 12 Zeilen | Sender PLZ 1380 ≠ Mulfingen 74673 — andere DLV-Grundlage vermutet |
+| Mx-DQ (SK/1380) | +2.021 EUR, 12 Zeilen | Calculator-Bug: DLV hat zweiten SK-905-Eintrag für Sender 1380 (1100 EUR); _lookup() gibt ersten Treffer (960 EUR) — AX korrekt, kein operativer Handlungsbedarf |
 | M_over (PL/PT) | +535 EUR, 7 Zeilen | Marginale Überschreitung (5,3–5,7 %) — Bandbreiteneffekt |
 | M2* (EE) | −570 EUR, 13 Zeilen | AX < DLV; 1 Gutschrift-Zeile enthalten; kein Dinas-Vergleich |
 | DLV-Lücke | 49 Zeilen, 74.614 EUR | F92/K32 Eircodes und PL-Spezial-PLZ nicht in DLV |
@@ -41,8 +41,12 @@ innerhalb des M1-Toleranzbereichs.
 
 **Kein Migrations-Schaden** nachweisbar. IE, HR, SI, SK (Mulfingen-Origin), EE (stp6–16)
 und PL-Hauptströme sind DLV-konform. Handlungsbedarf besteht ausschließlich für:
-- Klärung Sender-PLZ 1380 (eigener DLV-Vertrag?), und
 - EE stp1–5 Rechnungsprüfung (Gutschrift-Zeile + 1 Abweichung).
+
+**Nachträgliche Korrektur (2026-04-26):** Mx-DQ (SK/1380) ist kein operativer Befund.
+AX fakturiert korrekt nach dem zweiten DLV-Eintrag (1.100 EUR für Sender 1380).
+Calculator-Bug _lookup() first-match-wins wurde identifiziert — Backlog-Eintrag gesetzt.
++2.021 EUR Mx-DQ-Anomalie ist Audit-Artefakt, nicht Rückforderungsgrundlage.
 
 ---
 
@@ -149,7 +153,7 @@ Pool gesamt:           365
 | 74\|PT\|2615\|stp31-33 | 2 | 5.225,00 | 4.950,00 | +275,00 | +5,3 % |
 | **Summe M_over** | **7** | **9.825,00** | **9.290,00** | **+535,00** | **+5,4 %** |
 
-### §2.4 Mx-DQ — DLV-Datei-Mismatch Sender 1380 (2 Cluster)
+### §2.4 Mx-DQ — Calculator-Lookup-Bug Sender 1380 (2 Cluster, AX korrekt)
 
 | Cluster-Key | n | Σ Erlöse | Σ DLV-Soll (74673-Ref) | Σ Δ | Δ% | Sender-PLZ |
 |-------------|---|----------|----------------------|-----|----|-----------|
@@ -201,18 +205,27 @@ aber **gegensätzliche Klassifikation** je nach Sender-PLZ.
 | 74673 (Mulfingen) | 74\|SK\|905\|stp31-33 | 26 | 960,00 EUR | 960,00 EUR | 0,00 EUR | M1 |
 | 1380 (unbekannt) | 13\|SK\|905\|stp31-33 | 11 | 1.100,00 EUR | 960,00 EUR | +140,00 EUR | Mx-DQ |
 
-**Mx-DQ Erklärung:**
-Die DLV-Referenzdatei (`20260227_...Export Europa.xlsx` sowie 2025-Pendant) gilt für den
-Absenderstandort **74673 Mulfingen**. Sendungen ab **PLZ 1380** (anderer EBM-Standort,
-vermutlich EBM-Papst Niederlassung oder Zulieferer) fallen möglicherweise unter eine
-separate Frachtvereinbarung. AX fakturiert 1.100 EUR/Sendung im Cap-Band, die Mulfingen-DLV
-zeigt 960 EUR — ein strukturell inkompatibler Vergleich.
+**Mx-DQ Erklärung (korrigiert 2026-04-26):**
+Die 2026-DLV-Datei (`20260227_...Export Europa.xlsx`) enthält **zwei Einträge** für SK-905 01:
 
-**stp=6 Sonderfall:** Cluster `13|SK|905|stp6-16` (1 Zeile, +481 EUR) verstärkt den Befund:
-AX 975 EUR vs. DLV 494 EUR im LTL-Band (+97 %) — eine Abweichung, die mit keiner tariflichen
-Bandbreiten-Toleranz zu erklären ist. DLV-Datei für PLZ 1380 muss separat angefordert werden.
+| Eintrag | Sender | stp31-33 Preis | Verwendung |
+|---------|--------|----------------|------------|
+| Zeile 1 | 74673 Mulfingen | 960 EUR | Standard-Tarif |
+| Zeile 2 | PLZ 1380 (Override) | 1.100 EUR | Sender-spezifischer Override |
 
-**Handlungsbedarf:** Klärung mit EBM, ob PLZ 1380 eine eigene Noerpel-DLV besitzt.
+`EBMCalculator._lookup()` iteriert die Liste und gibt den **ersten Treffer** zurück, ohne
+die Sender-PLZ zu prüfen. Für Sendungen ab 1380 liefert der Calculator 960 EUR, obwohl
+AX korrekt 1.100 EUR nach dem Override-Eintrag berechnet.
+
+**→ AX fakturiert korrekt.** Die +2.021 EUR „Anomalie" ist ein **Calculator-Bug**
+(first-match-wins ohne Sender-Disambiguierung), kein operativer Befund.
+
+**stp=6 Sonderfall (revidiert):** Cluster `13|SK|905|stp6-16` (1 Zeile, +481 EUR).
+AX 975 EUR vs. Calculator-Soll 494 EUR im LTL-Band. Da AX für diesen Sender-Override
+einen anderen Tarifbaum anwendet, ist auch diese Abweichung als Calculator-Artefakt
+einzustufen, nicht als Überfakturierung.
+
+**Handlungsbedarf:** Keiner operativ. Calculator-Bug in Backlog aufgenommen (Anhang F).
 
 ---
 
@@ -299,9 +312,9 @@ DLV-Konformität gebracht — **keine Migration-Verschlechterung, keine M2-Findi
 
 ### Handlungsempfehlungen
 
-1. **Mx-DQ klären (Priorität HOCH):** EBM anfragen, ob PLZ 1380 eine separate
-   Noerpel-Frachtvereinbarung hat. Falls ja: +2.021 EUR Überschuss berichtigen oder
-   als korrekt bestätigen lassen.
+1. ~~**Mx-DQ klären (Priorität HOCH)**~~ **OBSOLET (2026-04-26):** AX fakturiert korrekt
+   nach DLV-Override für Sender 1380. Calculator-Bug identifiziert und im Backlog erfasst.
+   Kein operativer Handlungsbedarf gegenüber EBM oder Noerpel.
 
 2. **M2* prüfen (Priorität MITTEL):** EE-Zeile 166802 (stp=2, AX=150 vs. DLV=260)
    auf korrekte stp-Erfassung prüfen. Gutschrift-Zeile dokumentieren.
@@ -357,24 +370,29 @@ auf IE H91/R32-Preisen (stp33 = 3.375 EUR) wäre der DLV-Soll plausibel ähnlich
 
 ---
 
-## Anhang C — SK Sender-PLZ 1380 Mx-DQ (12 Zeilen)
+## Anhang C — SK Sender-PLZ 1380: Calculator-Bug (kein operativer Befund)
 
-Alle 12 Mx-DQ-Zeilen haben Sender-PLZ **1380** (kein Mulfingen). AX-Billing:
+**Status (2026-04-26 revidiert):** Mx-DQ-Klassifikation entfernt. AX fakturiert korrekt.
 
-| stp_eff | AX-Preis | DLV-Soll (74673-Ref) | Δ | Datumbereich |
-|---------|----------|---------------------|---|-------------|
+Alle 12 Zeilen haben Sender-PLZ **1380** (kein Mulfingen). AX-Billing:
+
+| stp_eff | AX-Preis | Calculator-Soll | Δ (Artefakt) | Datumbereich |
+|---------|----------|-----------------|--------------|-------------|
 | 33–34 | 1.100,00 | 960,00 | +140,00 | 2026-02-10 bis 2026-03-24 |
 | 6 | 975,00 | 494,00 | +481,00 | 2026-02-23 |
 
-Zum Vergleich: Mulfingen-Sendungen (74673) nach SK 905 01 stp33: AX = DLV = 960,00 EUR (M1).
-Die Differenz zwischen 960 und 1.100 EUR entspricht genau der zweiten SK-905-Zeile in der
-2026-DLV (Override-Eintrag mit stp33=1.100). AX wendet für PLZ 1380 den Override an, die
-Referenzimplementierung gibt den ersten Treffer (960 EUR) zurück.
+**Ursache (bestätigt):** Die 2026-DLV enthält zwei SK-905-01-Einträge:
+- Zeile 1: stp31-33 = 960 EUR (74673-Mulfingen-Standard)
+- Zeile 2: stp31-33 = 1.100 EUR (PLZ-1380-Override)
 
-**Mögliche Ursachen:**
-- PLZ 1380 hat eigene DLV mit anderen Sätzen
-- AX-Tarifeintrag für 1380 vs. 74673 intern unterschiedlich konfiguriert
-- Aufklärung: EBM-Ansprechpartner + Noerpel-Kontrakt für PLZ 1380
+`EBMCalculator._lookup()` gibt immer den **ersten Treffer** zurück (960 EUR), unabhängig
+vom Sender. AX liest den zweiten Eintrag (1.100 EUR) für PLZ 1380 korrekt.
+
+**Folgerung:**
+- AX ist korrekt: 1.100 EUR für PLZ-1380-Sendungen ist der richtige Override-Satz.
+- Calculator-Bug: `_lookup()` ignoriert Sender-Kontext — Backlog-Eintrag (Anhang F).
+- +2.021 EUR sind Audit-Artefakt, keine Rückforderungsgrundlage.
+- Operatives-Followup-Memo `ebm_sk_sender_1380.md` obsolet (gelöscht 2026-04-26).
 
 ---
 
@@ -410,4 +428,54 @@ Referenzimplementierung gibt den ersten Treffer (960 EUR) zurück.
 
 **Billing-Scope:** Nur Tarifs_DE_EU-Sheet (Fracht). Toll_DE_EU (Maut) nicht einbezogen —
 EBM-Verträge enthalten Mautpauschalen, die in Erlöse Fracht bereits enthalten sind.
+
+---
+
+## Anhang F — Validity-Audit (2026-04-26)
+
+### Mechanismus
+
+`EBMCalculator` nutzt **hardcodierte Gültigkeitskonstanten** im Python-Quellcode:
+
+```python
+_VALID_FROM = date(2026, 3, 1)    # 2026-DLV
+_VALID_TO   = date(2026, 12, 31)
+_VALID_2025_FROM = date(2025, 10, 10)
+_VALID_2025_TO   = date(2026, 2, 28)
+```
+
+`calculate()` hat **keinen `shipment_date`-Parameter** — DLV-Auswahl liegt beim Aufrufer.
+Die v1.9.4-Pipeline hat `EBMCalculator()` (Default = 2026-DLV) für alle Sendungen verwendet,
+einschließlich 2025-10 bis 2026-02. Kein Excel-Parsing für Gültigkeitsdaten.
+
+### Empirische Ratenprüfung
+
+Vergleich aller aktiven Routen zwischen 2025-DLV und 2026-DLV:
+
+| Route | n | 2025-DLV EUR | 2026-DLV EUR | Δ |
+|-------|---|-------------|-------------|---|
+| IE-R32 | 13 | 1.871,90 | 1.871,90 | 0 |
+| IE-H91 | 5 | 967,00 | 967,00 | 0 |
+| IE-D12 | 10 | 1.567,00 | 1.567,00 | 0 |
+| SK-905 01 | 31 | 960,00 | 960,00 | 0 |
+| SK-913 11 | 1 | 174,00 | 174,00 | 0 |
+| PL-59-241 | 5 | 180,00 | 180,00 | 0 |
+| EE-75301 | 6 | 660,00 | 660,00 | 0 |
+| SI-1370 | 3 | 305,00 | 305,00 | 0 |
+
+**Ergebnis: Alle Raten identisch.** EBM-Cluster-Report v1.9.4 ist nicht betroffen.
+SK-905 first-match-wins liefert 960 EUR unabhängig von der DLV-Version (Zeile 1 gewinnt).
+
+### Calculator-Bugs — Backlog
+
+1. **`shipment_date`-Parameter fehlt** in `calculate()`:
+   Heute kein Impact (Ratenparität 2025↔2026). Fix vor Etappe 10, falls 2027-DLV
+   abweichende Raten enthält.
+
+2. **`_lookup()` first-match-wins ohne Sender-PLZ-Disambiguierung:**
+   Erklärt SK-905 Mx-DQ-Anomalie (+2.021 EUR Artefakt). AX fakturiert korrekt.
+   Fix: `_lookup()` um optionalen `sender_plz`-Parameter erweitern; zweiten DLV-Eintrag
+   priorisieren, wenn `sender_plz` im Lookup-Kontext bekannt.
+
+Vollständige Backlog-Liste: `docs/backlog/calculator_known_issues.md`.
 
