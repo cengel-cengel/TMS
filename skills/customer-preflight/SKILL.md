@@ -425,3 +425,22 @@ Band einordnen, nicht herausfiltern.
 
 **Generalisierung:** Immer `_col_for_pallets()`-Logik / DLV-Struktur auf
 Max-Wert prüfen. Cap explizit in Cluster-Band-Definition dokumentieren.
+
+### P8 — Pre-Flight Pool-Schätzung vs. tatsächlicher Pipeline-Output
+
+**Situation:** EBM Pre-Flight schätzte 314 beurteilbare Zeilen. Tatsächliche v1.9.4
+Pipeline lieferte 296 beurteilbar + 49 DLV-Lücke + 20 out-of-scope = 365 Pool.
+Pre-Flight hatte E3 (stp_eff=0) mit 64 geschätzt, Pipeline entfernte nur 5.
+DLV-Lücke mit 32 geschätzt, tatsächlich 49.
+
+**Erkennung:** Nach Step 2 Pool-Zahlen mit Pre-Flight-Vorhersage abgleichen.
+Insbesondere E3 (stp_eff=0) hängt von LDM-Fallback-Implementierung ab:
+Pre-Flight-Schätzung zählt Zeilen mit Stellplätze=0, ohne LDM-Fallback zu kennen.
+Wenn Calculator LDM-Fallback hat → weniger E3-Ausfälle als geschätzt.
+
+**Fix:** Kein Fix nötig. Pre-Flight-Zahlen sind Heuristik. Diskrepanz < 20 % akzeptabel.
+Bei Diskrepanz > 20 %: E3-Filter-Logik im Calculator nachprüfen und dokumentieren.
+
+**Generalisierung:** Pre-Flight ist Navigations-Instrument, kein exakter Vorab-Check.
+Tatsächliche Pool-Zahlen aus Step 2 stets separat dokumentieren und als Audit-Basis
+verwenden, nicht Pre-Flight-Schätzung.
