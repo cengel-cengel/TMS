@@ -30,6 +30,20 @@ from tms.tariff.base import TariffCalculator, TariffResult
 _DLV_ROOT = Path("/home/user/TMS/data/extracted/v2/Fischer/DLV")
 _SKIP_DIRS = frozenset({"durch neue offerten ersetzt", "nicht mehr relevant", "upload"})
 
+# All recognized table-header keywords for the Stellplätze column
+_STPL_HEADERS = frozenset(
+    (
+        "Palletten",
+        "Stellplätze",
+        "Stellplatze",
+        "Stellpl.",
+        "Stellplatz",
+        "stellplatz",
+        "stellplaetze",
+        "Stellplaetze",
+    )
+)
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -59,7 +73,7 @@ def _cell(v) -> str:
 def _parse_stpl(s: str) -> list[int] | None:
     """'5' → [5];  '30-33' → [30,31,32,33]; else → None."""
     s = s.strip()
-    m = re.match(r"^(\d+)\s*[-\u2013]\s*(\d+)$", s)
+    m = re.match(r"^(\d+)\s*[-–]\s*(\d+)$", s)
     if m:
         return list(range(int(m.group(1)), int(m.group(2)) + 1))
     try:
@@ -75,6 +89,13 @@ def _parse_date(s: str) -> date | None:
     return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
 
 
+def _rc(row, idx: int) -> str:
+    """Return cell string at absolute column index idx, or '' if out of range."""
+    if idx < len(row):
+        return _cell(row.iloc[idx])
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # DLV file parser
 # ---------------------------------------------------------------------------
@@ -86,6 +107,10 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
     Supports both single-column (IT, ES, IE, GR) and two-column (BE, DK, NL, GB)
     price table layouts.  Only files with origin DE-72... are loaded (filters out
     return / import routes like IT-35127 nach DE-72).
+
+    Bug A fix: "Ab frei geladen" may appear in any column (2026 files use col 2).
+    col_offset tracks the anchor column and all subsequent reads are relative to it.
+    Bug B fix: _STPL_HEADERS covers "Stellplatz" singular and ASCII variants.
     """
     try:
         df = pd.read_excel(path, header=None)
@@ -101,25 +126,35 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
     diesel_pct = Decimal("0")
     prices: dict[int, Decimal] = {}
     in_table = False
+    col_offset = 0  # column index where "Ab frei geladen" anchor was found
 
     for i, row in df.iterrows():
-        v0 = _cell(row.iloc[0])
 
-        # ── "Ab frei geladen" row ──────────────────────────────────────────
-        if v0.startswith("Ab frei geladen"):
-            # Require origin to be DE-72...
-            if re.search(r"DE-72\d*", v0):
+        # ── "Ab frei geladen" row — search ALL columns (Bug A fix) ─────────
+        afl_col = -1
+        afl_cell = ""
+        for ci in range(len(row)):
+            cv = _cell(row.iloc[ci])
+            if cv.lower().startswith("ab frei geladen"):
+                afl_col = ci
+                afl_cell = cv
+                break
+
+        if afl_col >= 0:
+            if re.search(r"DE-72\d*", afl_cell):
                 origin_de72 = True
+                col_offset = afl_col
             else:
                 return None   # import or non-Waldachtal route
-            # Extract primary destination (last CC-PLZ before ":")
-            # Use the pattern after "bis frei Haus" if present
-            after = re.split(r"bis frei Haus", v0, maxsplit=1)[-1]
+            after = re.split(r"bis frei Haus", afl_cell, maxsplit=1)[-1]
             m = re.search(r"([A-Z]{2})-([A-Z0-9]+)", after)
             if m:
                 dest_country = m.group(1)
                 dest_plz_key = m.group(2)
             continue
+
+        # All subsequent reads use col_offset-relative indexing
+        v0 = _rc(row, col_offset)
 
         # ── Validity ─────────────────────────────────────────────────────
         if "ltigkeit" in v0:   # catches Gültigkeit / Gultigkeit
@@ -133,7 +168,7 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
 
         # ── Diesel row ────────────────────────────────────────────────────
         if "Dieselzuschlag" in v0 and not in_table:
-            v1 = _cell(row.iloc[1] if len(row) > 1 else "")
+            v1 = _rc(row, col_offset + 1)
             if v1.lower() == "inklusive":
                 diesel_included = True
             else:
@@ -144,12 +179,12 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
                     diesel_included = True
             continue
 
-        # ── Table header detection ────────────────────────────────────────
+        # ── Table header detection (Bug B fix: use _STPL_HEADERS) ─────────
         if not in_table:
-            v1 = _cell(row.iloc[1]) if len(row) > 1 else ""
+            v1 = _rc(row, col_offset + 1)
 
-            # Two-column header: "Palletten" or "Stellplätze" in col 0
-            if v0 in ("Palletten", "Stellpl\u00e4tze", "Stellplatze", "Stellpl."):
+            # Two-column header: Stellplätze/Palletten keyword in anchor col
+            if v0 in _STPL_HEADERS:
                 cm = re.search(r"([A-Z]{2})-([A-Z0-9]+)", v1)
                 if cm:
                     dest_country = cm.group(1)
@@ -157,7 +192,7 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
                 in_table = True
                 continue
 
-            # Single-column header: col 0 empty, col 1 has "CC-NNNNN" dest label
+            # Single-column header: anchor col empty, next col has "CC-NNNNN"
             if not v0 and v1:
                 cc_m = re.match(r"([A-Z]{2})-([A-Z0-9]+)", v1)
                 if cc_m:
@@ -175,8 +210,8 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
                     in_table = False
                 continue
 
-            # Left column pair
-            v1 = _cell(row.iloc[1] if len(row) > 1 else "")
+            # Left column pair: stpl in col_offset, price in col_offset+1
+            v1 = _rc(row, col_offset + 1)
             try:
                 p1 = Decimal(str(round(float(v1), 4)))
                 for s in stpl_list:
@@ -184,11 +219,11 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
             except (ValueError, TypeError):
                 pass
 
-            # Right column pair (two-column layout); gap column may exist between
-            # left triplet (col 0-2) and right triplet (col 3-5 or 4-6).
-            for rc in range(3, len(row) - 1):
-                vs = _cell(row.iloc[rc])
-                vp = _cell(row.iloc[rc + 1])
+            # Right column pair (two-column layout); scan from col_offset+3 onward.
+            # Gap column may exist between left triplet and right triplet.
+            for rc in range(col_offset + 3, len(row) - 1):
+                vs = _rc(row, rc)
+                vp = _rc(row, rc + 1)
                 stpl_list2 = _parse_stpl(vs) if vs else None
                 if stpl_list2 and vp:
                     try:
@@ -202,11 +237,19 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
     if not origin_de72 or not dest_country or not prices:
         return None
 
-    # Fallback validity if not found
-    if valid_from is None:
-        valid_from = date(2025, 1, 1)
-    if valid_to is None:
-        valid_to = date(2026, 12, 31)
+    # Fallback validity: infer from parent directory year (e.g. DLV/2025/ → 2025)
+    # when the DLV file itself contains no explicit Gültigkeitszeile.
+    if valid_from is None or valid_to is None:
+        dir_year: int | None = None
+        for part in path.parts:
+            if re.fullmatch(r"\d{4}", part):
+                dir_year = int(part)
+        if dir_year:
+            valid_from = date(dir_year, 1, 1)
+            valid_to = date(dir_year, 12, 31)
+        else:
+            valid_from = date(2025, 1, 1)
+            valid_to = date(2026, 12, 31)
 
     return _RouteDLV(
         dest_country=dest_country,

@@ -444,3 +444,26 @@ Bei Diskrepanz > 20 %: E3-Filter-Logik im Calculator nachprüfen und dokumentier
 **Generalisierung:** Pre-Flight ist Navigations-Instrument, kein exakter Vorab-Check.
 Tatsächliche Pool-Zahlen aus Step 2 stets separat dokumentieren und als Audit-Basis
 verwenden, nicht Pre-Flight-Schätzung.
+
+### P9 — Selbst-referenzielle Sub-Master mit Erlöse=0 (administratives Muster)
+
+**Situation:** Fischerwerke AX-Daten enthalten Zeilen mit `has_ms=True, has_ua=True`
+(Mastersendung gesetzt, eigener Unterauftrag vorhanden) **und** Erlöse Fracht = 0.
+Diese Zeilen sind **keine Sendungen** — sie sind administrative Sammelgruppenköpfe,
+die AX zur internen Bündelung erzeugt. Die eigentlichen Erlöse liegen auf den
+echten Sub-Zeilen (`has_ms=True, has_ua=False`).
+
+**Erkennung:** In DIAGNOSE 1 beim Sub-Zeilen-Check: wenn `has_ms AND has_ua` AND
+`Erlöse_Fracht == 0` für alle solchen Zeilen → administratives Muster, kein Datenfehler.
+
+**Fix:** Diese Zeilen **nicht** in den Audit-Pool aufnehmen und **nicht** als DLV-Lücke
+oder M_over werten. In `enrich_master_sub()` bereits korrekt behandelt: Zeilen mit
+`has_ua=True` werden als Sub-Master erkannt und aus dem Vergleichs-Pool ausgeschlossen.
+
+**Präzedenzfall:** Fischerwerke (KNR 409480), ca. 49 selbst-referenzielle Sub-Master
+identifiziert im Pre-Flight (alle Erlöse = 0). Gesamtbetrag 0 EUR → kein Audit-Impact.
+
+**Generalisierung:** Sub-Master-Pattern ist kein Fehler in der Datenmigration. Es
+entsteht wenn AX mehrere Dinas-Sendungen in einer Mastersendung bündelt und dabei
+einen Gruppen-Kopf mit 0-Erlösen erzeugt. Prüfe bei jedem neuen Kunden in D1:
+`df[(df.has_ms) & (df.has_ua)]["Erlöse Fracht"].sum()` — wenn ≈ 0 → ignorieren.
