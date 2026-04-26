@@ -141,7 +141,12 @@ def _parse_dlv_file(path: Path) -> _RouteDLV | None:
                 break
 
         if afl_col >= 0:
-            if re.search(r"DE-72\d*", afl_cell):
+            # Only count as DE-72 origin when DE-72 appears BEFORE "bis" (i.e. is the
+            # loading point, not the destination). Prevents return-route files like
+            # "Ab frei geladen ES-43300 bis frei Haus DE-72178 Waldachtal" from being
+            # misclassified as Waldachtal-origin routes.
+            origin_part = re.split(r"\bbis\b", afl_cell, maxsplit=1)[0]
+            if re.search(r"DE-72\d*", origin_part):
                 origin_de72 = True
                 col_offset = afl_col
             else:
