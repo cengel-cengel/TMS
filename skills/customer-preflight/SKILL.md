@@ -467,3 +467,49 @@ identifiziert im Pre-Flight (alle Erlöse = 0). Gesamtbetrag 0 EUR → kein Audi
 entsteht wenn AX mehrere Dinas-Sendungen in einer Mastersendung bündelt und dabei
 einen Gruppen-Kopf mit 0-Erlösen erzeugt. Prüfe bei jedem neuen Kunden in D1:
 `df[(df.has_ms) & (df.has_ua)]["Erlöse Fracht"].sum()` — wenn ≈ 0 → ignorieren.
+
+---
+
+### P10 — Return-/Import-Route-Files kontaminieren DLV-Pool
+
+**Situation:** DLV-Verzeichnis kann Dateien für Reverse-Routen enthalten
+(z. B. `ES-43300 → DE-72178 Waldachtal`). Diese sind Import-Tarife, keine
+Export-Tarife. Ein Calculator, der den AFL-Header ("Ab frei geladen … bis frei Haus
+DE-72178") nach dem DE-72-Muster durchsucht, matcht fälschlicherweise auch auf den
+Ziel-String "DE-72" im Bestimmungsort-Teil — und lädt die Datei als DE-Origin-Route.
+
+**Folge:** DLV-Pool enthält Import-Preise (oft deutlich niedriger als Export).
+Betroffene Lanes zeigen massive scheinbare M2\*-Defizite, die in Wirklichkeit
+Calculator-Artefakte sind. Gesamtdifferenz kann um ≥ 60 % verfälscht werden.
+
+**Erkennung:**
+
+1. **DIAGNOSE 2: DLV-Dateinamen prüfen** — enthält die Liste Dateien mit Muster
+   `<ZIELLAND-PLZ>_DE-72` oder `nach DE-72` in beide Richtungen?
+   ```
+   grep -i "nach de-72\|de-72 nach\|DE-72.*import" <dlv-dateinamen>
+   ```
+2. **Step 3: massive M2\*-Cluster** auf einzelnen Lanes mit Reverse-Route-Files
+   sind verdächtig (z. B. alle ES stp1-5 -68 % Δ).
+3. **Origin-Match-Code prüfen:** Wenn die Funktion `re.search(r"DE-72", afl_cell)`
+   auf dem vollen AFL-String läuft statt nur auf dem Origin-Teil → anfällig.
+
+**Fix:** Origin-Match-Funktion korrigieren — AFL-String vor "bis" abschneiden und
+DE-72-Match nur auf diesen Origin-Teil anwenden:
+
+```python
+origin_part = re.split(r"\bbis\b", afl_cell, maxsplit=1)[0]
+if re.search(r"DE-72\d*", origin_part):
+    origin_de72 = True
+```
+
+Alternativ: Reverse-Route-Files in einen dedizierten Unterordner verschieben und
+diesen Ordner via `_SKIP_DIRS` ausschließen.
+
+**Präzedenz:** Fischerwerke (KNR 409480), Bug C, Commit `61f229e` (2026-04-26).
+4 Import-DLV-Dateien entfernt. ES-43300 2025: p1 von 130 EUR (Import) auf 295 EUR
+(Export) korrigiert. Gesamtdifferenz ohne Fix: −97.669 EUR (−41,1 %); nach Fix: −36.318 EUR.
+
+**Generalisierung:** Bei jedem per-Route-DLV-Calculator (Fischerwerke-Typ) in DIAGNOSE 2:
+DLV-Verzeichnis auf Reverse-Route-Dateien prüfen, Calculator Origin-Match-Logik auf
+Substring-vs.-Full-String-Problem testen.
