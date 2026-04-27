@@ -21,9 +21,13 @@ Diesel:         Separate "Dieselfloater" surcharge (~4% of freight for 2025,
 Countries implemented in this module:
   IT (Italy)  — 5 zones; DLV valid 2025-01-01 – 2025-12-31
   AT (Austria) — 7 zones; DLV valid 2025-01-01 – 2025-12-31
-  FR (France) — 8 zones, zone tariff; specific destinations FR-77380 Combs La
-                Ville and FR-13400 Aubagne use separate DLVs (not yet implemented).
-  ES, CH, PT, NL, BE, LU — separate DLV files, not yet implemented.
+  FR (France) — 8 zones, zone tariff; FR-77380 Combs La Ville and FR-13400
+                Aubagne use separate single-destination DLVs.
+  ES (Spain)  — zone tariff
+  CH (Switzerland) — transposed matrix DLV; Verzollung/Währungszuschlag separate
+  PT (Portugal) — zone tariff; PT-6001 Castelo Branco uses separate DLV
+  BE (Belgium), NL (Netherlands) — combined Benelux DLV, Zone 1; max 15 000 kg
+  LU (Luxembourg) — combined Benelux DLV, Zone 2; FTL 753.50 EUR/Sendung
 
 DLV directory structure (year-fallback: 2026 > 2025 > root):
   data/extracted/v1/Noerpel AI/Bitzer/DLV/
@@ -66,6 +70,10 @@ _COUNTRY_DLV: dict[str, tuple[Path, str]] = {
 
 _VALID_FROM_2025 = date(2025, 1, 1)
 _VALID_TO_2025   = date(2025, 12, 31)
+
+# Benelux: single combined DLV file; zone routing is by country (not PLZ prefix).
+_BENELUX_DLV = _ROT_2025 / "20241213_Bitzer_Export BE, NL, LU.xlsx"
+_BENELUX_ZONES: dict[str, int] = {"BE": 1, "NL": 1, "LU": 2}
 
 # Plants: set of known Versender PLZ → plant label
 _PLANT_MAP: dict[str, str] = {
@@ -460,6 +468,69 @@ def _load_ch_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[st
     return bands, zone_map, minimum_map
 
 
+def _load_benelux_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[int, Decimal]]:
+    """
+    Parse the Bitzer Benelux DLV (BE/LU/NL combined, single sheet).
+
+    Zone 1 = BE + NL (col 2), Zone 2 = LU (col 3).
+    BE/NL max billing weight = 15 000 kg — col 2 is NaN for heavier bands.
+    LU FTL row ("kompletter LKW" in col 1) = 753.5 EUR per Sendung flat rate.
+    """
+    df = pd.read_excel(path, sheet_name=sheet, header=None)
+    rows = list(df.iterrows())
+
+    minimum: dict[int, Decimal] = {}
+    raw: list[tuple[int, dict[int, Decimal], bool]] = []
+
+    for _, row in rows:
+        cell0 = str(row.iloc[0]).strip().lower()
+        cell1 = str(row.iloc[1]).strip().lower() if len(row) > 1 else ""
+
+        # Minimum: label in col 1, zone1 val in col 2, zone2 val in col 3
+        if "minimum" in cell1 or "mindest" in cell1:
+            for zone_num, col_idx in ((1, 2), (2, 3)):
+                try:
+                    minimum[zone_num] = Decimal(str(float(row.iloc[col_idx])))
+                except (ValueError, TypeError):
+                    pass
+            continue
+
+        is_bis = cell0 == "bis"
+        is_ftl = "komplett" in cell1 and "lkw" in cell1
+
+        if not is_bis and not is_ftl:
+            continue
+
+        try:
+            if is_ftl:
+                wlim = 999999
+                rates: dict[int, Decimal] = {}
+                try:
+                    rates[2] = Decimal(str(float(row.iloc[3])))  # NL only
+                except (ValueError, TypeError):
+                    pass
+                if rates:
+                    raw.append((wlim, rates, True))
+            else:
+                wlim = int(float(str(row.iloc[1]).strip()))
+                rates = {}
+                for zone_num, col_idx in ((1, 2), (2, 3)):
+                    try:
+                        v = float(row.iloc[col_idx])
+                        if not math.isnan(v) and v > 0:
+                            rates[zone_num] = Decimal(str(v))
+                    except (ValueError, TypeError):
+                        pass
+                if rates:
+                    raw.append((wlim, rates, False))
+        except (ValueError, TypeError, IndexError):
+            continue
+
+    bands = [_Band(weight_limit=wlim, rates=rates, per_sendung=ps) for wlim, rates, ps in raw]
+    bands.sort(key=lambda b: b.weight_limit)
+    return bands, minimum
+
+
 def _lookup_zone(plz: str, zone_map: dict[str, int]) -> int:
     """
     Return zone for a PLZ.  Priority: exact → 3-digit prefix → 2-digit prefix.
@@ -569,6 +640,19 @@ class BitzCalculator(TariffCalculator):
         self._cache[cache_key] = ct
         return ct
 
+    def _get_benelux(self) -> _CountryTariff:
+        if "BENELUX" in self._cache:
+            return self._cache["BENELUX"]
+        bands, minimum = _load_benelux_dlv(_BENELUX_DLV)
+        ct = _CountryTariff(
+            bands=bands,
+            zone_map={},  # zone comes from _BENELUX_ZONES, not PLZ lookup
+            minimum=minimum,
+            dlv_name=_BENELUX_DLV.name,
+        )
+        self._cache["BENELUX"] = ct
+        return ct
+
     def _get_country(self, empf_land: str, origin_plz: str) -> _CountryTariff:
         key = empf_land.upper()
         if key in self._cache:
@@ -641,6 +725,38 @@ class BitzCalculator(TariffCalculator):
                 tariff_valid_to=_VALID_TO_2025,
                 notes=notes,
                 tarifgruppe=f"bitzer_{empf_land_up.lower()}_special_{plz_raw}_{plant.lower()}",
+                tariff_file_used=ct.dlv_name,
+                tariff_year_used=_VALID_FROM_2025.year,
+            )
+
+        # Benelux: country-based zone routing (no PLZ zone map needed)
+        if empf_land_up in _BENELUX_ZONES:
+            zone = _BENELUX_ZONES[empf_land_up]
+            ct = self._get_benelux()
+            if zone == 1 and billing_kg > 15000:
+                raise ValueError(
+                    f"Bitzer BE/NL: no contracted rate for billing_kg={billing_kg} "
+                    f"(BE/NL Zone-1 cap 15 000 kg; LU Zone-2 allows higher weights and FTL)"
+                )
+            basispreis, is_per_sendung = _calc_price(zone, billing_kg, ct.bands, ct.minimum)
+            notes = [
+                f"plant={plant} (origin_plz={origin_plz})",
+                f"empf_land={empf_land_up}",
+                f"zone={zone} (benelux_country_routing)",
+                f"billing_kg={billing_kg}",
+            ]
+            if is_per_sendung:
+                notes.append("pricing=per_sendung_ftl")
+            return TariffResult(
+                basispreis=basispreis,
+                diesel_surcharge=None,
+                maut_surcharge=None,
+                currency="EUR",
+                tariff_file=ct.dlv_name,
+                tariff_valid_from=_VALID_FROM_2025,
+                tariff_valid_to=_VALID_TO_2025,
+                notes=notes,
+                tarifgruppe=f"bitzer_{empf_land_up.lower()}_zone{zone}_{plant.lower()}",
                 tariff_file_used=ct.dlv_name,
                 tariff_year_used=_VALID_FROM_2025.year,
             )
