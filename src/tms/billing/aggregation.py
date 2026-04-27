@@ -1,9 +1,17 @@
-"""AX sub-row classification and Dinas per-invoice aggregation (v1.9 §2e)."""
+"""AX sub-row classification and Dinas per-invoice aggregation (v1.9 §2e).
+
+v1.9.5 adds aggregate_ax_per_cluster() which aggregates physical quantities
+per ZGI cluster from Abrechnungsstrecken before DLV lookup, correcting the
+degressive-rate bias when multiple shipments share one billing cluster.
+"""
 from __future__ import annotations
 
+import logging
 from typing import Sequence
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def _nonempty(val: object) -> bool:
@@ -191,3 +199,189 @@ def reconstruct_ax_master(
         result["rechnungsnummern"] = []
 
     return result
+
+
+def aggregate_ax_per_cluster(
+    ax_df: pd.DataFrame,
+    abr_df: pd.DataFrame | None,
+    *,
+    ax_auftr_col: str = "Auftragsnummer",
+    abr_auftr_col: str = "Auftragsnummer",
+    abr_own_col: str = "Abrechnungsstrecke",
+    abr_zgi_col: str = "Zusammengefasst in",
+    ton_col: str = "Tonnage (eff.)",
+    ldm_col: str = "Lademeter",
+    vol_col: str = "Volumen",
+    erloes_cols: Sequence[str] = ("Erlöse Fracht",),
+) -> pd.DataFrame:
+    """Aggregate AX rows per ZGI cluster from Abrechnungsstrecken (v1.9.5 §2f).
+
+    When multiple AX shipments are billed together under one
+    "Zusammengefasst in" cluster, the DLV lookup must use the cluster's
+    total billing weight — not individual per-row weights.  Using individual
+    weights with a degressive tariff inflates the DLV-Soll, producing
+    systematic false-positive M2* findings.
+
+    Parameters
+    ----------
+    ax_df:
+        AX rows to aggregate.  Must contain *ax_auftr_col*.
+    abr_df:
+        Abrechnungsstrecken DataFrame with columns *abr_auftr_col*,
+        *abr_own_col*, and *abr_zgi_col*.  Pass ``None`` to skip clustering
+        (returns *ax_df* unchanged, with a warning).
+    ax_auftr_col, abr_auftr_col:
+        Column holding shipment order numbers in each DataFrame.
+    abr_own_col:
+        Column with the row's own Abrechnungsstrecke ID.
+    abr_zgi_col:
+        Column holding the cluster master reference ("Zusammengefasst in").
+    ton_col, ldm_col, vol_col:
+        Physical quantity column names to aggregate.
+    erloes_cols:
+        Revenue column names to aggregate.
+
+    Returns
+    -------
+    DataFrame with one row per ZGI cluster for multi-row clusters, and
+    unchanged rows for singletons.  Added columns:
+
+    - ``_cluster_id``       : ZGI master Abrechnungsstrecke ID (str)
+    - ``_n_cluster_rows``   : number of AX rows in this cluster
+    - ``_auftr_nrs``        : sorted list of Auftragsnummern in the cluster
+
+    For single-row clusters, ``_cluster_id`` equals the row's own
+    Auftragsnummer and ``_n_cluster_rows`` is 1.
+
+    Notes
+    -----
+    Clusters where rows span different CC+PLZ combinations are treated as
+    singleton lookups per row (logged as a warning); this should not occur
+    with HERMA data but is a defensive guard.
+    """
+    if abr_df is None:
+        logger.warning(
+            "aggregate_ax_per_cluster: abr_df is None — returning ax_df unchanged"
+        )
+        out = ax_df.copy()
+        out["_cluster_id"] = out[ax_auftr_col].astype(str)
+        out["_n_cluster_rows"] = 1
+        out["_auftr_nrs"] = out[ax_auftr_col].apply(lambda v: [str(v)])
+        return out
+
+    if abr_zgi_col not in abr_df.columns or abr_own_col not in abr_df.columns:
+        logger.warning(
+            "aggregate_ax_per_cluster: ZGI column '%s' or own-col '%s' missing — "
+            "returning ax_df unchanged",
+            abr_zgi_col, abr_own_col,
+        )
+        out = ax_df.copy()
+        out["_cluster_id"] = out[ax_auftr_col].astype(str)
+        out["_n_cluster_rows"] = 1
+        out["_auftr_nrs"] = out[ax_auftr_col].apply(lambda v: [str(v)])
+        return out
+
+    def _norm(v: object) -> str:
+        try:
+            return str(int(float(str(v).strip())))
+        except (ValueError, TypeError):
+            return ""
+
+    # Build ZGI cluster mapping: each Abrechnungsstrecke → cluster master ID
+    abr = abr_df.copy()
+    abr["_own_n"] = abr[abr_own_col].apply(_norm)
+    abr["_zgi_n"] = abr[abr_zgi_col].apply(lambda v: _norm(v) if pd.notna(v) else "")
+    # Self-referential rows are masters; ZGI=="": standalone (own cluster)
+    abr["_cluster_id"] = abr["_zgi_n"].where(abr["_zgi_n"] != "", abr["_own_n"])
+    abr["_auftr_n"] = abr[abr_auftr_col].apply(_norm)
+
+    auftr_to_cluster: dict[str, str] = (
+        abr.set_index("_auftr_n")["_cluster_id"].to_dict()
+    )
+
+    # Assign cluster_id to each AX row
+    ax = ax_df.copy()
+    ax["_auftr_n"] = ax[ax_auftr_col].astype(str).str.strip().apply(_norm)
+    ax["_cluster_id"] = ax["_auftr_n"].map(auftr_to_cluster)
+
+    # Rows not found in Abrechnungsstrecken → own Auftragsnr as cluster
+    missing_mask = ax["_cluster_id"].isna()
+    if missing_mask.any():
+        logger.debug(
+            "aggregate_ax_per_cluster: %d AX rows not found in Abrechnungsstrecken "
+            "— treated as singletons",
+            missing_mask.sum(),
+        )
+    ax.loc[missing_mask, "_cluster_id"] = ax.loc[missing_mask, "_auftr_n"]
+
+    # Identify multi-row clusters
+    cluster_sizes = ax.groupby("_cluster_id")[ax_auftr_col].transform("count")
+    multi_mask = cluster_sizes >= 2
+
+    # ── Validate destination uniformity for multi-row clusters ──────────────
+    empf_plz_col_candidates = ["Empfänger PLZ", "empf_plz", "plz"]
+    cc_col_candidates = ["Empfänger Land", "cc", "Nach Land"]
+    empf_col = next((c for c in empf_plz_col_candidates if c in ax.columns), None)
+    cc_col   = next((c for c in cc_col_candidates if c in ax.columns), None)
+
+    if empf_col and cc_col:
+        mixed_clusters = (
+            ax[multi_mask]
+            .groupby("_cluster_id")
+            .filter(lambda g: g[cc_col].nunique() > 1 or g[empf_col].nunique() > 1)
+            ["_cluster_id"].unique()
+        )
+        if len(mixed_clusters):
+            logger.warning(
+                "aggregate_ax_per_cluster: %d clusters have mixed CC+PLZ — "
+                "treated as singletons: %s",
+                len(mixed_clusters), mixed_clusters[:5],
+            )
+            multi_mask = multi_mask & ~ax["_cluster_id"].isin(mixed_clusters)
+
+    # ── Process singleton rows (pass-through) ───────────────────────────────
+    singleton_rows = ax[~multi_mask].copy()
+    singleton_rows["_n_cluster_rows"] = 1
+    singleton_rows["_auftr_nrs"] = singleton_rows[ax_auftr_col].apply(lambda v: [str(v)])
+    singleton_rows = singleton_rows.drop(columns=["_auftr_n"])
+
+    # ── Aggregate multi-row clusters ─────────────────────────────────────────
+    multi_rows = ax[multi_mask].copy()
+
+    def _agg_cluster(grp: pd.DataFrame) -> pd.Series:
+        out: dict = {}
+        # Take first value for non-aggregated columns
+        for col in ax.columns:
+            if col not in (ton_col, ldm_col, vol_col, *erloes_cols, "_auftr_n", "_cluster_id"):
+                out[col] = grp[col].iloc[0]
+        # Sum physical quantities
+        for col in (ton_col, ldm_col, vol_col):
+            if col in grp.columns:
+                out[col] = pd.to_numeric(grp[col], errors="coerce").fillna(0.0).sum()
+        # Sum revenue columns
+        for col in erloes_cols:
+            if col in grp.columns:
+                out[col] = pd.to_numeric(grp[col], errors="coerce").fillna(0.0).sum()
+        out["_n_cluster_rows"] = len(grp)
+        out["_auftr_nrs"] = sorted(grp[ax_auftr_col].astype(str).tolist())
+        return pd.Series(out)
+
+    if len(multi_rows):
+        aggregated = (
+            multi_rows.groupby("_cluster_id", sort=False)
+            .apply(_agg_cluster)
+            .reset_index()
+        )
+    else:
+        aggregated = pd.DataFrame()
+
+    # ── Combine and return ───────────────────────────────────────────────────
+    parts = [p for p in (singleton_rows, aggregated) if len(p)]
+    if not parts:
+        return ax_df.iloc[:0].copy()
+
+    result = pd.concat(parts, ignore_index=True)
+    # Ensure canonical column order: _cluster_id, _n_cluster_rows, _auftr_nrs first
+    meta_cols = ["_cluster_id", "_n_cluster_rows", "_auftr_nrs"]
+    other_cols = [c for c in result.columns if c not in meta_cols]
+    return result[meta_cols + other_cols]

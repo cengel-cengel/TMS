@@ -1,10 +1,11 @@
-"""Unit tests for v1.9 AX sub-row classification and Dinas aggregation."""
+"""Unit tests for v1.9/v1.9.5 AX sub-row classification and aggregation."""
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
 from tms.billing.aggregation import (
+    aggregate_ax_per_cluster,
     aggregate_dinas_per_invoice,
     classify_ax_rows,
     filter_comparison_set,
@@ -308,3 +309,79 @@ class TestReconstructAxMaster:
         result = reconstruct_ax_master(master, subs, physical_cols=("Tonnage (eff.)",), erloes_cols=("Erlöse Fracht",))
         assert abs(result["Tonnage (eff.)"] - 500.0) < 0.001
         assert result["Erlöse Fracht"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# aggregate_ax_per_cluster — v1.9.5 §2f
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def herma_abr_cluster():
+    """Mini Abrechnungsstrecken with one 3-row cluster + one singleton."""
+    return pd.DataFrame({
+        "Abrechnungsstrecke": [380298, 380299, 380300, 380400],
+        "Auftragsnummer":     [7091200055046, 7091200055033, 7091200055079, 7091200099000],
+        "Zusammengefasst in": [380298.0, 380298.0, 380298.0, float("nan")],
+    })
+
+
+@pytest.fixture()
+def herma_ax_rows():
+    """AX billing rows corresponding to herma_abr_cluster."""
+    return pd.DataFrame({
+        "Auftragsnummer": [7091200055046, 7091200055033, 7091200055079, 7091200099000],
+        "Tonnage (eff.)": [500.0, 300.0, 200.0, 800.0],
+        "Lademeter":      [1.0, 0.6, 0.4, 2.0],
+        "Volumen":        [2.0, 1.2, 0.8, 3.5],
+        "Erlöse Fracht":  [120.0, 80.0, 60.0, 200.0],
+        "Empfänger Land": ["ES", "ES", "ES", "FR"],
+        "Empfänger PLZ":  ["08830", "08830", "08830", "67100"],
+    })
+
+
+class TestAggregateAxPerCluster:
+    def test_multi_row_cluster_aggregates_physical(self, herma_abr_cluster, herma_ax_rows):
+        result = aggregate_ax_per_cluster(herma_ax_rows, herma_abr_cluster)
+        cluster = result[result["_n_cluster_rows"] == 3]
+        assert len(cluster) == 1
+        assert abs(cluster.iloc[0]["Tonnage (eff.)"] - 1000.0) < 0.001
+        assert abs(cluster.iloc[0]["Lademeter"] - 2.0) < 0.001
+        assert abs(cluster.iloc[0]["Erlöse Fracht"] - 260.0) < 0.001
+
+    def test_singleton_row_unchanged(self, herma_abr_cluster, herma_ax_rows):
+        result = aggregate_ax_per_cluster(herma_ax_rows, herma_abr_cluster)
+        singleton = result[result["_n_cluster_rows"] == 1]
+        assert len(singleton) == 1
+        assert abs(singleton.iloc[0]["Erlöse Fracht"] - 200.0) < 0.001
+        assert singleton.iloc[0]["_n_cluster_rows"] == 1
+
+    def test_output_row_count(self, herma_abr_cluster, herma_ax_rows):
+        # 3 rows → 1 cluster + 1 singleton = 2 output rows
+        result = aggregate_ax_per_cluster(herma_ax_rows, herma_abr_cluster)
+        assert len(result) == 2
+
+    def test_auftr_nrs_list_correct(self, herma_abr_cluster, herma_ax_rows):
+        result = aggregate_ax_per_cluster(herma_ax_rows, herma_abr_cluster)
+        cluster = result[result["_n_cluster_rows"] == 3].iloc[0]
+        auftr_strs = [str(v) for v in [7091200055046, 7091200055033, 7091200055079]]
+        assert set(cluster["_auftr_nrs"]) == set(auftr_strs)
+
+    def test_fallback_when_abr_df_none(self, herma_ax_rows):
+        result = aggregate_ax_per_cluster(herma_ax_rows, None)
+        assert len(result) == len(herma_ax_rows)
+        assert (result["_n_cluster_rows"] == 1).all()
+
+    def test_fallback_when_zgi_column_missing(self, herma_ax_rows):
+        abr_no_zgi = pd.DataFrame({
+            "Abrechnungsstrecke": [1, 2],
+            "Auftragsnummer": [7091200055046, 7091200099000],
+        })
+        result = aggregate_ax_per_cluster(herma_ax_rows, abr_no_zgi)
+        assert len(result) == len(herma_ax_rows)
+        assert (result["_n_cluster_rows"] == 1).all()
+
+    def test_does_not_modify_input(self, herma_abr_cluster, herma_ax_rows):
+        original_len = len(herma_ax_rows)
+        aggregate_ax_per_cluster(herma_ax_rows, herma_abr_cluster)
+        assert len(herma_ax_rows) == original_len
+        assert "_cluster_id" not in herma_ax_rows.columns

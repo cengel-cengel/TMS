@@ -2,7 +2,7 @@
 
 **Projekt:** Migration Dinas → AX (ERP-Wechsel)
 **Scope:** Billing-Accuracy-Audit für Kundentarife (Etappe 9a.x)
-**Stand:** 2026-04-24 | **Version:** v1.9.4
+**Stand:** 2026-04-27 | **Version:** v1.9.6
 
 ---
 
@@ -1535,3 +1535,4 @@ aus dem Dokument gegen die direkten Script-Ausgaben verifizieren.
 | 1.9.2 | 2026-04-24 | v1.9 | §2e Rule E neu: Master-Rekonstruktion — Master führt bei physischen Parametern (Tonnage, LDM, Stellplätze, Volumen, Colli); Sub-Summe als Fallback nur bei NaN/None-Master-Feld; 0 ist gültiger Master-Wert (kein Fallback-Trigger); Erlöse immer aus Sub-Summe; Rechnungsnummern aus Sub-Liste; Master-vs-Sub-Inkonsistenz = Datenredundanz, kein Finding; Implementierung: reconstruct_ax_master() in src/tms/billing/aggregation.py; Validierung: GEZE Auftrag 7092010001835006 (Tonnage=361,9 Master, Erlöse=97,28 Sub-Summe) |
 | 1.9.4 | 2026-04-24 | v1.9 | §2e Rule F neu: Vergleichs-Cluster-Format (nur Rule F, kein §2f/§2g/§3b/§3c/§8 enthalten) |
 | 1.9.5 | 2026-04-25 | v1.9 | §2f neu: Pipeline-Integrations-Flow (7-Schritt-Ablauf, STOP-Kriterien); §2g neu: billing_axis-Tabelle per Kunde (GEZE/EBM/Fischer/HERMA/CHT/Sika); §3b neu: Empirische Master-Sub-Muster (Fallback-Relevanz-Tabelle GEZE/HERMA/Fischer/CHT); §3c neu: Orphan-Sub-Pattern (Definition, GEZE 28 Subs/3.247 EUR, Pflicht-Check-Code); §8 neu: Kunden-Report-Format Standard — Klärungsposten-Typen, Eintrag-Format, RN-Adj-Listenformat |
+| 1.9.6 | 2026-04-27 | HERMA | §2f-Cluster-Erweiterung: aggregate_ax_per_cluster() — Pipeline aggregiert physische Mengen (Tonnage, LDM, Volumen) pro ZGI-Cluster aus Abrechnungsstrecken vor DLV-Lookup. DLV-Soll = DLV(Σ billing_weight pro Cluster), nicht Σ DLV(individual bw). Erforderlich bei degressiv gestaffelten DLVs: Σ DLV(individual) > DLV(Σ) → systematische DLV-Soll-Überschätzung (HERMA-Diagnose: +123.295 EUR Bias auf 621 Multi-Cluster). Implementierung: aggregate_ax_per_cluster() in src/tms/billing/aggregation.py. Fallback: Row-Level-Lookup wenn keine Abrechnungsstrecke vorhanden. Edge-Case-Guard: gemischte CC+PLZ in einem Cluster → Singleton-Behandlung + Log-Warning. HERMA-Präzedenz: Weight-Driver M2* -125.396 EUR → nach Korrektur -53.897 EUR (57% Artefakt). |
