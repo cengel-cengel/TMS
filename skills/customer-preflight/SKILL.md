@@ -642,3 +642,48 @@ calc = etik_calc if "etiketten" in row["Versender Name"].lower() else haft_calc
 **Generalisierung:** Bei DIAGNOSE 2 immer mehrere DLV-Unterordner als Warnsignal
 für Sparten-Routing prüfen. Wenn Unterordner vorhanden: distinct Versender-Name-
 Werte in AX-Daten ausgeben und mit Ordnerstruktur abgleichen.
+
+---
+
+### P14 — DLV-Datei "durch neue Tarife ersetzt" kontaminiert Versionsvergleich
+
+**Situation:** DLV-Verzeichnisse enthalten häufig historische DLV-Versionen in
+Unterordnern wie `durch neue Tarife ersetzt/`, `Archiv/` oder `ersetzt durch neue
+Offerten/`. Ein Pre-Flight-Versionsvergleich (DIAGNOSE 2 Gate: zwei DLV-Versionen
+vergleichen) lädt versehentlich eine veraltete Datei aus einem solchen Archiv-
+Unterordner und vergleicht sie mit der aktuellen Version.
+
+**Folge:** Der gemeldete Δ-Wert ist ein Vergleich mit einer veralteten Tarifdatei,
+nicht mit der tatsächlich in der Produktion verwendeten. Im HERMA-Präzedenzfall wurde
+ein Δ bis −560 EUR (ES Etiketten ≥ 3100 kg) gemeldet — tatsächlich haben die aktuelle
+Etiketten-NT-Datei und die Haftmaterial-Datei **identische** Raten für ≤ 3000 kg.
+Der scheinbare Unterschied stammte aus dem veralteten `durch neue Tarife ersetzte`-File.
+
+**Erkennung in DIAGNOSE 2:**
+1. Beim DLV-Listing: `rglob("*.xlsx")` erfasst auch Archiv-Unterordner.
+   Archiv-Marker als Pfad-Substrings ausschließen:
+   ```python
+   ARCHIV_MARKER = ['durch neue', 'ersetzt', 'archiv', 'alt', 'obsolet', 'historisch']
+   def is_active_dlv(path: Path) -> bool:
+       pstr = str(path).lower()
+       return not any(m in pstr for m in ARCHIV_MARKER)
+   active_dlvs = [p for p in DLV_DIR.rglob('*.xlsx') if is_active_dlv(p)]
+   ```
+2. Dateinamen-Vergleich: NT-Suffix ("_NT") oder Datum im Namen ist ein Hinweis
+   auf eine neue Tarif-Version; Dateien ohne diese Marker könnten veraltet sein.
+3. Wenn ein Archiv-Unterordner existiert und der Vergleich große Δ zeigt: immer
+   prüfen, ob die aktuelle NT-Datei tatsächlich andere Werte hat (manueller
+   Spot-Check 5 Zeilen).
+
+**Fix:** Archiv-Filter in alle DLV-Scan-Routinen integrieren. Beim Calculator-
+Loading immer explizit den aktiven Pfad aus der definierten Konstante nehmen
+(z. B. `_ETIK_2026_OHNE`), nie per `glob()` aus dem vollen Verzeichnisbaum.
+
+**Präzedenz:** HERMA Gate A (2026-04-27). Pre-Flight meldete Δ bis −560 EUR
+für Etiketten-ES (3100 kg+) basierend auf Vergleich mit `ersetzt durch neue
+Tarife/20251212_Herma_Frachtraten ohne VL_2026-2028.xlsx`. Aktueller NT-Stand:
+`20251212_Herma_Frachtraten ohne VL_2026-2028_NT.xlsx` — identisch für ≤ 3000 kg.
+
+**Generalisierung:** Jeder Pre-Flight-Versionsvergleich muss Archiv-Unterordner
+explizit ausschließen. Regel: "Aktive Datei = kein Archiv-Marker im Pfad UND
+größtes Datum im Dateinamen innerhalb des Zielordners."
