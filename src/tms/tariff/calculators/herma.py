@@ -1,10 +1,14 @@
 """
 HERMA GmbH (KNR 423650) — flat-per-shipment per-country tariff calculator.
 
-Rate files (POST period Sep–Oct 2025):
-  ES/IT/FR/GB/IRL/CH → 2025 BiddingMatrix Workbook_1
-  PT/RS              → 2025 BiddingMatrix Workbook_4
-  AT (zeros in 2025) → 2026 Haftmaterial DLV
+Rate files:
+  shipment_date < 2026-01-01:
+    ES/IT/FR/GB/IRL/CH → 2025 BiddingMatrix Workbook_1
+    PT/RS              → 2025 BiddingMatrix Workbook_4
+  shipment_date >= 2026-01-01 (or None):
+    ES/IT/FR/GB/IRL/CH/PT/RS → 2026 Haftmaterial DLV (default)
+                                or 2026 Etiketten DLV if dlv_2026_ohne/mit overridden
+  AT (zeros in 2025) → always 2026 DLV, regardless of shipment_date
 
 Billing weight: max(tonnage_kg, lademeter × ldm_factor, volume_cbm × vol_factor)
   ES/AT/GB/IRL/PT : ldm_factor=1500, vol_factor=300
@@ -15,6 +19,10 @@ Billing weight: max(tonnage_kg, lademeter × ldm_factor, volume_cbm × vol_facto
 
 Rate selection: billing_weight <= 3000 → ohne VL = mit VL;
                billing_weight >  3000 → mit VL
+
+Gate A: Pass dlv_2026_ohne/_mit to HermaCalculator() to switch DLV product line
+        (e.g. Etiketten vs. Haftmaterial).
+Gate B: shipment_date drives 2025-vs-2026 DLV dispatch for WB1/WB4 countries.
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ _DLV_DIR = Path(
 
 _HAFT_2025_DIR = _DLV_DIR / "Herma Haftmaterial" / "2025"
 _HAFT_2026_DIR = _DLV_DIR / "Herma Haftmaterial" / "2026"
+_ETIK_2026_DIR = _DLV_DIR / "Herma Etiketten"   / "2026"
 
 _WB1_OHNE = _HAFT_2025_DIR / "ohne Vorholung" / "BiddingMatrix_T2307040744_Workbook_1_2023-07-04T13-49-35.xlsx"
 _WB1_MIT  = _HAFT_2025_DIR / "mit Vorholung"  / "R2_BiddingMatrix_T2306201202_Workbook_1_2023-07-03T14-39-24.xlsx"
@@ -41,6 +50,12 @@ _WB4_OHNE = _HAFT_2025_DIR / "ohne Vorholung" / "BiddingMatrix_T2307041343_Workb
 _WB4_MIT  = _HAFT_2025_DIR / "mit Vorholung"  / "R2_BiddingMatrix_T2306201202_Workbook_4_2023-07-03T14-40-12.xlsx"
 _AT_OHNE  = _HAFT_2026_DIR / "20251212_Herma_Frachtraten ohne VL_2026-2028.xlsx"
 _AT_MIT   = _HAFT_2026_DIR / "20251212_Herma_Frachtraten mit VL_2026-2028.xlsx"
+
+# Etiketten 2026 DLV (NT = neue Tarife; passed as dlv_2026_ohne/mit to HermaCalculator)
+_ETIK_2026_OHNE = _ETIK_2026_DIR / "20251212_Herma_Frachtraten ohne VL_2026-2028_NT.xlsx"
+_ETIK_2026_MIT  = _ETIK_2026_DIR / "20251212_Herma_Frachtraten mit VL_2026-2028_NT.xlsx"
+
+_2026_CUTOFF = date(2026, 1, 1)
 
 # countries in 2025 WB1 with non-zero rates
 _WB1_COUNTRIES = frozenset({"ES", "IT", "FR", "GB", "IRL", "CH"})
@@ -405,37 +420,52 @@ def _load_sheet(path: Path, sheet: str) -> list[tuple]:
     return _SHEET_CACHE[key]  # type: ignore
 
 
-def _get_wb_sheet_name(cc: str) -> tuple[Path, Path, str] | None:
+def _get_wb_sheet_name(
+    cc: str,
+    use_2026: bool,
+    dlv_2026_ohne: Path,
+    dlv_2026_mit: Path,
+) -> tuple[Path, Path, str] | None:
     """Return (ohne_path, mit_path, sheet_name) for a country code."""
     if cc in _WB1_COUNTRIES:
         sheet = "IRL" if cc == "IRL" else cc
+        if use_2026:
+            return dlv_2026_ohne, dlv_2026_mit, sheet
         return _WB1_OHNE, _WB1_MIT, sheet
     if cc in _WB4_COUNTRIES:
+        if use_2026:
+            return dlv_2026_ohne, dlv_2026_mit, cc
         return _WB4_OHNE, _WB4_MIT, cc
     if cc in _AT_COUNTRIES:
-        return _AT_OHNE, _AT_MIT, cc
+        # AT has no 2025 rates; always use 2026 DLV regardless of shipment_date
+        return dlv_2026_ohne, dlv_2026_mit, cc
     return None
 
 
-# country → (ohne_parsed, mit_parsed, type_str, path_ohne, path_mit, valid_from, valid_to)
-_COUNTRY_CACHE: dict[str, tuple] = {}
+# (cc, use_2026, dlv_2026_ohne_str) → (ohne_parsed, mit_parsed, type, path_ohne, path_mit, vfrom, vto)
+_COUNTRY_CACHE: dict[tuple, tuple] = {}
 
 
-def _parse_country(cc: str) -> tuple:
+def _parse_country(
+    cc: str,
+    use_2026: bool,
+    dlv_2026_ohne: Path,
+    dlv_2026_mit: Path,
+) -> tuple:
     """Parse and cache rate tables for a country. Returns (ohne, mit, type, f_ohne, f_mit, vfrom, vto)."""
-    if cc in _COUNTRY_CACHE:
-        return _COUNTRY_CACHE[cc]
+    cache_key = (cc, use_2026, str(dlv_2026_ohne))
+    if cache_key in _COUNTRY_CACHE:
+        return _COUNTRY_CACHE[cache_key]
 
-    info = _get_wb_sheet_name(cc)
+    info = _get_wb_sheet_name(cc, use_2026, dlv_2026_ohne, dlv_2026_mit)
     if info is None:
         raise LookupError(f"No DLV configured for country {cc!r}")
     path_ohne, path_mit, sheet = info
 
-    # Valid date ranges
-    if cc in _AT_COUNTRIES:
+    if cc in _AT_COUNTRIES or use_2026:
         vfrom, vto = date(2026, 1, 1), date(2028, 12, 31)
     else:
-        vfrom, vto = date(2024, 1, 1), date(2026, 12, 31)
+        vfrom, vto = date(2024, 1, 1), date(2025, 12, 31)
 
     rows_ohne = _load_sheet(path_ohne, sheet)
     rows_mit  = _load_sheet(path_mit, sheet)
@@ -462,9 +492,7 @@ def _parse_country(cc: str) -> tuple:
         ttype = "pt"
     else:
         # Von/Bis/Zone type (ES, AT, RS, MK, BA, etc.)
-        hdr_row = 3 if cc not in ("ES",) else 4
-        # ES uses row 4 as header (rows 0-4 in WB1), AT uses row 3
-        # Detect hdr_row from actual content
+        hdr_row = 3
         for ri, row in enumerate(rows_ohne[:8]):
             if row[0] == "Bezeichnung" or row[0] == "Bezeichung":
                 hdr_row = ri
@@ -475,7 +503,7 @@ def _parse_country(cc: str) -> tuple:
         ttype = "vbz"
 
     result = (ohne_data, mit_data, ttype, path_ohne, path_mit, vfrom, vto)
-    _COUNTRY_CACHE[cc] = result
+    _COUNTRY_CACHE[cache_key] = result
     return result
 
 
@@ -499,9 +527,18 @@ def _billing_weight(cc: str, tonnage_kg: float, lademeter: float, volume_cbm: fl
 # Main rate lookup dispatcher
 # ---------------------------------------------------------------------------
 
-def _rate_lookup(cc: str, plz: str, billing_wt: float) -> tuple[float, str, Path, date, date]:
+def _rate_lookup(
+    cc: str,
+    plz: str,
+    billing_wt: float,
+    use_2026: bool,
+    dlv_2026_ohne: Path,
+    dlv_2026_mit: Path,
+) -> tuple[float, str, Path, date, date]:
     """Return (rate, zone_info, dlv_path, valid_from, valid_to)."""
-    ohne_data, mit_data, ttype, path_ohne, path_mit, vfrom, vto = _parse_country(cc)
+    ohne_data, mit_data, ttype, path_ohne, path_mit, vfrom, vto = _parse_country(
+        cc, use_2026, dlv_2026_ohne, dlv_2026_mit
+    )
     use_mit = billing_wt > _VL_THRESHOLD
     data = mit_data if use_mit else ohne_data
     path = path_mit if use_mit else path_ohne
@@ -560,8 +597,26 @@ def _it_factors(plz: str) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 
 class HermaCalculator(TariffCalculator):
+    """
+    HERMA tariff calculator.
+
+    Parameters
+    ----------
+    dlv_2026_ohne, dlv_2026_mit :
+        Override the 2026 DLV files.  Defaults are Haftmaterial.
+        Pass _ETIK_2026_OHNE/_MIT to price Etiketten shipments.
+    """
+
     customer_name = "HERMA GmbH"
     pricing_basis = "kg"
+
+    def __init__(
+        self,
+        dlv_2026_ohne: Path = _AT_OHNE,
+        dlv_2026_mit:  Path = _AT_MIT,
+    ) -> None:
+        self._dlv_2026_ohne = dlv_2026_ohne
+        self._dlv_2026_mit  = dlv_2026_mit
 
     def calculate(
         self,
@@ -592,7 +647,15 @@ class HermaCalculator(TariffCalculator):
         vol_weight = vol_val * vol_f if vol_val > 0 else 0.0
         billing_wt = max(tonnage_kg, ldm_weight, vol_weight)
 
-        rate, zone_info, dlv_path, vfrom, vto = _rate_lookup(cc, empf_plz, billing_wt)
+        # AT countries have no 2025 rates; others dispatch by shipment_date
+        use_2026 = (cc in _AT_COUNTRIES) or (
+            shipment_date is None or shipment_date >= _2026_CUTOFF
+        )
+
+        rate, zone_info, dlv_path, vfrom, vto = _rate_lookup(
+            cc, empf_plz, billing_wt,
+            use_2026, self._dlv_2026_ohne, self._dlv_2026_mit,
+        )
 
         billing_det = (
             "ldm" if ldm_weight >= tonnage_kg and ldm_weight >= vol_weight and ldm_weight > tonnage_kg
