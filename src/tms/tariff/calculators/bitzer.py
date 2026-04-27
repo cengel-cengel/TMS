@@ -71,9 +71,13 @@ _PLANT_MAP: dict[str, str] = {
 }
 
 # France-specific special destinations (not in zone tariff)
-_FR_SPECIAL = {
+_FR_SPECIAL: dict[str, str] = {
     "77380": "Combs La Ville",
     "13400": "Aubagne",
+}
+_FR_SPECIAL_PATHS: dict[str, Path] = {
+    "77380": _ROT_2025 / "20241213_Bitzer_Export FR-77380 Combs La Ville.xlsx",
+    "13400": _ROT_2025 / "20241213_Bitzer_Export FR-13400 Aubagne.xlsx",
 }
 
 
@@ -263,6 +267,83 @@ def _expand_spec(spec: str) -> list[str]:
     return []
 
 
+def _load_single_dest_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], Decimal]:
+    """
+    Parse a Bitzer single-destination DLV (one rate column, no zone map).
+
+    All bands use zone_num=1 as a placeholder.  Per-Sendung flat rate is
+    detected from "per Sendung" in the band row.  "Kompletter LKW" is mapped
+    to weight_limit=999999 (open-ended FTL cap).  Out-of-order weight limits
+    (e.g. "1000" typo for "10000" in FR-13400) are multiplied by 10 once.
+
+    Rate column layout:
+      "bis" rows         → col0="bis",  col1=weight, col2=rate
+      "kompletter LKW"   → col0=label,  col1=rate
+    """
+    df = pd.read_excel(path, sheet_name=sheet, header=None)
+    rows = list(df.iterrows())
+
+    minimum = Decimal("0")
+    raw: list[tuple[int, Decimal, bool]] = []  # (weight_limit, rate, per_sendung)
+
+    for pos, (_, row) in enumerate(rows):
+        cell0 = str(row.iloc[0]).strip().lower()
+        cell1 = str(row.iloc[1]).strip().lower() if len(row) > 1 else ""
+
+        # Minimum label may be in col 0 or col 1 (layout varies by DLV)
+        if "minimum" in cell0 or "mindest" in cell0:
+            try:
+                minimum = Decimal(str(float(row.iloc[1])))
+            except (ValueError, TypeError):
+                pass
+            continue
+        if "minimum" in cell1 or "mindest" in cell1:
+            try:
+                minimum = Decimal(str(float(row.iloc[2])))
+            except (ValueError, TypeError):
+                pass
+            continue
+
+        is_bis = cell0 == "bis"
+        # FTL label may be in col 0 or col 1 (layout varies)
+        ftl_in_col0 = "komplett" in cell0 and "lkw" in cell0
+        ftl_in_col1 = "komplett" in cell1 and "lkw" in cell1
+        is_ftl = ftl_in_col0 or ftl_in_col1
+
+        if not is_bis and not is_ftl:
+            continue
+
+        try:
+            if is_ftl:
+                wlim = 999999
+                # Rate is one column after the label column
+                rate = Decimal(str(float(row.iloc[2 if ftl_in_col1 else 1])))
+            else:
+                wlim = int(float(str(row.iloc[1]).strip()))
+                rate = Decimal(str(float(row.iloc[2])))
+        except (ValueError, TypeError, IndexError):
+            continue
+
+        per_sendung = is_ftl or any("per sendung" in str(v).lower() for v in row)
+        if not per_sendung and pos + 1 < len(rows):
+            _, nrow = rows[pos + 1]
+            per_sendung = any("per sendung" in str(v).lower() for v in nrow)
+
+        raw.append((wlim, rate, per_sendung))
+
+    # Fix out-of-order weight bands (e.g. "1000" typo for "10000")
+    max_seen = 0
+    bands: list[_Band] = []
+    for wlim, rate, ps in raw:
+        if 0 < wlim < max_seen:
+            wlim *= 10
+        max_seen = max(max_seen, wlim)
+        bands.append(_Band(weight_limit=wlim, rates={1: rate}, per_sendung=ps))
+
+    bands.sort(key=lambda b: b.weight_limit)
+    return bands, minimum
+
+
 def _lookup_zone(plz: str, zone_map: dict[str, int]) -> int:
     """
     Return zone for a PLZ.  Priority: exact → 3-digit prefix → 2-digit prefix.
@@ -357,6 +438,21 @@ class BitzCalculator(TariffCalculator):
     def __init__(self) -> None:
         self._cache: dict[str, _CountryTariff] = {}
 
+    def _get_special_dest(self, plz5: str) -> _CountryTariff:
+        key = f"FR_special_{plz5}"
+        if key in self._cache:
+            return self._cache[key]
+        path = _FR_SPECIAL_PATHS[plz5]
+        bands, min_val = _load_single_dest_dlv(path)
+        ct = _CountryTariff(
+            bands=bands,
+            zone_map={plz5: 1},   # exact 5-digit match → zone 1
+            minimum={1: min_val},  # zone 1 minimum
+            dlv_name=path.name,
+        )
+        self._cache[key] = ct
+        return ct
+
     def _get_country(self, empf_land: str, origin_plz: str) -> _CountryTariff:
         key = empf_land.upper()
         if key in self._cache:
@@ -397,20 +493,41 @@ class BitzCalculator(TariffCalculator):
 
         empf_land_up = empf_land.strip().upper()
 
-        # FR special-destination guard
-        if empf_land_up == "FR" and str(empf_plz).strip().zfill(5) in _FR_SPECIAL:
-            dest_name = _FR_SPECIAL[str(empf_plz).strip().zfill(5)]
-            raise LookupError(
-                f"FR PLZ {empf_plz} ({dest_name}) uses a separate DLV "
-                f"not yet implemented in this calculator."
+        plz5 = str(empf_plz).strip().zfill(5)
+        plant = _PLANT_MAP.get(str(origin_plz).strip(), "unknown")
+        billing_kg = max(100, math.ceil(tonnage_kg / 100) * 100)
+
+        # FR special destinations use their own single-destination DLVs
+        if empf_land_up == "FR" and plz5 in _FR_SPECIAL:
+            ct = self._get_special_dest(plz5)
+            dest_name = _FR_SPECIAL[plz5]
+            basispreis, is_per_sendung = _calc_price(1, billing_kg, ct.bands, ct.minimum)
+            notes = [
+                f"plant={plant} (origin_plz={origin_plz})",
+                f"empf_land=FR",
+                f"zone=special:{dest_name}",
+                f"billing_kg={billing_kg}",
+            ]
+            if is_per_sendung:
+                notes.append("pricing=per_sendung")
+            return TariffResult(
+                basispreis=basispreis,
+                diesel_surcharge=None,
+                maut_surcharge=None,
+                currency="EUR",
+                tariff_file=ct.dlv_name,
+                tariff_valid_from=_VALID_FROM_2025,
+                tariff_valid_to=_VALID_TO_2025,
+                notes=notes,
+                tarifgruppe=f"bitzer_fr_special_{plz5}_{plant.lower()}",
+                tariff_file_used=ct.dlv_name,
+                tariff_year_used=_VALID_FROM_2025.year,
             )
 
         ct = self._get_country(empf_land_up, origin_plz)
-        billing_kg = max(100, math.ceil(tonnage_kg / 100) * 100)
         zone = _lookup_zone(empf_plz, ct.zone_map)
         basispreis, is_per_sendung = _calc_price(zone, billing_kg, ct.bands, ct.minimum)
 
-        plant = _PLANT_MAP.get(str(origin_plz).strip(), "unknown")
         notes = [
             f"plant={plant} (origin_plz={origin_plz})",
             f"empf_land={empf_land_up}",
