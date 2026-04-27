@@ -1,5 +1,9 @@
 # HERMA GmbH — Tarif-Audit Cluster-Report v1.9.4
 
+> **HINWEIS:** Diese Version enthält einen Aggregations-Artefakt von ~126.622 EUR (89 % des
+> ausgewiesenen Net-Δ). Ursache: DLV-Berechnung per Einzelzeile statt per ZGI-Cluster (§2f).
+> Korrigierte Version: [`docs/v1_9_6_herma_cluster_report.md`](v1_9_6_herma_cluster_report.md)
+
 **Erstellt:** 2026-04-27  
 **Ladedatum-Bereich:** 2025-04-01 — 2026-03-30  
 **Methodik-Version:** v1.9.4  
