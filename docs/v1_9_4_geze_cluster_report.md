@@ -1,5 +1,9 @@
 # GEZE v1.9.4 — Cluster-Report: PRE-Dinas × POST-AX
 
+> **HINWEIS:** Dieser Report nutzt keine ZGI-Cluster-Aggregation (§2f). Für den
+> ersten v1.9.6-konformen AX-vs-DLV-Direktvergleich mit Cluster-Aggregation:
+> [`docs/v1_9_6_geze_cluster_report.md`](v1_9_6_geze_cluster_report.md)
+
 **Stand:** 2026-04-24 | **KNR:** 406035 | **Methodik:** v1.9.4 §2e Rule F
 **Periodenversatz:** Dinas PRE (2024-09-25–2025-08-15) × AX POST (2025-09-26–2026-03-30)
 
