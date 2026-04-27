@@ -60,6 +60,8 @@ _COUNTRY_DLV: dict[str, tuple[Path, str]] = {
     "FR": (_ROT_2025, "*Export*Frankreich*Zonentarif*"),
     "ES": (_ROT_2025, "*Export*Spanien*"),
     "CH": (_ROT_2025, "*Export*Schweiz*"),
+    # PT sheet name is "Export ES" (Noerpel typo); sheet=0 loads Portugal data correctly.
+    "PT": (_ROT_2025, "*Export*Portugal*Zonentarif*"),
 }
 
 _VALID_FROM_2025 = date(2025, 1, 1)
@@ -72,14 +74,25 @@ _PLANT_MAP: dict[str, str] = {
     "04435": "Schkeuditz",
 }
 
-# France-specific special destinations (not in zone tariff)
-_FR_SPECIAL: dict[str, str] = {
-    "77380": "Combs La Ville",
-    "13400": "Aubagne",
+# Single-destination special tariffs per country: PLZ key → (dest name, DLV path).
+# FR keys are 5-digit; PT keys are 4-digit (Portuguese PLZ format).
+_SPECIAL_DEST_NAMES: dict[str, dict[str, str]] = {
+    "FR": {
+        "77380": "Combs La Ville",
+        "13400": "Aubagne",
+    },
+    "PT": {
+        "6001": "Castelo Branco",
+    },
 }
-_FR_SPECIAL_PATHS: dict[str, Path] = {
-    "77380": _ROT_2025 / "20241213_Bitzer_Export FR-77380 Combs La Ville.xlsx",
-    "13400": _ROT_2025 / "20241213_Bitzer_Export FR-13400 Aubagne.xlsx",
+_SPECIAL_DEST_PATHS: dict[str, dict[str, Path]] = {
+    "FR": {
+        "77380": _ROT_2025 / "20241213_Bitzer_Export FR-77380 Combs La Ville.xlsx",
+        "13400": _ROT_2025 / "20241213_Bitzer_Export FR-13400 Aubagne.xlsx",
+    },
+    "PT": {
+        "6001": _ROT_2025 / "20241213_Bitzer_Export PT-6001 Castelo Branco.xlsx",
+    },
 }
 
 
@@ -258,8 +271,10 @@ def _expand_spec(spec: str) -> list[str]:
             result.extend(_expand_spec(part.strip()))
         return result
 
-    # Range "A - B" or "A-B"
-    range_m = re.match(r"^(\d+)\s*-\s*(\d+)$", spec)
+    # Range "A - B" or "A-B" — strip trailing parenthetical comments first
+    # (e.g. "90 - 99 (Madeira, Azoren)" → "90 - 99")
+    spec_clean = re.sub(r"\s*\(.*", "", spec).strip()
+    range_m = re.match(r"^(\d+)\s*-\s*(\d+)$", spec_clean)
     if range_m:
         start_s, end_s = range_m.group(1), range_m.group(2)
         width = max(len(start_s), len(end_s))
@@ -317,12 +332,13 @@ def _load_single_dest_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band]
             continue
 
         is_bis = cell0 == "bis"
+        is_ab  = cell0 == "ab"   # open-ended last band (e.g. PT-6001 "ab 15001")
         # FTL label may be in col 0 or col 1 (layout varies)
         ftl_in_col0 = "komplett" in cell0 and "lkw" in cell0
         ftl_in_col1 = "komplett" in cell1 and "lkw" in cell1
         is_ftl = ftl_in_col0 or ftl_in_col1
 
-        if not is_bis and not is_ftl:
+        if not is_bis and not is_ab and not is_ftl:
             continue
 
         try:
@@ -330,6 +346,9 @@ def _load_single_dest_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band]
                 wlim = 999999
                 # Rate is one column after the label column
                 rate = Decimal(str(float(row.iloc[2 if ftl_in_col1 else 1])))
+            elif is_ab:
+                wlim = 999999  # open-ended; lower bound ignored for pricing
+                rate = Decimal(str(float(row.iloc[2])))
             else:
                 wlim = int(float(str(row.iloc[1]).strip()))
                 rate = Decimal(str(float(row.iloc[2])))
@@ -535,19 +554,19 @@ class BitzCalculator(TariffCalculator):
     def __init__(self) -> None:
         self._cache: dict[str, _CountryTariff] = {}
 
-    def _get_special_dest(self, plz5: str) -> _CountryTariff:
-        key = f"FR_special_{plz5}"
-        if key in self._cache:
-            return self._cache[key]
-        path = _FR_SPECIAL_PATHS[plz5]
+    def _get_special_dest(self, plz_key: str, path: Path) -> _CountryTariff:
+        """Load and cache a single-destination special tariff."""
+        cache_key = f"special_{plz_key}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         bands, min_val = _load_single_dest_dlv(path)
         ct = _CountryTariff(
             bands=bands,
-            zone_map={plz5: 1},   # exact 5-digit match → zone 1
-            minimum={1: min_val},  # zone 1 minimum
+            zone_map={plz_key: 1},  # exact PLZ match → zone 1
+            minimum={1: min_val},
             dlv_name=path.name,
         )
-        self._cache[key] = ct
+        self._cache[cache_key] = ct
         return ct
 
     def _get_country(self, empf_land: str, origin_plz: str) -> _CountryTariff:
@@ -593,18 +612,20 @@ class BitzCalculator(TariffCalculator):
 
         empf_land_up = empf_land.strip().upper()
 
-        plz5 = str(empf_plz).strip().zfill(5)
+        plz_raw = str(empf_plz).strip()
         plant = _PLANT_MAP.get(str(origin_plz).strip(), "unknown")
         billing_kg = max(100, math.ceil(tonnage_kg / 100) * 100)
 
-        # FR special destinations use their own single-destination DLVs
-        if empf_land_up == "FR" and plz5 in _FR_SPECIAL:
-            ct = self._get_special_dest(plz5)
-            dest_name = _FR_SPECIAL[plz5]
+        # Single-destination special tariffs (FR 5-digit, PT 4-digit PLZ)
+        land_specials = _SPECIAL_DEST_NAMES.get(empf_land_up, {})
+        land_paths    = _SPECIAL_DEST_PATHS.get(empf_land_up, {})
+        if plz_raw in land_specials:
+            dest_name = land_specials[plz_raw]
+            ct = self._get_special_dest(plz_raw, land_paths[plz_raw])
             basispreis, is_per_sendung = _calc_price(1, billing_kg, ct.bands, ct.minimum)
             notes = [
                 f"plant={plant} (origin_plz={origin_plz})",
-                f"empf_land=FR",
+                f"empf_land={empf_land_up}",
                 f"zone=special:{dest_name}",
                 f"billing_kg={billing_kg}",
             ]
@@ -619,7 +640,7 @@ class BitzCalculator(TariffCalculator):
                 tariff_valid_from=_VALID_FROM_2025,
                 tariff_valid_to=_VALID_TO_2025,
                 notes=notes,
-                tarifgruppe=f"bitzer_fr_special_{plz5}_{plant.lower()}",
+                tarifgruppe=f"bitzer_{empf_land_up.lower()}_special_{plz_raw}_{plant.lower()}",
                 tariff_file_used=ct.dlv_name,
                 tariff_year_used=_VALID_FROM_2025.year,
             )
