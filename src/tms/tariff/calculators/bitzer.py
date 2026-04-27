@@ -59,6 +59,7 @@ _COUNTRY_DLV: dict[str, tuple[Path, str]] = {
     "AT": (_ROT_2025, "*Export*sterreich*"),
     "FR": (_ROT_2025, "*Export*Frankreich*Zonentarif*"),
     "ES": (_ROT_2025, "*Export*Spanien*"),
+    "CH": (_ROT_2025, "*Export*Schweiz*"),
 }
 
 _VALID_FROM_2025 = date(2025, 1, 1)
@@ -355,6 +356,91 @@ def _load_single_dest_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band]
     return bands, minimum
 
 
+def _load_ch_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, int], dict[int, Decimal]]:
+    """
+    Parse the Bitzer Switzerland DLV.
+
+    Structure: rows = PLZ groups, columns = weight categories (transposed vs.
+    standard format).  Each PLZ group becomes a "zone" (sequential numbering).
+    Col 2 = Minimum per Sendung; cols 3-10 = per-100-kg rates for 500-10000 kg.
+    Comma/plus-separated PLZ specs in col 1.  4-digit exact PLZ entries also
+    present (e.g. 2074, 7302).
+
+    Extra charges NOT included in returned rates:
+      - Verzollung CH: 35 EUR/Sendung
+      - B2C-Zuschlag: 25 EUR/Sendung
+      - Währungszuschlag: 0.03 × freight
+    Caller is responsible for documenting these as DQ notes.
+    """
+    df = pd.read_excel(path, sheet_name=sheet, header=None)
+    rows = list(df.iterrows())
+
+    # 1. Find weight-category header row (col 3 = 500, col 4 = 1000, ...)
+    weight_cols: dict[int, int] = {}
+    header_row_pos: int | None = None
+    for pos, (_, row) in enumerate(rows):
+        try:
+            if int(row.iloc[3]) == 500 and int(row.iloc[4]) == 1000:
+                for ci in range(3, len(row)):
+                    try:
+                        wt = int(row.iloc[ci])
+                        if wt >= 500:
+                            weight_cols[ci] = wt
+                    except (ValueError, TypeError):
+                        pass
+                header_row_pos = pos
+                break
+        except (ValueError, TypeError):
+            pass
+
+    if header_row_pos is None:
+        raise ValueError(f"Cannot find weight header row in {path.name}")
+
+    # 2. Parse data rows: col 1 = PLZ spec, col 2 = minimum, cols 3+ = rates
+    zone_num = 0
+    zone_map: dict[str, int] = {}
+    minimum_map: dict[int, Decimal] = {}
+    rate_matrix: dict[int, dict[int, Decimal]] = {w: {} for w in weight_cols.values()}
+
+    for pos, (_, row) in enumerate(rows):
+        if pos <= header_row_pos:
+            continue
+        plz_cell = row.iloc[1]
+        if pd.isna(plz_cell) or str(plz_cell).strip() in ("nan", ""):
+            continue
+        try:
+            min_val = float(row.iloc[2])
+            if pd.isna(min_val):
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        zone_num += 1
+
+        # Parse PLZ spec: split on comma/plus, expand each part
+        for part in re.split(r"[,+]", str(plz_cell)):
+            for prefix in _expand_spec(part.strip()):
+                zone_map[prefix] = zone_num
+
+        minimum_map[zone_num] = Decimal(str(min_val))
+
+        for ci, wt in weight_cols.items():
+            try:
+                rate = float(row.iloc[ci])
+                if not math.isnan(rate) and rate > 0:
+                    rate_matrix[wt][zone_num] = Decimal(str(rate))
+            except (ValueError, TypeError):
+                pass
+
+    # 3. Transpose: weight_kg → _Band with all zones
+    bands: list[_Band] = []
+    for wt in sorted(rate_matrix.keys()):
+        if rate_matrix[wt]:
+            bands.append(_Band(weight_limit=wt, rates=rate_matrix[wt]))
+
+    return bands, zone_map, minimum_map
+
+
 def _lookup_zone(plz: str, zone_map: dict[str, int]) -> int:
     """
     Return zone for a PLZ.  Priority: exact → 3-digit prefix → 2-digit prefix.
@@ -478,7 +564,10 @@ class BitzCalculator(TariffCalculator):
 
         dlv_dir, glob = entry
         path = _find_dlv(dlv_dir, glob)
-        bands, zone_map, minimum = _load_dlv(path)
+        if key == "CH":
+            bands, zone_map, minimum = _load_ch_dlv(path)
+        else:
+            bands, zone_map, minimum = _load_dlv(path)
         ct = _CountryTariff(
             bands=bands,
             zone_map=zone_map,
@@ -547,6 +636,11 @@ class BitzCalculator(TariffCalculator):
         ]
         if is_per_sendung:
             notes.append("pricing=per_sendung_ftl")
+        if empf_land_up == "CH":
+            notes += [
+                "dq: CH Verzollung 35 EUR/Sendung (separate, not in basispreis)",
+                "dq: CH Währungszuschlag 3% auf Frachtkosten (separate, not in basispreis)",
+            ]
 
         return TariffResult(
             basispreis=basispreis,
