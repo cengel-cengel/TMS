@@ -556,3 +556,89 @@ GB-Pool: 826 Rows total; 30-Row-Sample → 0 Fehler; Full-Run → 93 Rows Lookup
 **Generalisierung:** Jeder Calculator mit Land/PLZ/Area-Code-Lookup kann selektive
 Lücken haben. Full-Coverage ist kein Optimierungs-Schritt — es ist ein Pflicht-Gate.
 Gilt besonders für: GB (Area-Codes), IT (PLZ-Zonen), ES (PLZ-Ranges), FR (Dept-Codes).
+
+---
+
+### P12 — Pricing-Mode-Wechsel zwischen DLV-Versionen
+
+**Situation:** Eine neue DLV-Version wechselt nicht nur die Raten, sondern die
+Pricing-Logik selbst (z. B. per-100-kg → Flat-Rate pro Sendung; kg-basiert →
+Stellplatz-basiert). Calculator-Code spiegelt nur eine der Logiken wider und
+verwendet diese unverändert auch für das andere DLV-Jahr.
+
+**Folge:** Massive systematische Fehlpreise über alle Sendungen im betroffenen
+Zeitraum. HERMA-Präzedenz: 2.351 Sendungen Jan–Mär 2026 mit 2025-Raten berechnet
+(Σ Erlöse ~1.248.277 EUR betroffen; alle WB1/WB4-Länder ES/IT/FR/GB/PT/RS betroffen).
+
+**Erkennung in DIAGNOSE 2:**
+1. Bei mehreren DLV-Versionen pro Kunde: **5 Sample-Lookups pro Lane in beiden
+   Versionen** vergleichen.
+2. Wenn Δ ≠ 0 für eine Lane, prüfen:
+   - **(a) Rate-Anpassung** (akzeptabel, falls Calculator shipment_date-Dispatch hat)
+   - **(b) Pricing-Mode-Wechsel** (immer ein Calculator-BUG)
+3. Unterscheidung (a) vs. (b): DLV-Sheet-Spalten der beiden Versionen vergleichen.
+   - Falls Spalten-Bedeutung wechselt (z. B. kg-Bänder → PLZ-Bänder) → Typ (b)
+   - Falls nur Werte sich unterscheiden → Typ (a)
+4. Auch wenn Struktur gleich aussieht: **Logik-Check** — sind die Werte "per 100 kg"
+   oder "pro Sendung" (steigen die Werte proportional mit dem Gewicht oder nicht)?
+
+**Fix:**
+- Typ (a): `shipment_date`-Dispatch im Calculator hinzufügen; altes und neues DLV
+  laden; per Datum das passende nutzen.
+- Typ (b): Zwei separate parse/lookup-Funktionen (eine pro DLV-Logik) plus Dispatch.
+
+**Präzedenz:** HERMA Gate B (2026-04-27), Commit `c26dbe1`.
+2025 WB1 (Preis pro Sendung, andere Werte) vs. 2026 Haftmaterial (Preis pro Sendung,
+revidierte Werte). Fix: `_2026_CUTOFF = date(2026, 1, 1)` + `use_2026`-Flag in
+`_get_wb_sheet_name`. Tatsächlich selbe Parsing-Logik, nur andere Pfade.
+
+**Generalisierung:** Vor jedem Step 2 prüfen: hat der Calculator einen
+`shipment_date`-Parameter? Wird er verwendet? Gibt es mehrere DLV-Versionen im
+Verzeichnis, die nicht alle in der Dispatch-Logik berücksichtigt werden?
+
+---
+
+### P13 — Versender-Name als Routing-Key zwischen Calculatoren
+
+**Situation:** Ein Kunde hat mehrere Sparten oder Geschäftseinheiten mit
+unterschiedlichen DLVs (Beispiel: HERMA Haftmaterial vs. HERMA Etiketten).
+Die AX-Daten enthalten das Feld "Versender Name" als einzigen Diskriminator.
+Der Calculator kennt nur einen DLV-Pfad (den der Hauptsparte).
+
+**Folge:** Sendungen der Nebensparte werden mit falschen Raten bepreist.
+Scheinbare M2\*-Defizite (AX < DLV) auf der Nebensparten-Lane — denn die
+Nebensparte hat typischerweise günstigere DLV-Raten.
+HERMA-Präzedenz: Etiketten NT 2026 hat gleiche Raten wie Haftmaterial ≤ 3000 kg,
+aber abweichende Raten > 3000 kg (bis Δ −560 EUR at 3100 kg ES zone 5).
+
+**Erkennung:**
+1. **DIAGNOSE 2 (DLV-Listing):** DLV-Verzeichnis zeigt mehrere Unterordner pro
+   Kunde (z. B. `Herma Haftmaterial/` + `Herma Etiketten/`). Je Unterordner
+   existiert ein separates DLV-Workbook.
+2. **DIAGNOSE 1 oder 3 (AX-Daten):** `df["Versender Name"].value_counts()` liefert
+   mehr als einen distinct Wert pro KNR. Wenn die Werte fachlich auf verschiedene
+   Sparten hinweisen → Routing-Logik prüfen.
+3. **Step 3 (M-Klassen-Analyse):** Wenn eine bestimmte Versender-Variant alle
+   M2\*-Rows dominiert → Hinweis auf falschen DLV.
+
+**Fix:**
+Calculator parametrisierbar gestalten (Gate-A-Pattern):
+```python
+haft_calc = HermaCalculator()  # default: Haftmaterial
+etik_calc = HermaCalculator(
+    dlv_2026_ohne=_ETIK_2026_OHNE,
+    dlv_2026_mit=_ETIK_2026_MIT,
+)
+```
+Dispatcher im Build-Script anhand `row["Versender Name"]`:
+```python
+calc = etik_calc if "etiketten" in row["Versender Name"].lower() else haft_calc
+```
+
+**Präzedenz:** HERMA Gate A (2026-04-27), Commit `c26dbe1`.
+`_ETIK_2026_OHNE/_MIT` hinzugefügt; `HermaCalculator.__init__` mit
+`dlv_2026_ohne`/`dlv_2026_mit`-Parametern.
+
+**Generalisierung:** Bei DIAGNOSE 2 immer mehrere DLV-Unterordner als Warnsignal
+für Sparten-Routing prüfen. Wenn Unterordner vorhanden: distinct Versender-Name-
+Werte in AX-Daten ausgeben und mit Ordnerstruktur abgleichen.
