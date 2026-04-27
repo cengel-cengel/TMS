@@ -51,12 +51,13 @@ _BASE = Path("/home/user/TMS/data/extracted/v1/Noerpel AI/Bitzer/DLV")
 
 _ROT_2025 = _BASE / "Bitzer Rottenburg/2025"
 _SCH_2025 = _BASE / "Bitzer Schkeuditz/2025"
+_ROT_2026_UPLOAD = _BASE / "Bitzer Rottenburg/2026/Upload"
 
-# Map country code → glob pattern for the DLV file name
-_COUNTRY_GLOB: dict[str, str] = {
-    "IT": "*Export*talien*",
-    "AT": "*Export*sterreich*",
-    "FR": "*Export*Frankreich*Zonentarif*",
+# Map country code → (dlv_dir, glob).  IT uses the Upload-extended file (24 t cap).
+_COUNTRY_DLV: dict[str, tuple[Path, str]] = {
+    "IT": (_ROT_2026_UPLOAD, "V_FRA_7042_O_IT_ALL_Bitzer.xlsx"),
+    "AT": (_ROT_2025, "*Export*sterreich*"),
+    "FR": (_ROT_2025, "*Export*Frankreich*Zonentarif*"),
 }
 
 _VALID_FROM_2025 = date(2025, 1, 1)
@@ -82,8 +83,9 @@ _FR_SPECIAL = {
 
 class _Band(NamedTuple):
     weight_limit: int          # upper bound (kg) for this bracket
-    rates: dict[int, Decimal]  # zone_num → rate per 100 kg
+    rates: dict[int, Decimal]  # zone_num → rate (per 100 kg, or flat if per_sendung)
     minimum: dict[int, Decimal] | None = None  # zone_num → minimum per Sendung
+    per_sendung: bool = False  # True → rate is a flat EUR/Sendung, not per 100 kg
 
 
 def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, int]]:
@@ -113,11 +115,12 @@ def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, 
         if m:
             col_to_zone[ci] = int(m.group(1))
 
-    # 2. Parse minimum row (just below header, contains "Minimum" in col 1)
+    # 2. Parse minimum row (just below header; label "Minimum" or "Mindestbetrag" in col 1)
     minimum: dict[int, Decimal] = {}
     for di in range(1, 4):
         mrow = df.iloc[zone_header_row + di]
-        if "minimum" in str(mrow.iloc[1]).lower():
+        label = str(mrow.iloc[1]).lower()
+        if "minimum" in label or "mindest" in label:
             for ci, zn in col_to_zone.items():
                 try:
                     minimum[zn] = Decimal(str(float(mrow.iloc[ci])))
@@ -125,9 +128,11 @@ def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, 
                     pass
             break
 
-    # 3. Parse weight bands ("bis" in col 0)
+    # 3. Parse weight bands ("bis" in col 0).
+    # Use enumerate for positional lookahead (to detect per-Sendung flat-rate bands).
+    rows = list(df.iterrows())
     bands: list[_Band] = []
-    for i, row in df.iterrows():
+    for pos, (i, row) in enumerate(rows):
         if str(row.iloc[0]).strip().lower() != "bis":
             continue
         try:
@@ -144,8 +149,13 @@ def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, 
                     rates[zn] = Decimal(str(val))
             except (ValueError, TypeError):
                 pass
+        # Lookahead: if the next row confirms "per Sendung" this band is a flat rate.
+        per_sendung = False
+        if pos + 1 < len(rows):
+            _, nrow = rows[pos + 1]
+            per_sendung = any("per sendung" in str(v).lower() for v in nrow)
         if rates:
-            bands.append(_Band(weight_limit=wlim, rates=rates))
+            bands.append(_Band(weight_limit=wlim, rates=rates, per_sendung=per_sendung))
 
     bands.sort(key=lambda b: b.weight_limit)
 
@@ -188,6 +198,10 @@ def _parse_zone_table(df: pd.DataFrame, zone_header_row: int) -> dict[str, int]:
         zm = re.match(r"Zone\s+(\d+)", cell0, re.IGNORECASE)
         if zm:
             current_zone = int(zm.group(1))
+        elif cell0 not in ("nan", "") and current_zone is not None:
+            # Non-zone, non-empty col 0 means we've left the Zoneneinteilung
+            # section (e.g. "Mehrkosten...", "Volumenberechnung:" footnotes).
+            break
 
         if current_zone is None:
             continue
@@ -275,18 +289,23 @@ def _calc_price(
     billing_kg: int,
     bands: list[_Band],
     minimum: dict[int, Decimal],
-) -> Decimal:
+) -> tuple[Decimal, bool]:
     """
     Look up rate for (zone, billing_kg) and apply minimum.
+
+    Returns (price, per_sendung) where per_sendung=True means the price is a
+    flat EUR/Sendung rate (FTL), not derived from per-100-kg multiplication.
     """
     for band in bands:
         if band.weight_limit >= billing_kg:
             if zone not in band.rates:
                 raise LookupError(f"Zone {zone} has no rate in band bis {band.weight_limit}")
             rate = band.rates[zone]
+            if band.per_sendung:
+                return rate, True
             price = rate * Decimal(str(billing_kg)) / Decimal("100")
             min_price = minimum.get(zone, Decimal("0"))
-            return max(price, min_price)
+            return max(price, min_price), False
     raise LookupError(f"No weight band covers billing_kg={billing_kg}")
 
 
@@ -302,8 +321,10 @@ class _CountryTariff(NamedTuple):
 
 
 def _find_dlv(dlv_dir: Path, glob: str) -> Path:
+    # Allow upload-path matches when dlv_dir itself is the upload directory.
+    allow_upload = "upload" in str(dlv_dir).lower()
     matches = [p for p in dlv_dir.glob(glob)
-               if "upload" not in str(p).lower()]
+               if allow_upload or "upload" not in str(p).lower()]
     if not matches:
         raise FileNotFoundError(f"No file matching {glob!r} in {dlv_dir}")
     return sorted(matches)[0]
@@ -317,8 +338,8 @@ class BitzCalculator(TariffCalculator):
     """
     Bitzer Kühlmaschinenbau GmbH — multi-country, multi-origin tariff.
 
-    Supported countries: IT, AT, FR (zone tariff only — FR-77380 and FR-13400
-    use separate DLVs not yet implemented).
+    Supported countries: IT (up to 24 t via Upload-extended DLV), AT, FR
+    (zone tariff only — FR-77380 and FR-13400 use separate DLVs not yet implemented).
 
     Usage:
         calc = BitzCalculator()
@@ -341,16 +362,14 @@ class BitzCalculator(TariffCalculator):
         if key in self._cache:
             return self._cache[key]
 
-        # Both plants use Rottenburg rate files (confirmed identical values)
-        dlv_dir = _ROT_2025
-
-        glob = _COUNTRY_GLOB.get(key)
-        if glob is None:
+        entry = _COUNTRY_DLV.get(key)
+        if entry is None:
             raise LookupError(
                 f"Bitzer tariff not implemented for country {empf_land!r}. "
-                f"Implemented: {sorted(_COUNTRY_GLOB)}"
+                f"Implemented: {sorted(_COUNTRY_DLV)}"
             )
 
+        dlv_dir, glob = entry
         path = _find_dlv(dlv_dir, glob)
         bands, zone_map, minimum = _load_dlv(path)
         ct = _CountryTariff(
@@ -389,9 +408,17 @@ class BitzCalculator(TariffCalculator):
         ct = self._get_country(empf_land_up, origin_plz)
         billing_kg = max(100, math.ceil(tonnage_kg / 100) * 100)
         zone = _lookup_zone(empf_plz, ct.zone_map)
-        basispreis = _calc_price(zone, billing_kg, ct.bands, ct.minimum)
+        basispreis, is_per_sendung = _calc_price(zone, billing_kg, ct.bands, ct.minimum)
 
         plant = _PLANT_MAP.get(str(origin_plz).strip(), "unknown")
+        notes = [
+            f"plant={plant} (origin_plz={origin_plz})",
+            f"empf_land={empf_land_up}",
+            f"zone={zone}",
+            f"billing_kg={billing_kg}",
+        ]
+        if is_per_sendung:
+            notes.append("pricing=per_sendung_ftl")
 
         return TariffResult(
             basispreis=basispreis,
@@ -401,12 +428,7 @@ class BitzCalculator(TariffCalculator):
             tariff_file=ct.dlv_name,
             tariff_valid_from=_VALID_FROM_2025,
             tariff_valid_to=_VALID_TO_2025,
-            notes=[
-                f"plant={plant} (origin_plz={origin_plz})",
-                f"empf_land={empf_land_up}",
-                f"zone={zone}",
-                f"billing_kg={billing_kg}",
-            ],
+            notes=notes,
             tarifgruppe=f"bitzer_{empf_land_up.lower()}_zone{zone}_{plant.lower()}",
             tariff_file_used=ct.dlv_name,
             tariff_year_used=_VALID_FROM_2025.year,
