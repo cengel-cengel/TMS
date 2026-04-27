@@ -687,3 +687,47 @@ Tarife/20251212_Herma_Frachtraten ohne VL_2026-2028.xlsx`. Aktueller NT-Stand:
 **Generalisierung:** Jeder Pre-Flight-Versionsvergleich muss Archiv-Unterordner
 explizit ausschließen. Regel: "Aktive Datei = kein Archiv-Marker im Pfad UND
 größtes Datum im Dateinamen innerhalb des Zielordners."
+
+### P15 — Upload-Ordner sind aktive erweiterte Tarife, nicht Archiv
+
+**Situation:** DLV-Verzeichnisse enthalten häufig einen `Upload/`-Unterordner.
+Ein naiver Archiv-Filter (der "upload" als Ausschluss-Marker behandelt) übersieht
+diese Dateien. Der `Upload/`-Ordner enthält jedoch **nicht** veraltete, sondern
+**aktive erweiterte Tarife** — insbesondere Gewichtsbänder oder Routen, die im
+Jahrestarif nicht abgedeckt sind.
+
+**Präzedenz:** Bitzer IT (2026-04-27). Die Datei
+`Bitzer Rottenburg/2026/Upload/V_FRA_7042_O_IT_ALL_Bitzer.xlsx` enthält das
+erweiterte Gewichtsband bis 24 000 kg (FTL-Flat-Rate 1120.8/1260.1 EUR/Sendung)
+sowie leicht angepasste Raten für alle Bänder. Das Jahres-DLV 2025 endet bei
+20 000 kg und hat eine fehlerhafte per-Sendung-Erkennung für das 20 000-kg-Band
+(Lookahead detektiert fälschlich "per Sendung" aus der FTL-Zeile). Ohne die
+Upload-Datei würde der Calculator FTL-Sendungen falsch berechnen.
+
+**Erkennung:**
+1. `Upload/`-Unterordner im Pfad ≠ Archiv. Archiv-Marker sind: `durch neue`,
+   `ersetzt`, `archiv`, `alt`, `obsolet`, `historisch`. `upload` ist KEIN Marker.
+2. Wenn ein `Upload/`-Ordner existiert und eine Datei mit gleichem Kundennamen/
+   Zielland enthält: prüfen, ob diese Datei neue Gewichtsbänder oder angepasste
+   Raten hat — sie ist wahrscheinlich die aktuellere Tarif-Grundlage.
+3. Calculator-Konstante `_find_dlv()` erhält einen `allow_upload`-Parameter:
+   Wenn `dlv_dir` selbst ein Upload-Pfad ist, werden Upload-Dateien einbezogen;
+   andernfalls ausgeschlossen (verhindert versehentliches Einlesen des Upload-
+   Ordners bei Glob über das Hauptverzeichnis).
+
+**Fix:** Upload-Ordner in allen DLV-Scan-Routinen explizit als **aktiv** behandeln.
+Calculator-Konstanten, die auf `Upload/`-Pfade zeigen, explizit definieren:
+```python
+_ROT_2026_UPLOAD = _BASE / "Bitzer Rottenburg/2026/Upload"
+_COUNTRY_DLV["IT"] = (_ROT_2026_UPLOAD, "V_FRA_7042_O_IT_ALL_Bitzer.xlsx")
+```
+Archiv-Filter anpassen:
+```python
+ARCHIV_MARKER = ['durch neue', 'ersetzt', 'archiv', 'alt', 'obsolet', 'historisch']
+# "upload" ist KEIN Archiv-Marker — nicht in diese Liste aufnehmen
+```
+
+**Generalisierung:** Die Unterscheidung "Archiv vs. aktive Erweiterung" kann nicht
+allein aus dem Ordnernamen abgeleitet werden. Entscheidend ist der Inhalt: Enthält
+die Datei Bänder/Routen, die im Jahrestarif fehlen? → aktive Erweiterung. Enthält
+sie ältere Versionen bekannter Bänder? → Archiv.
