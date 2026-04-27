@@ -58,6 +58,7 @@ _COUNTRY_DLV: dict[str, tuple[Path, str]] = {
     "IT": (_ROT_2026_UPLOAD, "V_FRA_7042_O_IT_ALL_Bitzer.xlsx"),
     "AT": (_ROT_2025, "*Export*sterreich*"),
     "FR": (_ROT_2025, "*Export*Frankreich*Zonentarif*"),
+    "ES": (_ROT_2025, "*Export*Spanien*"),
 }
 
 _VALID_FROM_2025 = date(2025, 1, 1)
@@ -137,14 +138,18 @@ def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, 
     rows = list(df.iterrows())
     bands: list[_Band] = []
     for pos, (i, row) in enumerate(rows):
-        if str(row.iloc[0]).strip().lower() != "bis":
+        cell0 = str(row.iloc[0]).strip().lower()
+        if cell0 not in ("bis", "ab"):
             continue
-        try:
-            wlim_raw = str(row.iloc[1]).strip()
-            # Handles "21.500 kg" or "21500" etc.
-            wlim = int(float(re.sub(r"[^\d]", "", wlim_raw.split()[0])))
-        except (ValueError, TypeError, IndexError):
-            continue
+        if cell0 == "ab":
+            wlim = 999999  # open-ended last band (e.g. ES "ab 15001")
+        else:
+            try:
+                wlim_raw = str(row.iloc[1]).strip()
+                # Handles "21.500 kg" or "21500" etc.
+                wlim = int(float(re.sub(r"[^\d]", "", wlim_raw.split()[0])))
+            except (ValueError, TypeError, IndexError):
+                continue
         rates: dict[int, Decimal] = {}
         for ci, zn in col_to_zone.items():
             try:
@@ -263,6 +268,12 @@ def _expand_spec(spec: str) -> list[str]:
     # Single value (may be 2, 3, or 5 digits)
     if re.match(r"^\d+$", spec):
         return [spec.zfill(2) if len(spec) <= 2 else spec]
+
+    # Leading digits followed by city name (e.g. "08 Barcelona", "20 Irun", "36 Vigo")
+    leading_m = re.match(r"^(\d+)", spec)
+    if leading_m:
+        digits = leading_m.group(1)
+        return [digits.zfill(2) if len(digits) <= 2 else digits]
 
     return []
 
