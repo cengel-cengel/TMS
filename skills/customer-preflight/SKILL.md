@@ -513,3 +513,46 @@ diesen Ordner via `_SKIP_DIRS` ausschließen.
 **Generalisierung:** Bei jedem per-Route-DLV-Calculator (Fischerwerke-Typ) in DIAGNOSE 2:
 DLV-Verzeichnis auf Reverse-Route-Dateien prüfen, Calculator Origin-Match-Logik auf
 Substring-vs.-Full-String-Problem testen.
+
+---
+
+### P11 — Coverage-Test vollständig durchführen, kein Sample
+
+**Situation:** GATE D eines Pre-Flights wurde auf einem 30-Zeilen-Sample ausgeführt
+(zufällig oder per `head(30)`). Das Sample zeigte 100 % Calculator-Coverage.
+Beim Full-Coverage-Lauf über alle 826 AX-Pool-Zeilen derselben Lane (GB) wurden
+10 Area-Codes gefunden, für die das DLV **keine** Zonen-Einträge enthält. Der
+Calculator wirft für diese Rows `LookupError` → sie landen im Null-Pool, nicht im
+Haupt-Pool. Das Sample hatte diese Codes statistisch nicht erwischt.
+
+**Folge:** 93 Rows / 61.917 EUR werden als DLV-Lücke klassifiziert statt als
+Calculator-treffer. Fehlende Codes: WF (45 Rows), ME (22), LS (9), NE (4),
+WN (3), BL (3), SA (3), PL (2), YO (1), CH (1). Ohne Full-Run bleibt die Lücke
+unentdeckt und der Step-2-Pool ist systematisch um ~7,5 % zu klein.
+
+**Erkennung:**
+
+1. **DIAGNOSE 3 / GATE D**: Coverage-Lauf immer über **alle** AX-Pool-Zeilen laufen
+   lassen, niemals `head(n)` oder Random-Sample:
+   ```python
+   errors = []
+   for _, row in pool.iterrows():
+       try:
+           calc.calculate(row["empf_plz"], row["empf_land"], ...)
+       except LookupError as e:
+           errors.append((row["empf_plz"], str(e)))
+   ```
+2. **Auch bei scheinbar "gut abgedeckten" Ländern** wie GB oder IT — Area-Code-Tabellen
+   im DLV können selektive Lücken haben, die erst bei vollständiger Iteration sichtbar werden.
+
+**Fix:** Vollständigen Coverage-Lauf als Pflicht-Gate in Pre-Flight §6 (GATE D).
+Für identifizierte Lücken-PLZ: Klärung mit Spediteur/Noerpel, welche Zone zuzuordnen ist.
+Bis zur Klärung als DLV-Lücke dokumentieren.
+
+**Präzedenz:** HERMA GmbH (KNR 423650), GATE D (2026-04-27).
+GB-Pool: 826 Rows total; 30-Row-Sample → 0 Fehler; Full-Run → 93 Rows LookupError
+(10 fehlende UK Area-Codes). Σ Erlöse Fracht: 61.917 EUR betroffen.
+
+**Generalisierung:** Jeder Calculator mit Land/PLZ/Area-Code-Lookup kann selektive
+Lücken haben. Full-Coverage ist kein Optimierungs-Schritt — es ist ein Pflicht-Gate.
+Gilt besonders für: GB (Area-Codes), IT (PLZ-Zonen), ES (PLZ-Ranges), FR (Dept-Codes).
