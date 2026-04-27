@@ -1,6 +1,10 @@
 # Cluster-Report: Fischerwerke GmbH & Co. KG (KNR 409480)
 # Audit v1.9.4
 
+> **HINWEIS:** Dieser Report enthält keinen §2f-Aggregations-Bias-Check
+> (keine ZGI-Cluster-Aggregation vor DLV-Lookup). Korrigierte Version:
+> [`docs/v1_9_6_fischerwerke_cluster_report.md`](v1_9_6_fischerwerke_cluster_report.md)
+
 **Stand:** 2026-04-26 | **Autor:** Pipeline v1.9.4 | **Status:** Abgeschlossen
 
 ---
