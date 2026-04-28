@@ -799,3 +799,103 @@ Build-Script muss `shipment_date` aus BI-Daten (Feld `Leistungsdatum` o. ä.) an
 - Symptom in Step 3: große M2-Cluster auf einzelnen PLZ-Gruppen, die genau der
   Zonen-Grenze einer der beiden DLV-Versionen entsprechen → immer Zonen-Map-
   Vergleich erzwingen bevor strukturelle Ursache (Migrationsschaden) angenommen wird.
+
+---
+
+### P17 — Zone-Lookup-Format-Mismatch (HELU + Hornschuch, 2026-04)
+
+**Situation:** Calculator `zone_fn` gibt einen Zone-Schlüssel zurück, der nicht
+mit den Keys im DLV-Dict übereinstimmt — wegen Wert-Mismatch, Typ-Mismatch oder
+falscher PLZ-Stelligkeit.
+
+**Drei Varianten:**
+
+**P17-A (Wert-Mismatch):** `zone_fn` gibt `"ES-20870"` zurück; DLV-Dict-Key
+ist `"ES"` (Regex in `_parse_vertical` extrahiert nur Zeichen bis zum Bindestrich).
+`dict.get("ES-20870")` → `None` → `LookupError`.
+Erkennung: 100 % LookupError auf einer Lane obwohl DLV vorhanden. Zone-Key vs.
+Dict-Keys ausgeben (`list(rates.keys())[:5]`).
+Fix: `zone_fn` an Regex-Extraktion anpassen.
+Präzedenz: HELU H1 ES-Mendaro (67 Rows betroffen), Commit 897a2c6.
+
+**P17-B (Typ-Mismatch):** `rates_by_col` mit `int`-Keys aufgebaut (Spalten-Indizes),
+`zone_fn` gibt `str(col)` zurück. `dict.get("1")` auf int-Key-Dict → `None`.
+Erkennung: Identisch P17-A. Fix: Dict mit `str(c)`-Keys.
+Präzedenz: HELU H2 GB rates_by_col (55 Rows betroffen), Commit 897a2c6.
+
+**P17-C (PLZ-Stelligkeit):** DLV hat 1-stellige Zonen (z. B. AT: 1–9, PT: 1–9).
+Calculator extrahiert 2-stelligen PLZ-Prefix als Zone → kein DLV-Eintrag.
+Erkennung: Alle LookupErrors auf einem Land mit 1-stelliger Zonen-Struktur.
+Fix: Länderspezifische Stelligkeit im `_zone()`-Dispatcher (gleiche Logik wie PT
+auf AT ausdehnen).
+Präzedenz: Hornschuch G3 AT (PLZ 4191 → Zone "41" statt "4", 1 Row), Commit a0a9822.
+
+**Generalisierung:** Bei jedem LookupError-100%-Cluster auf einer Lane:
+```python
+# Diagnostic snippet
+sample_row = pool[pool['empf_land'] == 'PROBLEM_LAND'].iloc[0]
+zone_key = calc._zone(sample_row['empf_plz'], 'PROBLEM_LAND')
+print(f"zone_key: {repr(zone_key)}")
+rates = calc._rates.get(('PROBLEM_LAND', zone_key))
+print(f"rates: {rates}")
+# list first 5 dict keys for the land
+land_keys = [k for k in calc._cache if k[0] == 'PROBLEM_LAND'][:5]
+print(f"cache keys: {land_keys}")
+```
+
+---
+
+### P18 — Additiver Zuschlag wird als Ersatz-Tarif behandelt (Hornschuch, 2026-04)
+
+**Situation:** Ein DLV enthält einen per-Sendung-Aufschlag (z. B. Paletten-basiert,
+326–975 EUR) ZUSÄTZLICH zum per-kg-Carrier-Tarif. AX bucht den Aufschlag als
+separate Erlöskategorie, nicht unter "Erlöse Fracht". Wenn der Calculator den
+Aufschlag in die DLV-Soll-Kalkulation einbezieht (oder statt des per-kg-Tarifs
+verwendet), entsteht ein massiver scheinbarer M_over (AX buchte nicht so viel).
+
+**Korrekte Behandlung:** Per-kg-Tarif = korrekte Vergleichsbasis für "Erlöse Fracht".
+Aufschlag ist separates Erlöselement und außerhalb des Audit-Scopes dieser Lane.
+
+**Erkennung:**
+1. In DIAGNOSE 2 (DLV-Listing): Wenn DLV-Datei einen "Paletten-Zuschlag"- oder
+   "Anlieferungs-Aufpreis"-Sheet enthält → additiver Aufschlag-Typ prüfen.
+2. Empirischer Validierungstest: Pool-Rows dieser Empfänger-Gruppe berechnen.
+   Wenn fp = 0,0000 für alle Rows → per-kg-Tarif ist korrekte Basis.
+3. Wenn fp stark positiv (M_over) → Aufschlag in DLV-Soll eingerechnet → falsch.
+
+**Fix:** DLV-Soll-Berechnung = nur per-kg-Anteil. Aufschlag-Datei in Calculator
+nicht laden oder explizit als additives Non-Fracht-Element markieren.
+
+**Präzedenz:** Hornschuch G2 Castorama/Leroy Merlin (318 FR-Rows). Castorama-DLV
+(20250131) definiert Paletten-Aufschlag (326–975 EUR/Sendung) zusätzlich zu
+ContiTech per-kg. AX bucht nur per-kg unter Erlöse Fracht.
+Ergebnis: fp = 0,0000 für alle 318 Rows empirisch bestätigt. Kein Calculator-Bug.
+
+---
+
+### P19 — FTL-Flat-Rate vs. per-kg-Extrapolation (M2-Artefakt bei Großsendungen)
+
+**Situation:** AX rechnet Großsendungen (typisch > 12 000 kg) als Vollfahrzeug-
+Festpreis (FTL-Flat, z. B. 1.120 EUR für ~14 000 kg). Der Calculator extrapoliert
+den per-kg-Tarif linear auf das gesamte Gewicht → DLV-Soll deutlich höher als
+die FTL-Flat. Ergebnis: systematische M2-Rows bei Großsendungen ohne Abrechnungsfehler.
+
+**Erkennungs-Muster:**
+1. M2-Rows mit ton > 12 000 kg und konstantem ef-Betrag (z. B. 1.120 EUR für alle
+   Rows in einem Tonnage-Bereich trotz unterschiedlicher Gewichte).
+2. fp zwischen −7 % und −17 % (unterhalb der 5 %-M2-Schwelle).
+3. ContiTech DLV enthält separate "roundtrip"- oder FTL-Spalte mit Flat-Werten
+   (873–1.152 EUR) — diese Werte entsprechen den ef-Beträgen.
+4. AX-Billing entspricht dem FTL-Band, nicht der per-kg-Extrapolation.
+
+**Behandlung:** KEIN Calculator-Bug, KEIN Abrechnungsfehler. AX rechnet korrekt
+nach FTL-Vertrag. Calculator-per-kg-Extrapolation überschätzt den DLV-Soll bei
+Großsendungen. M2-Rows als "FTL-Flat-Rate-Artefakt" dokumentieren, keine Korrektur.
+
+**Optionale Calculator-Erweiterung:** FTL-Band ab Tonnage-Schwelle implementieren
+(nur wenn mehrere Kunden betroffen und Volume > 10 TEUR). Aufwand: ~2 h.
+
+**Präzedenz:** Hornschuch M2 (7 Rows, IT zone31/33/20, ES zone12).
+Tonnage 13.000–17.000 kg; ef: 1.120/1.270/1.700 EUR (Flat); dlv: 1.200–1.900 EUR
+(per-kg-Extrapolation). Net Δ dieser 7 Rows: −860 EUR (fp = −7 bis −17 %).
+
