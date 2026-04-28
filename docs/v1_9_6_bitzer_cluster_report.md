@@ -361,3 +361,62 @@ SKILL.md P15 hinzugefügt: Upload-Ordner sind aktive Tarife.
 ---
 
 *Generiert: 2026-04-28 | Script: `src/build_bitzer_step23_v196.py` | Cache: `output/bitzer_step23_results_v196.pkl`*
+
+---
+
+## Nachträgliche Korrektur: Calculator-Bugs (2026-04-28)
+
+### Befund 1 → Fix: IT Zone 4 — Shipment-Date-Dispatch (P16)
+
+**Diagnose:** BitzCalculator verwendete Upload-DLV (2026/Upload/) für ALLE IT-Sendungen.
+Das Upload-DLV reklassifiziert PLZ 32010 von Zone 2 auf Zone 4 (Gültigkeit laut Dokument
+01.01.2025–31.12.2025, aber Zone 4 nie in Abrechnung angewendet). Tatsächliche Abrechnung:
+- 2025-Sendungen + Jan 2026: 2025-STD DLV Zone 2 (exakte Matches bestätigt)
+- Ab Feb 2026: 2026-STD DLV Zone 2 (Gültigkeit 01.02.2026–31.01.2027)
+
+**Fix:** Shipment-Date-Dispatch in `calculate(shipment_date=...)`:
+- `< 2026-02-01` → 2025-STD DLV (`20250205_Bitzer_Export Italien.xlsx`)
+- `≥ 2026-02-01` → 2026-STD DLV (`2026_Bitzer_Export Italien.xlsx`)
+- Upload-DLV aus IT-Standardpfad entfernt (P15-konform: Upload = aktiv, aber nicht Ersatz für Standard)
+
+Gleichzeitig Fix für **FTL-Band-Parser** (`_load_dlv`): "ab\nbis"-Zellen (kombinierte
+Zelle für kompletter-LKW-Band in 2025/2026-STD-DLVs) wurde nicht als Band-Start
+erkannt. Fix: `cell0.split()[0]` statt direktem String-Vergleich.
+
+**Impact:**
+- IT Zone 4 Rottenburg: 77 Rows, −21 511 EUR → 13 Rows, +17 EUR ✓
+- Planung PLZ 32010: Zone 4 (Calculator) → Zone 2 (tatsächlich)
+
+### Befund 2 → Fix: FR-13400 — Routing auf Zone 9
+
+**Diagnose:** `_SPECIAL_DEST_PATHS["FR"]["13400"]` selektierte per-Sendung-FTL-DLV
+(697.50 EUR/Sendung) für alle PLZ-13400-Sendungen. Tatsächliche Abrechnung: FR Zone 9 LTL
+(min. 46.30 EUR). DLV-Titel: „bis frei Haus Profoid, FR-13400 Aubagne" — spezifisch für
+Profoid-Direktfahrt, nicht für allgemeine LTL-Teilladungen.
+
+**Fix:** FR-13400 aus `_SPECIAL_DEST_PATHS` entfernt → PLZ 13xxx → Zone 9.
+
+**Impact:** 13 Rows: −8 109 EUR → +6 EUR ✓
+
+ERKA-Klärung ausstehend: → `docs/operative_followups/bitzer_fr_13400_aubagne_tarifwahl.md`
+
+### Reconciliation
+
+| Metrik | Vor Fix | Nach Fix | Δ |
+|---|---|---|---|
+| Pool (ef>0) | 3 406 | 3 406 | = |
+| Beurteilbar | 3 330 (97.8 %) | 3 330 (97.8 %) | = |
+| M1 | 2 861 (85.9 %) | 2 868 (86.1 %) | +7 |
+| M2 | 277 (8.3 %) | 206 (6.2 %) | −71 |
+| M_over | 192 (5.8 %) | 256 (7.7 %) | +64 |
+| Σ dlv | 750 473 EUR | 697 287 EUR | −53 186 EUR |
+| Net Δ (ef − dlv) | **−26 780 EUR (−3.57 %)** | **+26 407 EUR (+3.79 %)** | |
+
+**Interpretation Post-Fix:** Netto-Δ positiv → Bitzer zahlt im Schnitt 3.79 % über
+DLV-Soll (M_over-dominiert). Ursachen noch zu klären:
+1. Erlöse Fracht enthält ggf. Diesel-Floater-Anteil (DQ-Prüfung nötig)
+2. Tarif-Raten 2025-STD minimal niedriger als tatsächlich angewendete Billing-Raten
+3. Schkeuditz-Abgänge FR Zone 3 (+3 482 EUR) als struktureller M_over
+
+Audit-Headline neu: **kein systematischer Migrationsschaden** — pre-Fix-M2-Findings waren
+Calculator-Artefakte (Upload-DLV-Bias + FR-13400-FTL-Selektion).

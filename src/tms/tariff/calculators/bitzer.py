@@ -19,7 +19,7 @@ Diesel:         Separate "Dieselfloater" surcharge (~4% of freight for 2025,
                 Appears in BI as Erlöse Diesel.
 
 Countries implemented in this module:
-  IT (Italy)  — 5 zones; DLV valid 2025-01-01 – 2025-12-31
+  IT (Italy)  — 5 zones; 2025-STD DLV (< 2026-02-01) / 2026-STD DLV (≥ 2026-02-01)
   AT (Austria) — 7 zones; DLV valid 2025-01-01 – 2025-12-31
   FR (France) — 8 zones, zone tariff; FR-77380 Combs La Ville and FR-13400
                 Aubagne use separate single-destination DLVs.
@@ -29,7 +29,7 @@ Countries implemented in this module:
   BE (Belgium), NL (Netherlands) — combined Benelux DLV, Zone 1; max 15 000 kg
   LU (Luxembourg) — combined Benelux DLV, Zone 2; FTL 753.50 EUR/Sendung
 
-DLV directory structure (year-fallback: 2026 > 2025 > root):
+DLV directory structure:
   data/extracted/v1/Noerpel AI/Bitzer/DLV/
     Bitzer Rottenburg/{year}/  ← primary source
     Bitzer Schkeuditz/{year}/  ← identical rates, different origin
@@ -55,11 +55,17 @@ _BASE = Path("/home/user/TMS/data/extracted/v1/Noerpel AI/Bitzer/DLV")
 
 _ROT_2025 = _BASE / "Bitzer Rottenburg/2025"
 _SCH_2025 = _BASE / "Bitzer Schkeuditz/2025"
-_ROT_2026_UPLOAD = _BASE / "Bitzer Rottenburg/2026/Upload"
+_ROT_2026 = _BASE / "Bitzer Rottenburg/2026"
 
-# Map country code → (dlv_dir, glob).  IT uses the Upload-extended file (24 t cap).
+# IT: two period-specific DLVs selected by shipment_date (P16: Standard ≠ Upload).
+# Upload DLV (2026/Upload/) reclassified PLZ 32010 Zone 2→4 but this was never applied
+# in actual billing. 2025-STD and 2026-STD both keep PLZ 32010 in Zone 2.
+_IT_DLV_2025 = _ROT_2025 / "20250205_Bitzer_Export Italien.xlsx"   # valid 2025-01-01..2025-12-31
+_IT_DLV_2026 = _ROT_2026 / "2026_Bitzer_Export Italien.xlsx"       # valid 2026-02-01..2027-01-31
+_IT_CUTOFF   = date(2026, 2, 1)
+
 _COUNTRY_DLV: dict[str, tuple[Path, str]] = {
-    "IT": (_ROT_2026_UPLOAD, "V_FRA_7042_O_IT_ALL_Bitzer.xlsx"),
+    # IT handled separately via _get_it() with shipment_date dispatch
     "AT": (_ROT_2025, "*Export*sterreich*"),
     "FR": (_ROT_2025, "*Export*Frankreich*Zonentarif*"),
     "ES": (_ROT_2025, "*Export*Spanien*"),
@@ -70,6 +76,8 @@ _COUNTRY_DLV: dict[str, tuple[Path, str]] = {
 
 _VALID_FROM_2025 = date(2025, 1, 1)
 _VALID_TO_2025   = date(2025, 12, 31)
+_VALID_FROM_2026 = date(2026, 2, 1)
+_VALID_TO_2026   = date(2027, 1, 31)
 
 # Benelux: single combined DLV file; zone routing is by country (not PLZ prefix).
 _BENELUX_DLV = _ROT_2025 / "20241213_Bitzer_Export BE, NL, LU.xlsx"
@@ -87,7 +95,8 @@ _PLANT_MAP: dict[str, str] = {
 _SPECIAL_DEST_NAMES: dict[str, dict[str, str]] = {
     "FR": {
         "77380": "Combs La Ville",
-        "13400": "Aubagne",
+        # FR-13400 Aubagne: DLV is a dedicated-run FTL contract for Profoid consignee only.
+        # Actual LTL billing uses general FR Zone 9 tariff. PLZ 13xxx falls through to zone lookup.
     },
     "PT": {
         "6001": "Castelo Branco",
@@ -96,7 +105,6 @@ _SPECIAL_DEST_NAMES: dict[str, dict[str, str]] = {
 _SPECIAL_DEST_PATHS: dict[str, dict[str, Path]] = {
     "FR": {
         "77380": _ROT_2025 / "20241213_Bitzer_Export FR-77380 Combs La Ville.xlsx",
-        "13400": _ROT_2025 / "20241213_Bitzer_Export FR-13400 Aubagne.xlsx",
     },
     "PT": {
         "6001": _ROT_2025 / "20241213_Bitzer_Export PT-6001 Castelo Branco.xlsx",
@@ -160,11 +168,13 @@ def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, 
     rows = list(df.iterrows())
     bands: list[_Band] = []
     for pos, (i, row) in enumerate(rows):
-        cell0 = str(row.iloc[0]).strip().lower()
+        # Take first word only: "ab\nbis" (FTL combined cell in some DLVs) → "ab"
+        cell0_raw = str(row.iloc[0]).strip().lower()
+        cell0 = cell0_raw.split()[0] if cell0_raw.split() else ""
         if cell0 not in ("bis", "ab"):
             continue
         if cell0 == "ab":
-            wlim = 999999  # open-ended last band (e.g. ES "ab 15001")
+            wlim = 999999  # open-ended last band (e.g. ES "ab 15001", IT "ab\nbis kompletter LKW")
         else:
             try:
                 wlim_raw = str(row.iloc[1]).strip()
@@ -180,9 +190,12 @@ def _load_dlv(path: Path, sheet: str | int = 0) -> tuple[list[_Band], dict[str, 
                     rates[zn] = Decimal(str(val))
             except (ValueError, TypeError):
                 pass
-        # Lookahead: if the next row confirms "per Sendung" this band is a flat rate.
-        per_sendung = False
-        if pos + 1 < len(rows):
+        # Detect flat per-Sendung rate: check current row and the next row.
+        # "kompletter LKW" in col 1 of the same row (IT/AT/FR standard DLVs).
+        # "per Sendung" in the next row (FR-special, PT-special DLVs).
+        col1_val = str(row.iloc[1]).lower() if len(row) > 1 else ""
+        per_sendung = "komplett" in col1_val or "lkw" in col1_val
+        if not per_sendung and pos + 1 < len(rows):
             _, nrow = rows[pos + 1]
             per_sendung = any("per sendung" in str(v).lower() for v in nrow)
         if rates:
@@ -640,6 +653,29 @@ class BitzCalculator(TariffCalculator):
         self._cache[cache_key] = ct
         return ct
 
+    def _get_it(self, shipment_date: date | None = None) -> tuple[_CountryTariff, date, date]:
+        """Return IT tariff appropriate for the given shipment date.
+
+        Dispatch rule (P16):
+          date < 2026-02-01 (or None) → 2025-STD DLV (valid 2025-01-01..2025-12-31)
+          date >= 2026-02-01           → 2026-STD DLV (valid 2026-02-01..2027-01-31)
+
+        PLZ 32010 is Zone 2 in both standard DLVs. The Upload DLV (2026/Upload/)
+        reclassified it to Zone 4 but that reclassification was never applied in billing.
+        """
+        if shipment_date is not None and shipment_date >= _IT_CUTOFF:
+            cache_key, dlv_path = "IT_2026", _IT_DLV_2026
+            valid_from, valid_to = _VALID_FROM_2026, _VALID_TO_2026
+        else:
+            cache_key, dlv_path = "IT_2025", _IT_DLV_2025
+            valid_from, valid_to = _VALID_FROM_2025, _VALID_TO_2025
+        if cache_key not in self._cache:
+            bands, zone_map, minimum = _load_dlv(dlv_path)
+            self._cache[cache_key] = _CountryTariff(
+                bands=bands, zone_map=zone_map, minimum=minimum, dlv_name=dlv_path.name
+            )
+        return self._cache[cache_key], valid_from, valid_to
+
     def _get_benelux(self) -> _CountryTariff:
         if "BENELUX" in self._cache:
             return self._cache["BENELUX"]
@@ -690,6 +726,7 @@ class BitzCalculator(TariffCalculator):
         tonnage_kg: float | None = None,
         ldm: float | None = None,
         origin_plz: str = "71126",
+        shipment_date: date | None = None,
     ) -> TariffResult:
         if tonnage_kg is None or tonnage_kg <= 0:
             raise ValueError("tonnage_kg must be provided and > 0")
@@ -727,6 +764,34 @@ class BitzCalculator(TariffCalculator):
                 tarifgruppe=f"bitzer_{empf_land_up.lower()}_special_{plz_raw}_{plant.lower()}",
                 tariff_file_used=ct.dlv_name,
                 tariff_year_used=_VALID_FROM_2025.year,
+            )
+
+        # Italy: period-specific DLV dispatch (P16 — Standard ≠ Upload)
+        if empf_land_up == "IT":
+            ct, valid_from, valid_to = self._get_it(shipment_date)
+            zone = _lookup_zone(empf_plz, ct.zone_map)
+            basispreis, is_per_sendung = _calc_price(zone, billing_kg, ct.bands, ct.minimum)
+            notes = [
+                f"plant={plant} (origin_plz={origin_plz})",
+                f"empf_land=IT",
+                f"zone={zone}",
+                f"billing_kg={billing_kg}",
+                f"dlv={ct.dlv_name}",
+            ]
+            if is_per_sendung:
+                notes.append("pricing=per_sendung_ftl")
+            return TariffResult(
+                basispreis=basispreis,
+                diesel_surcharge=None,
+                maut_surcharge=None,
+                currency="EUR",
+                tariff_file=ct.dlv_name,
+                tariff_valid_from=valid_from,
+                tariff_valid_to=valid_to,
+                notes=notes,
+                tarifgruppe=f"bitzer_it_zone{zone}_{plant.lower()}",
+                tariff_file_used=ct.dlv_name,
+                tariff_year_used=valid_from.year,
             )
 
         # Benelux: country-based zone routing (no PLZ zone map needed)

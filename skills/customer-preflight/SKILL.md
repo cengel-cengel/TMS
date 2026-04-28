@@ -731,3 +731,71 @@ ARCHIV_MARKER = ['durch neue', 'ersetzt', 'archiv', 'alt', 'obsolet', 'historisc
 allein aus dem Ordnernamen abgeleitet werden. Entscheidend ist der Inhalt: Enthält
 die Datei Bänder/Routen, die im Jahrestarif fehlen? → aktive Erweiterung. Enthält
 sie ältere Versionen bekannter Bänder? → Archiv.
+
+---
+
+### P16 — Upload-DLV ist kein universeller Ersatz für Standard-DLV: Zonen-Map vergleichen
+
+**Situation:** Ein `Upload/`-Ordner enthält eine erweiterte DLV-Datei (z. B. höhere
+Gewichtsbänder bis 24 000 kg, FTL-Flat-Rate). Das Calculator-Lade-Code setzt diese
+Datei als **universellen Ersatz** für das Standard-Jahres-DLV ein — für alle
+Sendungen aller Zeiträume. Dabei bleibt unbeachtet, dass das Upload-DLV in der
+Zonen-Zuordnung (PLZ → Zone) vom Standard-DLV abweicht.
+
+**Folge:** PLZs, die im Standard-DLV Zone 2 sind, werden im Upload-DLV Zone 4
+berechnet (oder umgekehrt). Der Calculator produziert für diese PLZs systematisch
+falsche DLV-Soll-Werte. Das BI-Abgleich zeigt massive M2-Cluster auf diesen PLZs —
+die nicht auf Abrechnungsfehler hinweisen, sondern reine Calculator-Artefakte sind.
+
+**Bitzer-IT-Präzedenz (2026-04-28):** PLZ 32010 (Belluno):
+- Standard-DLV 2025 (`20250205_Bitzer_Export Italien.xlsx`): Zone **2** → 767 EUR bei 11 800 kg
+- Upload-DLV 2026 (`V_FRA_7042_O_IT_ALL_Bitzer.xlsx`): Zone **4** → 1 038 EUR bei 11 800 kg
+- Tatsächliche BI-Abrechnung 2025: 767,00 EUR (exakter Zone-2-Match, kein M2)
+- Vor Fix: 77 Rows, −21 511 EUR scheinbares M2-Defizit (Calculator-Artefakt)
+- Nach Fix: 13 Rows (FTL-Anteil), +17 EUR (M1)
+
+**Erkennung:**
+
+1. **DIAGNOSE 2: Zonen-Maps beider Versionen vergleichen** — wenn Upload-DLV
+   vorhanden: mindestens 5 Spot-PLZs in Standard und Upload nachschlagen:
+   ```python
+   spot_plz = ["32010", "00134", "35040", "40013", "00198"]  # anpassen
+   for plz in spot_plz:
+       z_std    = lookup_zone(plz, zone_map_standard)
+       z_upload = lookup_zone(plz, zone_map_upload)
+       if z_std != z_upload:
+           print(f"ZONE-ABWEICHUNG: PLZ {plz}: Standard={z_std}, Upload={z_upload}")
+   ```
+2. **Wenn Zone-Abweichungen gefunden:** Upload ist **kein universeller Ersatz**.
+   Es handelt sich um eine Zonen-Reform-Amendment: Bestimmte PLZs wurden neu
+   klassifiziert. Upload-DLV gilt nur für neue Verträge / ab einem Stichtag.
+3. **Standard-DLV bleibt primär** für alle Sendungen innerhalb seiner Gültigkeitsperiode.
+   Upload-DLV gilt ab seinem expliziten Gültigkeitsbeginn (aus AFL-Header oder
+   Dateiname ablesen).
+4. **Wenn nur Band-Erweiterung** (alle PLZ-Zonen gleich, nur höhere Gewichtsbänder
+   vorhanden): Upload als Ergänzung für FTL-Bänder nutzbar, Standard für LTL-Bänder.
+
+**Fix:** `shipment_date`-Dispatch im Calculator implementieren:
+
+```python
+_IT_CUTOFF = date(2026, 2, 1)   # Gültigkeitsbeginn Upload/2026
+
+def _get_it(self, shipment_date: date | None = None):
+    if shipment_date is not None and shipment_date >= _IT_CUTOFF:
+        return self._load("IT_2026", _IT_DLV_2026), _VALID_FROM_2026, _VALID_TO_2026
+    else:
+        return self._load("IT_2025", _IT_DLV_2025), _VALID_FROM_2025, _VALID_TO_2025
+```
+
+Build-Script muss `shipment_date` aus BI-Daten (Feld `Leistungsdatum` o. ä.) an
+`calculate()` übergeben; fehlendes Datum → konservativ Standard-DLV (früherer Tarif).
+
+**Generalisierung:**
+- "Upload-aktiv" (P15) ≠ "Upload ersetzt Standard".
+- Reihenfolge der Diagnose: (1) Upload-Bänder vs. Standard-Bänder vergleichen →
+  reine Band-Erweiterung oder Zonen-Reform? (2) Wenn Zonen-Reform: Stichtag aus
+  Dateiname / AFL-Header bestimmen. (3) Dispatch implementieren, niemals beide
+  Dateien ohne Stichtag kombinieren.
+- Symptom in Step 3: große M2-Cluster auf einzelnen PLZ-Gruppen, die genau der
+  Zonen-Grenze einer der beiden DLV-Versionen entsprechen → immer Zonen-Map-
+  Vergleich erzwingen bevor strukturelle Ursache (Migrationsschaden) angenommen wird.
