@@ -93,15 +93,15 @@ def _zone(cc: str, plz: str) -> str | None:
     p = plz.strip()
     if not p:
         return None
-    if cc == "PT":
-        # Portuguese zone = first digit; "9 (islands)" covers PLZ prefix 9
+    if cc in ("PT", "AT"):
+        # PT and AT zones = first digit (DLV uses single-digit zone codes 1–9)
         d = p[0]
         if not d.isdigit():
             return None
-        if (cc, d) not in _CACHE and (cc, d + " (islands)") in _CACHE:
+        if cc == "PT" and (cc, d) not in _CACHE and (cc, d + " (islands)") in _CACHE:
             return d + " (islands)"
         return d
-    # IT, ES, FR, AT, BE, CH, GR, DE → 2-digit prefix
+    # IT, ES, FR, BE, CH, GR, DE → 2-digit prefix
     prefix = p[:2]
     return prefix if len(prefix) == 2 else None
 
