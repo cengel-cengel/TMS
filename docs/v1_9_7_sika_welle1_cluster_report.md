@@ -286,29 +286,29 @@ Nicht in dieser Session. Separates BI-Loading (`bi_cache_sika_527406.pkl`) + abw
 
 ---
 
-## §8 Konsolidierte 10-Kunden-Lage (Welle 1 + 2, Stand 2026-04-28)
+## §8 Konsolidierte 11-Kunden-Lage (Stand 2026-04-28)
 
-| Kunde | KNR | Calculator | beurteilbar | M1 | M2 | M_over | Σef (TEUR) | Net Δ (EUR) | Net Δ % | Befund |
-|---|---|---|---|---|---|---|---|---|---|---|
-| CHT Germany (BE) | 486073 | cht_be.py | 2.068 | 2.023 | 0 | 45 | 512 | −668 | −0,13 % | kein Schaden |
-| CHT Germany (IT) | 486073 | cht_it.py | 217 | 207 | 10 | 0 | 40 | −2.117 | −5,22 % | kein Schaden¹ |
-| CHT Germany (ES) | 486073 | cht_es.py | 95 | 93 | 2 | 0 | 11 | −143 | −1,33 % | kein Schaden |
-| CHT Germany (AT) | 486073 | cht_at.py | 22 | 22 | 0 | 0 | 4 | +17 | +0,41 % | kein Schaden |
-| CHT Germany (GR) | 486073 | cht_gr.py | 40 | 40 | 0 | 0 | 3 | 0 | ≈0,00 % | kein Schaden |
-| Fischerwerke GmbH | 409480 | fischer.py | 294 | 238 | 56 | 0 | 179 | +106.811 | +24,84 % | kein Schaden² |
-| HERMA GmbH | 423650 | herma.py | 1.101 | 1.072 | 29 | 0 | 398 | −16.374 | −3,98 % | kein Schaden |
-| Groz-Beckert | 490527/410912/527373 | groz_beckert.py | 527 | 473 | 0 | 54 | 113 | +5.729 | +5,07 % | kein Schaden³ |
-| HELU-KABEL | 408244 | helu.py | 2.044 | 1.942 | 102 | 0 | 316 | +203 | +0,06 % | kein Schaden |
-| Hornschuch AG | 490085 | hornschuch.py | 1.565 | 1.549 | 7 | 9 | 409 | −205 | −0,05 % | kein Schaden⁴ |
-| **Sika DE** | **491063** | **sika_de.py** | **1.379** | **887** | **293** | **199** | **1.278** | **−25.758** | **−1,97 %** | **kein Schaden⁵** |
-| **Sika SSC** | **511241** | **ssc.py** | **62** | **43** | **0** | **19** | **43** | **+2.600** | **+6,38 %** | **kein Schaden⁶** |
+| Kunde | KNR | beurteilbar | M1 | M2 | M_over | Σef (TEUR) | Net Δ (EUR) | Net Δ % | Befund |
+|---|---|---|---|---|---|---|---|---|---|
+| GEZE GmbH | 406035 | 2.759 | 2.550 | 132 | 77 | 392 | +4.138 | +1,07 % | kein Schaden |
+| EBM-Papst | 410844 | 308 | 285 | 1 | 22 | 480 | +3.514 | +0,74 % | kein Schaden |
+| Fischerwerke | 409480 | 839 | 321 | 107 | 411 | 538 | +106.811 | +24,80 % | Charter-Artefakt¹ |
+| HERMA GmbH | 423650 | 3.642 | 2.842 | 384 | 416 | 2.429 | −16.374 | −0,67 % | kein Schaden |
+| CHT Germany | 486073 | 554 | 539 | 0 | 15 | 258 | −668 | −0,26 % | kein Schaden |
+| Bitzer | 406345 | 3.330 | 2.868 | 206 | 256 | 724 | +26.407 | +3,79 % | kein Schaden² |
+| Groz-Beckert | multi | 527 | 473 | 0 | 54 | 113 | +5.729 | +5,07 % | kein Schaden³ |
+| HELU-KABEL | 408244 | 2.185 | 2.044 | 102 | 39 | 316 | +203 | +0,06 % | kein Schaden |
+| Hornschuch AG | 490085 | 1.565 | 1.549 | 7 | 9 | 409 | −205 | −0,05 % | kein Schaden⁴ |
+| **Sika DE** | **491063** | **1.379** | **887** | **293** | **199** | **1.278** | **−25.758** | **−1,97 %** | **kein Schaden⁵** |
+| **Sika SSC** | **511241** | **62** | **43** | **0** | **19** | **43** | **+2.600** | **+6,38 %** | **kein Schaden⁶** |
 
-¹ CHT IT: Bulk-Pauschal-Artefakt. Einzeln korrekt.  
-² Fischerwerke +24,84 %: Charter-Artefakt. Non-Charter-Pool: ≈0 %.  
-³ Groz-Beckert +5,07 %: GC-Band-Tarifband-Artefakt. Kerngeschäft M1.  
-⁴ Hornschuch PL-Lücke: 726 Rows, 204 TEUR ohne verifizierbaren Carrier-Tarif. Operative Klärung empfohlen.  
-⁵ Sika DE nominell −1,97 %: Erlöse-Maut-Separation-Artefakt. Adjustiertes Net Δ = +4.797 EUR (+0,37 %). Kein Schaden.  
+¹ Fischerwerke +24,80 %: Charter-Artefakt. Non-Charter-Pool: ≈0 %.  
+² Bitzer +3,79 %: Post-Fix (IT Zone4, FR-13400). Diesel-Floater-Prüfung offen.  
+³ Groz-Beckert +5,07 %: GC-Band-Artefakt. Kerngeschäft LTL: Δ=0,00 EUR.  
+⁴ Hornschuch PL-Lücke: 726 Rows, 204 TEUR ohne Carrier-Tarif. Operative Klärung empfohlen.  
+⁵ Sika DE nominell −1,97 %: Erlöse-Maut-Separation-Artefakt. Adjustiertes Net Δ = **+4.797 EUR (+0,37 %)**. Kein Schaden.  
 ⁶ Sika SSC +6,38 %: AX rechnet über DLV-Niveau. Kein Noerpel-Schaden; Billing-Above-DLV-Hinweis.
 
-**Gesamtbild (10 Kunden, 12 Scope-Einheiten):**  
-Σef ≈ 3.306 TEUR | Kein Migrationsschaden bei keinem Kunden identifiziert.
+**Gesamtbild (11 Kunden, Σef ≈ 6.980 TEUR):**  
+Kein Migrationsschaden bei keinem Kunden identifiziert.  
+Maut-Check rückwirkend (P20): Nur Sika 491063 betroffen. Alle anderen 9 Kunden: balancierte Vergleichsbasis (kein Adjustment notwendig).

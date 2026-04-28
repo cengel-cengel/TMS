@@ -899,3 +899,64 @@ Großsendungen. M2-Rows als "FTL-Flat-Rate-Artefakt" dokumentieren, keine Korrek
 Tonnage 13.000–17.000 kg; ef: 1.120/1.270/1.700 EUR (Flat); dlv: 1.200–1.900 EUR
 (per-kg-Extrapolation). Net Δ dieser 7 Rows: −860 EUR (fp = −7 bis −17 %).
 
+---
+
+### P20 — Erlös-Spalten-Separation: AX billt mehrere Erlös-Komponenten getrennt
+
+**Situation:** AX kann Maut, Diesel-Zuschlag, und andere Surcharges in **separaten Erlös-Spalten**
+billen (`Erlöse Maut`, `Erlöse Diesel`, `Erlöse Nebengebühr` etc.). Wenn das DLV diese
+Komponenten **integriert** in die Hauptrate aufnimmt (z. B. `basispreis + de_maut`), aber
+die Pipeline `ef = Erlöse Fracht` verwendet, entsteht ein systematischer negativer Bias:
+
+```
+ef   = Erlöse Fracht          (ohne Maut)
+dlv  = basispreis + de_maut   (mit Maut)
+→ delta = ef − dlv = −de_maut systematisch negativ
+→ fp ≈ −Maut% (z. B. −2,4 % für Sika 491063)
+```
+
+**Erkennung in DIAGNOSE 2:**
+```python
+# Alle Erlöse-Spalten auflisten
+erloese_cols = [c for c in bi.columns if 'erlö' in c.lower()]
+# Σ pro Pool
+for col in erloese_cols:
+    pool[col] = pd.to_numeric(pool[col], errors='coerce').fillna(0)
+    sigma = pool[col].sum()
+    pct   = sigma / pool['ef'].sum() if pool['ef'].sum() > 0 else 0
+    print(f"{col}: {sigma:,.2f} ({pct:.2%} von Erlöse Fracht)")
+```
+
+**Entscheidungsregel:**
+- Wenn `Σ Erlöse [Komponente] > 1 % von Σ Erlöse Fracht`: DLV-Sheet prüfen.
+  - DLV enthält Maut/Diesel in Hauptrate → P20 betroffen; `ef_total = ef + Erlöse [Komponente]`
+  - DLV hat separate Maut/Diesel-Kalkulation → Pipeline vergleicht balanciert, kein P20
+- Wenn `Σ Erlöse [Komponente] < 1 %`: negligible, kein Handlungsbedarf.
+
+**Korrektheit-Check über Kunden (Rückwirkend geprüft 2026-04-28):**
+
+| Kunde | Σ Erlöse Maut | DLV-Treatment | P20? |
+|---|---|---|---|
+| EBM-Papst | 15.596 EUR (2,95 %) | `dlv = r.basispreis` (ohne Maut) | Nein — balanciert |
+| CHT Germany | 12.742 EUR (4,08 %) | `delta_fracht = Erlöse Fracht − basispreis` | Nein — balanciert |
+| HERMA GmbH | 6.518 EUR (0,25 %) | `maut_surcharge=None` in Calculator | Nein — balanciert |
+| GEZE GmbH | 17 EUR (0,003 %) | — | Negligible |
+| Bitzer / HELU / Hornschuch | 0 EUR | — | Nein |
+| **Sika DE 491063** | **30.555 EUR (2,39 %)** | `dlv = basispreis + de_maut` | **JA — P20 bestätigt** |
+
+**Pipeline-Korrektur für betroffene Kunden:**
+```python
+# Option A: ef_total (AX-seitig erweitern)
+ef_total = ef + Erlöse_Maut  # + weitere separierte Komponenten
+
+# Option B: dlv_basis (DLV-seitig reduzieren)
+dlv_basis = float(r.basispreis)  # ohne r.maut_surcharge
+
+# Beide Ansätze sind äquivalent. Wahl abhängig von der Pipeline-Struktur.
+```
+
+**Präzedenz:** Sika Deutschland GmbH (KNR 491063), Welle 1.
+Nominelles Net Δ = −25.758 EUR (−1,97 %). Σ Erlöse Maut = 30.555 EUR.
+Adjustiertes Net Δ = **+4.797 EUR (+0,37 %)**. Δ-Adjustment = +31,2 TEUR.
+Rückwirkender Check aller 9 Welle-1+2-Kunden: Nur 491063 betroffen.
+
