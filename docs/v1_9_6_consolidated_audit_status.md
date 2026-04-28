@@ -1,7 +1,7 @@
-# Konsolidierte Audit-Lage v1.9.6 — 9 Kunden + Sika-Status
+# Konsolidierte Audit-Lage v1.9.7 — 11 Kunden
 
-**Stand:** 2026-04-28 (Update EBM v1.9.6: 2026-04-28)  
-**Methodik-Basis:** v1.9.6 (ZGI-Cluster-Aggregation §2f; AX POST × DLV-Soll)  
+**Stand:** 2026-04-28 (Update Sika Welle 1 v1.9.7: 2026-04-28)  
+**Methodik-Basis:** v1.9.7 (ZGI-Cluster-Aggregation §2f; AX POST × DLV-Soll; Erlöse-Maut-Trennung §15)  
 **Periode:** POST-AX (2025-09-27 – 2026-03-31)
 
 ---
@@ -19,6 +19,8 @@
 | Groz-Beckert | 490527/410912/527373 | groz_beckert.py (7500102) | groz_beckert_step23_results_v196.pkl | 621 | 527 | 84,9 % | 473 | 0 | 54 | 112.997 | +5.729 | +5,07 % | kein Schaden³ |
 | HELU-KABEL | 408244 | helu.py (897a2c6) | helu_step23_results_v196.pkl | 2.293 | 2.185 | 95,3 % | 2.044 | 102 | 39 | 315.991 | +203 | +0,06 % | kein Schaden |
 | Hornschuch AG | 490085 | hornschuch.py (a0a9822) | hornschuch_step23_results_v196.pkl | 2.551 | 1.565 | 61,4 % | 1.549 | 7 | 9 | 408.579 | −205 | −0,05 % | kein Schaden⁴ |
+| **Sika DE** | **491063** | **sika_de.py** | **sika_welle1_step23_results_v197.pkl** | **1.822** | **1.379** | **75,7 %** | **887** | **293** | **199** | **1.278.459** | **−25.758** | **−1,97 %** | **kein Schaden⁵** |
+| **Sika SSC** | **511241** | **ssc.py** | **sika_welle1_step23_results_v197.pkl** | *(geteilt)* | **62** | — | **43** | **0** | **19** | **43.358** | **+2.600** | **+6,38 %** | **kein Schaden⁶** |
 
 **¹ Fischerwerke:** Net Δ +106.811 EUR ist ein Methodik-Artefakt. Charter-Sendungen
 (Vollfahrzeug-Preis) werden gegen per-Stellplatz-DLV verglichen → systematischer M_over
@@ -37,6 +39,18 @@ Coverage 84,9 % = 527/621 (94 Rows DE/HR/NO/SE OOS + 10 Sub-Rows).
 Carrier-Tarif (ERKA-DLV: 99 PL-Zonen, alle Raten leer). Coverage 61,4 % auf
 Pool roh; auf In-Scope (2.291 Rows) = 68,3 %. Operative Klärung ContiTech-
 Vertrags-Scope PL empfohlen (Hypothese C: PL nicht in MegaTrans-Nominierung).
+
+**⁵ Sika DE (Erlöse-Maut-Separation):** Nominelles Net Δ −25.758 EUR (−1,97 %) ist
+vollständig ein Methodik-Artefakt. AX bucht DE-Streckenmaut separat in `Erlöse Maut`
+(Σ 30.555 EUR); Pipeline verwendet nur `Erlöse Fracht`. DLV-Soll enthält `basispreis +
+de_maut`. Adjustiertes Net Δ = **+4.797 EUR (+0,37 %)** — kein Migrationsschaden.
+M2=293 (21,2 %): davon 107 Extreme-M2 (fp < −50 %) durch Kleinstsendungen mit
+fractional AX-Rates; 186 Moderate-M2 durch Maut-Separation-Bias.
+
+**⁶ Sika SSC (M_over-Cluster):** AX rechnet für 19 SSC-Export-Sendungen (30,6 %) über
+DLV-Niveau ab. Positives Net Δ = kein Noerpel-Schaden. OOS-Block de_oos
+(347 Rows, 632 TEUR) außerhalb Export-DLV-Scope; operative Klärung Buchungszugehörigkeit
+empfohlen. KNR 527406 (ATM) nicht in dieser Session (Welle 2).
 
 ---
 
@@ -104,6 +118,19 @@ in Erlöse Fracht. fp = 0,0000 für alle 318 FR-Rows empirisch bestätigt.
 PL-Lücke: 726 Rows / 203.992 EUR. ERKA-DLV enthält 99 PL-Zonen mit leeren
 Freight-Raten → kein DLV-Soll berechenbar. Operative Klärung ausstehend.
 
+### Sika Deutschland GmbH (KNR 491063) — Erlöse-Maut-Trennung
+
+Pipeline: `src/build_sika_step23_v197.py`. DLV: Noerpel SIKA Stellplatzofferte 2025/2026.
+Erlöse-Maut-Trennung: AX bucht `Erlöse Fracht` (base) und `Erlöse Maut` (surcharge) getrennt.
+Calculator `SikaDeCalculator` + `SSCCalculator` aus `sika_de.py` (Commit 7500102).
+KNR 491063 und 511241 in gemeinsamer Pkl: `sika_welle1_step23_results_v197.pkl`.
+
+Kein Calculator-Bug. M2=293 erklärt durch:
+- Erlöse-Maut-Separation-Bias (primär, ~30.555 EUR)
+- Kleinstsendungen fractional rates (107 Extreme-M2-Rows, fp < −50 %)
+
+Adjustiertes Net Δ: +4.797 EUR (+0,37 %). KNR 527406 (ATM): Welle 2.
+
 ### CHT Germany — 4 Länder im Aggregat
 
 CHT-Pkl enthält alle beurteilbaren CHT-Länder (BE, IT, ES, AT) in einer Datei.
@@ -140,7 +167,11 @@ Nicht auf Migrationsschaden zurückführbar.
 
 ---
 
-## 4. Sika-Status
+## 4. Sika-Status — v1.9.7 ABGESCHLOSSEN (KNR 491063 + 511241)
+
+Report: `docs/v1_9_7_sika_welle1_cluster_report.md`  
+Pipeline: `src/build_sika_step23_v197.py` | PKL: `output/sika_welle1_step23_results_v197.pkl`  
+KNR 527406 (ATM): separates BI-Loading erforderlich → Welle 2.
 
 ### Voruntersuchung (Etappe 8i, 2026-04-19)
 
@@ -221,35 +252,36 @@ Empfehlung Reihenfolge:
 
 | Kunde | KNR | Σ ef (EUR) | Status |
 |---|---|---:|---|
-| Sika DE+SSC | 491063+511241 | 1.972.199 | BLOCKIERT — kein v1.9.6 Pipeline-Script |
+| Sika DE+SSC | 491063+511241 | 1.321.817 | ✅ Abgeschlossen (v1.9.7, 2026-04-28) |
+| Sika ATM | 527406 | — | BLOCKIERT — separates BI-Loading, gewichtsbasiert |
 
 ```
 Nächster Schritt (Optionen):
-  (a) Sika-Re-Run — Pipeline-Script bauen für KNR 491063+511241
-  (b) Methodik-Konsolidierung v1.9.7 — aggregation docs schreiben
+  (a) Sika ATM (KNR 527406) — bi_cache_sika_527406.pkl laden + sika_atm.py Calculator
+  (b) Aggregation-Audit Docs — aggregation_codebase_audit.md + retroactive_risk.md
   (c) Hornschuch PL-Klärung — Klärungsgespräch ContiTech vorbereiten
 ```
 
 ---
 
-## 6. Gesamtbild — Audit-Aussage (9 abgeschlossene Kunden)
+## 6. Gesamtbild — Audit-Aussage (11 abgeschlossene Scope-Einheiten)
 
 | Metrik | Wert |
 |---|---|
-| Kunden abgeschlossen | 9 (GEZE, EBM, Fischerwerke, HERMA, CHT, Bitzer, Groz-Beckert, HELU, Hornschuch) |
-| Σ ef beurteilbar | ~5.657.000 EUR |
-| Net Δ gesamt (alle 9) | ~+129.555 EUR (+2,3 %) |
+| Kunden abgeschlossen | 11 (GEZE, EBM, Fischerwerke, HERMA, CHT, Bitzer, Groz-Beckert, HELU, Hornschuch, Sika DE, Sika SSC) |
+| Σ ef beurteilbar | ~6.978.000 EUR |
+| Net Δ gesamt nominell (alle 11) | ~+106.397 EUR (+1,5 %) |
 | Kunden mit Migrationsschaden | **0** |
-| Kunden mit operativem Handlungsbedarf | **3** (HERMA M2* −16 TEUR prüfen; Bitzer Diesel-Floater; Hornschuch PL-Lücke 204 TEUR) |
+| Kunden mit operativem Handlungsbedarf | **4** (HERMA M2* −16 TEUR; Bitzer Diesel-Floater; Hornschuch PL-Lücke 204 TEUR; Sika SSC de_oos-Klärung 632 TEUR) |
 | Calculator-Bugs identifiziert + gefixt | **8** (P10 Fischerwerke; P12+P13+P16 HERMA/Bitzer; H1 Bitzer FR-13400; H1+H2 HELU; G3 Hornschuch AT) |
 
 **Gesamtaussage:**  
-In keinem der 9 abgeschlossenen Kunden ist ein systematischer Migrationsschaden
+In keinem der 11 abgeschlossenen Scope-Einheiten ist ein systematischer Migrationsschaden
 (AX < DLV über multiple Lanes) nachweisbar. Alle M2-Cluster erklären sich durch
 Calculator-Artefakte (Upload-DLV-Zonen, Charter-Pool, Weight-Driver-Bandeffekt,
-FTL-Flat-Rate) oder randständige Einzelfälle (EE stp1–5 EBM, Sondergebühren
-Hornschuch IT zone13). Die Migration hat in keinem Fall zu struktureller
-Unterfakturierung geführt.
+FTL-Flat-Rate, Erlöse-Maut-Trennung) oder randständige Einzelfälle. Die Migration
+hat in keinem Fall zu struktureller Unterfakturierung geführt.
 
-Hornschuch PL (726 Rows, 204 TEUR): außerhalb Audit-Scope bis zur operativen
-Klärung des ContiTech-Vertrags-Scopes für Polen.
+Sika DE nominelles Net Δ −25.758 EUR (−1,97 %): vollständig Erlöse-Maut-Separation-
+Artefakt — adjustiert +4.797 EUR (+0,37 %). Hornschuch PL (726 Rows, 204 TEUR):
+außerhalb Audit-Scope bis zur operativen Klärung des ContiTech-Vertrags-Scopes.
