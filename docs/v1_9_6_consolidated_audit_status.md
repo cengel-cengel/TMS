@@ -1,4 +1,4 @@
-# Konsolidierte Audit-Lage v1.9.6 — 6 Kunden + Sika-Status
+# Konsolidierte Audit-Lage v1.9.6 — 9 Kunden + Sika-Status
 
 **Stand:** 2026-04-28 (Update EBM v1.9.6: 2026-04-28)  
 **Methodik-Basis:** v1.9.6 (ZGI-Cluster-Aggregation §2f; AX POST × DLV-Soll)  
@@ -16,6 +16,9 @@
 | HERMA GmbH | 423650 | herma.py (c26dbe1) | herma_step23_results_v196.pkl | 3.781 | 3.642 | 96,3 % | 2.842 | 384 | 416 | 2.428.736 | −16.374 | −0,67 % | kein Schaden |
 | CHT Germany | 486073 | cht.py (22f0b83) | cht_step23_results_v196.pkl | 702 | 554 | 78,9 % | 539 | 0 | 15 | 257.594 | −668 | −0,26 % | kein Schaden |
 | Bitzer | 406345 | bitzer.py (93dc7c1) | bitzer_step23_results_v196_postfix.pkl | 3.406 | 3.330 | 97,8 % | 2.868 | 206 | 256 | 723.694 | +26.407 | +3,79 % | kein Schaden² |
+| Groz-Beckert | 490527/410912/527373 | groz_beckert.py (7500102) | groz_beckert_step23_results_v196.pkl | 621 | 527 | 84,9 % | 473 | 0 | 54 | 112.997 | +5.729 | +5,07 % | kein Schaden³ |
+| HELU-KABEL | 408244 | helu.py (897a2c6) | helu_step23_results_v196.pkl | 2.293 | 2.185 | 95,3 % | 2.044 | 102 | 39 | 315.991 | +203 | +0,06 % | kein Schaden |
+| Hornschuch AG | 490085 | hornschuch.py (a0a9822) | hornschuch_step23_results_v196.pkl | 2.551 | 1.565 | 61,4 % | 1.549 | 7 | 9 | 408.579 | −205 | −0,05 % | kein Schaden⁴ |
 
 **¹ Fischerwerke:** Net Δ +106.811 EUR ist ein Methodik-Artefakt. Charter-Sendungen
 (Vollfahrzeug-Preis) werden gegen per-Stellplatz-DLV verglichen → systematischer M_over
@@ -24,6 +27,16 @@
 **² Bitzer (post-fix):** Zwei Calculator-Bugs gefixt (IT Zone4 Perioden-Dispatch P16;
 FR-13400 Zone9-Routing). Vor Fix: Net Δ −26.780 EUR (−3,57 %). Die +3,79 % nach Fix
 deuten auf Diesel-Floater-Einschluss in ef-Erlösen hin (offene Prüfung).
+
+**³ Groz-Beckert:** Net Δ +5.729 EUR ausschließlich im GC-Mode (Gewicht/kg, 474 Rows).
+LTL-FTL-Mode (PT-Porto-Lanes, 53 Rows): Δ = 0,00 EUR exakt. GC M_over = Über-Band-
+Sendungen; DLV-Soll überschätzt per-kg-Extrapolation. Kein Carrier-Fehler.
+Coverage 84,9 % = 527/621 (94 Rows DE/HR/NO/SE OOS + 10 Sub-Rows).
+
+**⁴ Hornschuch AG (PL-Lücke):** 726 PL-Rows (203.992 EUR) ohne verifizierbaren
+Carrier-Tarif (ERKA-DLV: 99 PL-Zonen, alle Raten leer). Coverage 61,4 % auf
+Pool roh; auf In-Scope (2.291 Rows) = 68,3 %. Operative Klärung ContiTech-
+Vertrags-Scope PL empfohlen (Hypothese C: PL nicht in MegaTrans-Nominierung).
 
 ---
 
@@ -56,6 +69,40 @@ Mx-DQ waren) jetzt als M_over klassifiziert werden (kein Mx-Kategoriefilter in v
 
 **Audit-Aussage bleibt**: kein Migrationsschaden. IE 100 % M1. Net Δ +0,74 % unter
 Wesentlichkeitsschwelle. EBM-Report v1.9.4: `docs/v1_9_4_ebm_cluster_report.md`.
+
+### Groz-Beckert — Dual-Mode Calculator (LTL-FTL + GC)
+
+Groz-Beckert KG (KNR 410912) + Groz-Beckert Europe GmbH (KNR 490527) +
+Groz Beckert Portuguesa (KNR 527373). KNR 527410 (Carding Belgium):
+scope_out — alle 187 Rows DE-Inland.
+
+Pipeline: `src/build_groz_beckert_step23_v196.py` (Commit 481681f).
+Net Δ +5.728,57 EUR liegt ausschließlich im GC-Mode (Gewicht/kg, 474 Rows).
+LTL-FTL-Mode (PT-Porto-Lanes, 53 Rows): Δ = 0,00 EUR — perfekte DLV-Konformität.
+Calculator-Bugs: keine (dual-mode ab 7500102 korrekt).
+
+### HELU-KABEL — Methodik-Note Calculator-Fixes H1+H2
+
+Pipeline: `src/build_helu_step23_v196.py` (Commit 5338f72). Vor Step 2 wurden
+zwei Calculator-Bugs gefixt (Commit 897a2c6):
+- **H1 (ES-Mendaro zone key):** `_load_es_mendaro` `zone_fn` gab "ES-20870" zurück;
+  `_parse_vertical`-Regex extrahiert Key "ES" → Dict-Lookup scheiterte. Fix: `return "ES"`.
+- **H2 (GB rates_by_col int vs str keys):** `rates_by_col` hatte int-Spalten-Indizes als Keys,
+  `zone_fn` gab `str(col)` zurück → `dict.get("1")` auf int-Key-Dict → None. Fix: `str(c)` Keys.
+67 ES-Rows und 55 GB-Rows waren betroffen; nach Fix 100 % Coverage (0 DLV-Lücke).
+
+### Hornschuch AG — PL-DLV-Lücke + AT-Zone-Fix G3
+
+Pipeline: `src/build_hornschuch_step23_v196.py`. Vor Step 2 wurde Bug G3 gefixt
+(Commit a0a9822): AT-Zone-Funktion nutzte 2-stelligen PLZ-Prefix, DLV hat AT-Zonen
+1–9 (1-stellig) → 1 Row korrigiert.
+
+FR-Castorama/Leroy Merlin (318 Rows): Castorama-DLV definiert additiven
+per-Sendung-Zuschlag ON TOP des ContiTech per-kg. AX bucht nur ContiTech per-kg
+in Erlöse Fracht. fp = 0,0000 für alle 318 FR-Rows empirisch bestätigt.
+
+PL-Lücke: 726 Rows / 203.992 EUR. ERKA-DLV enthält 99 PL-Zonen mit leeren
+Freight-Raten → kein DLV-Soll berechenbar. Operative Klärung ausstehend.
 
 ### CHT Germany — 4 Länder im Aggregat
 
@@ -160,60 +207,49 @@ Empfehlung Reihenfolge:
 
 ---
 
-## 5. Welle-2-Reihenfolge-Empfehlung
+## 5. Welle-2-Status
 
-### Aktuelle Welle-2-Kunden (nach Bitzer)
+### Welle-2-Kunden — Abgeschlossen
 
-| Kunde | KNR | Σ ef (EUR) | BI-Cache | Dinas-Cache | Calculator (Commit) | Komplexität |
-|---|---|---:|---|---|---|---|
-| Groz-Beckert KG | 527410 / 410912 | 219.657 | bi_cache_groz_beckert.pkl ✓ | dinas_cache_groz_beckert.pkl ✓ | groz_beckert.py (7500102) | Mittel (LDM+Weight dual mode) |
-| HELU-KABEL | 408244 | 326.781 | bi_top20_data.pkl ✓ | dinas_cache_408244.pkl ✓ | helu.py (7500102) | Gering (per-100kg, einfach) |
-| Hornschuch AG | 490085 | 708.478 | bi_top20_data.pkl ✓ | dinas_cache_490085.pkl ✓ | hornschuch.py (7500102) | Mittel (ContiTech-Tarif per-kg) |
-| Sika DE+SSC | 491063+511241 | 1.972.199 | bi_top20_data.pkl ✓ | Dinas-Caches ✓ | sika_de.py (7500102) | Hoch (2 KNRs, KNR-Normalisierung P3) |
+| Kunde | KNR | Commit | Net Δ | Status |
+|---|---|---|---:|---|
+| Groz-Beckert | 490527/410912/527373 | 481681f | +5.729 EUR | ✅ Abgeschlossen |
+| HELU-KABEL | 408244 | 5338f72 | +203 EUR | ✅ Abgeschlossen |
+| Hornschuch AG | 490085 | 9ad8c85 | −205 EUR | ✅ Abgeschlossen (PL-Lücke offen) |
 
-### Empfohlene Reihenfolge
+### Verbleibend
+
+| Kunde | KNR | Σ ef (EUR) | Status |
+|---|---|---:|---|
+| Sika DE+SSC | 491063+511241 | 1.972.199 | BLOCKIERT — kein v1.9.6 Pipeline-Script |
 
 ```
-Option A (empfohlen):
-  1. Groz-Beckert  →  2. HELU  →  3. Hornschuch  →  4. Sika DE+SSC
-
-Begründung:
-  Groz-Beckert: Kleinster Scope (220 TEUR), alle Caches vorhanden (Pre-Flight
-    done), dual-mode Calculator gut dokumentiert. Schnellster Einstieg.
-
-  HELU: Mittleres Volumen (327 TEUR), einfachster Tarif (per-100kg), kein
-    Stellplatz-Sonderfall, keine bekannten Calculator-Bugs. 1 Durchlauf erwartet.
-
-  Hornschuch: Größeres Volumen (708 TEUR), ContiTech-MegaTrans-Tarif. Calculator
-    ist Etappe-5j-Stand, funktioniert. Keine Upload-DLV-Komplexität. 1–2 Durchläufe.
-
-  Sika DE+SSC: Höchstes Volumen (1,97 MEUR), höchste Komplexität (2 KNRs, KNR-
-    Normalisierung ARA_Sika_DE+CH, separate Stellplatz-Splits). Beste Vorbedingung:
-    alle Welle-2-Methodik-Erfahrungen gesammelt. Keine Fristen bekannt.
-
-Option B (falls Volumen entscheidet):
-  Sika DE+SSC zuerst (1,97 MEUR > alle anderen). Risiko: Pipeline-Bauaufwand
-  verzögert den Start; v1.9.4 Etappe-8i-Befunde bereits bekannt.
-
-Standard-Vorschlag: Option A.
+Nächster Schritt (Optionen):
+  (a) Sika-Re-Run — Pipeline-Script bauen für KNR 491063+511241
+  (b) Methodik-Konsolidierung v1.9.7 — aggregation docs schreiben
+  (c) Hornschuch PL-Klärung — Klärungsgespräch ContiTech vorbereiten
 ```
 
 ---
 
-## 6. Gesamtbild — Audit-Aussage (6 abgeschlossene Kunden)
+## 6. Gesamtbild — Audit-Aussage (9 abgeschlossene Kunden)
 
 | Metrik | Wert |
 |---|---|
-| Kunden abgeschlossen | 6 (GEZE, EBM, Fischerwerke, HERMA, CHT, Bitzer) |
-| Σ ef beurteilbar | ~4.569.308 EUR |
-| Net Δ gesamt (alle 6) | ~+123.522 EUR (+2,7 %) |
+| Kunden abgeschlossen | 9 (GEZE, EBM, Fischerwerke, HERMA, CHT, Bitzer, Groz-Beckert, HELU, Hornschuch) |
+| Σ ef beurteilbar | ~5.657.000 EUR |
+| Net Δ gesamt (alle 9) | ~+129.555 EUR (+2,3 %) |
 | Kunden mit Migrationsschaden | **0** |
-| Kunden mit operativem Handlungsbedarf | **2** (HERMA M2* −16 TEUR prüfen; Bitzer Diesel-Floater offene Frage) |
-| Calculator-Bugs identifiziert + gefixt | **5** (P10 Fischerwerke, P12+P13+P16 HERMA/Bitzer, H1 Bitzer FR-13400) |
+| Kunden mit operativem Handlungsbedarf | **3** (HERMA M2* −16 TEUR prüfen; Bitzer Diesel-Floater; Hornschuch PL-Lücke 204 TEUR) |
+| Calculator-Bugs identifiziert + gefixt | **8** (P10 Fischerwerke; P12+P13+P16 HERMA/Bitzer; H1 Bitzer FR-13400; H1+H2 HELU; G3 Hornschuch AT) |
 
 **Gesamtaussage:**  
-In keinem der 6 abgeschlossenen Kunden ist ein systematischer Migrationsschaden
+In keinem der 9 abgeschlossenen Kunden ist ein systematischer Migrationsschaden
 (AX < DLV über multiple Lanes) nachweisbar. Alle M2-Cluster erklären sich durch
-Calculator-Artefakte (Upload-DLV-Zonen, Charter-Pool, Weight-Driver-Bandeffekt)
-oder randständige Einzelfälle (EE stp1–5 EBM). Die Migration hat in keinem Fall
-zu struktureller Unterfakturierung geführt.
+Calculator-Artefakte (Upload-DLV-Zonen, Charter-Pool, Weight-Driver-Bandeffekt,
+FTL-Flat-Rate) oder randständige Einzelfälle (EE stp1–5 EBM, Sondergebühren
+Hornschuch IT zone13). Die Migration hat in keinem Fall zu struktureller
+Unterfakturierung geführt.
+
+Hornschuch PL (726 Rows, 204 TEUR): außerhalb Audit-Scope bis zur operativen
+Klärung des ContiTech-Vertrags-Scopes für Polen.
