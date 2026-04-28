@@ -901,25 +901,17 @@ Tonnage 13.000–17.000 kg; ef: 1.120/1.270/1.700 EUR (Flat); dlv: 1.200–1.900
 
 ---
 
-### P20 — Erlös-Spalten-Separation: AX billt mehrere Erlös-Komponenten getrennt
+### P20 — Erlös-Komponenten-Separation: AX billt mehrere Erlös-Positionen getrennt
 
-**Situation:** AX kann Maut, Diesel-Zuschlag, und andere Surcharges in **separaten Erlös-Spalten**
-billen (`Erlöse Maut`, `Erlöse Diesel`, `Erlöse Nebengebühr` etc.). Wenn das DLV diese
-Komponenten **integriert** in die Hauptrate aufnimmt (z. B. `basispreis + de_maut`), aber
-die Pipeline `ef = Erlöse Fracht` verwendet, entsteht ein systematischer negativer Bias:
-
-```
-ef   = Erlöse Fracht          (ohne Maut)
-dlv  = basispreis + de_maut   (mit Maut)
-→ delta = ef − dlv = −de_maut systematisch negativ
-→ fp ≈ −Maut% (z. B. −2,4 % für Sika 491063)
-```
+**Situation:** AX bucht Surcharges (Maut, Diesel, Nebengebühren) in **separaten Erlös-Spalten**
+(`Erlöse Maut`, `Erlöse Diesel`, `Erlöse Nebengebühr` etc.). Wenn der Calculator eine Komponente
+in `dlv_val` **einschließt** (z. B. `dlv_val = basispreis + maut_surcharge`), die Pipeline aber
+nur `ef = Erlöse Fracht` verwendet, entsteht ein **systematischer negativer Bias (M2-Artefakt)**.
 
 **Erkennung in DIAGNOSE 2:**
 ```python
 # Alle Erlöse-Spalten auflisten
 erloese_cols = [c for c in bi.columns if 'erlö' in c.lower()]
-# Σ pro Pool
 for col in erloese_cols:
     pool[col] = pd.to_numeric(pool[col], errors='coerce').fillna(0)
     sigma = pool[col].sum()
@@ -928,35 +920,91 @@ for col in erloese_cols:
 ```
 
 **Entscheidungsregel:**
-- Wenn `Σ Erlöse [Komponente] > 1 % von Σ Erlöse Fracht`: DLV-Sheet prüfen.
-  - DLV enthält Maut/Diesel in Hauptrate → P20 betroffen; `ef_total = ef + Erlöse [Komponente]`
-  - DLV hat separate Maut/Diesel-Kalkulation → Pipeline vergleicht balanciert, kein P20
-- Wenn `Σ Erlöse [Komponente] < 1 %`: negligible, kein Handlungsbedarf.
+- `Σ Erlöse [Komponente] > 1 % von Σ ef` → DLV-Sheet + Calculator prüfen:
+  - Calculator gibt `[komponente]_surcharge != None` → dlv_val enthält Komponente → **P20-Issue**
+    → `ef_total = ef + Erlöse_[Komponente]` (Option A)
+  - Calculator gibt `[komponente]_surcharge = None` → dlv_val OHNE Komponente → **balanciert, kein P20**
+    (Erlöse Diesel in BI + DLV ohne Diesel → fair; ef positiv-verzerrt wenn Diesel in ef embedded)
+- `Σ Erlöse [Komponente] < 1 %` → negligible.
 
-**Korrektheit-Check über Kunden (Rückwirkend geprüft 2026-04-28):**
+---
 
-| Kunde | Σ Erlöse Maut | DLV-Treatment | P20? |
+#### P20.1 — Erlöse Maut (DE-Streckenmaut)
+
+**Bias-Typ:** M2-negativ (ef < dlv wegen fehlender Maut-Komponente in ef)
+
+**Erkennung:** `maut_surcharge != None` im Calculator UND `Σ Erlöse Maut > 1 % ef`
+
+**Rückwirkender Check Maut (2026-04-28, alle 12 Scope-Einheiten):**
+
+| Kunde | Σ Erlöse Maut | Calculator | P20.1? |
 |---|---|---|---|
-| EBM-Papst | 15.596 EUR (2,95 %) | `dlv = r.basispreis` (ohne Maut) | Nein — balanciert |
-| CHT Germany | 12.742 EUR (4,08 %) | `delta_fracht = Erlöse Fracht − basispreis` | Nein — balanciert |
-| HERMA GmbH | 6.518 EUR (0,25 %) | `maut_surcharge=None` in Calculator | Nein — balanciert |
-| GEZE GmbH | 17 EUR (0,003 %) | — | Negligible |
-| Bitzer / HELU / Hornschuch | 0 EUR | — | Nein |
-| **Sika DE 491063** | **30.555 EUR (2,39 %)** | `dlv = basispreis + de_maut` | **JA — P20 bestätigt** |
+| EBM-Papst | 15.596 EUR (2,95 %) | `maut_surcharge=None` | Nein — balanciert |
+| CHT Germany | 12.742 EUR (4,08 %) | `maut_surcharge=None` | Nein — balanciert |
+| HERMA GmbH | 6.518 EUR (0,25 %) | `maut_surcharge=None` | Nein — balanciert |
+| GEZE GmbH | 17 EUR (0,003 %) | `maut_surcharge=None` | Negligible |
+| Bitzer / HELU / Hornschuch | 0 EUR | `maut_surcharge=None` | Nein |
+| **Sika DE 491063** | **30.555 EUR (2,39 %)** | **`maut_surcharge != None`** | **JA** |
+| Sika SSC 511241 | 1.025 EUR (2,06 %) | `maut_surcharge != None` | Ja (klein) |
+| Sika Import 511241 | 18.306 EUR (2,91 %) | `maut_surcharge != None` | Ja |
 
-**Pipeline-Korrektur für betroffene Kunden:**
+**Präzedenz:** Sika 491063. Net Δ nominal −25.758 EUR → adjustiert **+4.797 EUR (+0,37 %)**.
+
+---
+
+#### P20.2 — Erlöse Diesel (Dieselfloater)
+
+**Bias-Typ: KEIN M2-Bias.** Alle Calculators geben `diesel_surcharge=None` →
+dlv_val enthält **keine** Diesel-Komponente → kein "Diesel in dlv, nicht in ef"-Problem.
+
+**Beobachtete Diesel-Muster:**
+
+| Muster | Kunden | Effekt |
+|---|---|---|
+| Diesel in `Erlöse Diesel` (separat), DLV diesel-frei | EBM (6,6%), HELU (8,7%), CHT (1,7%), Sika 491063 (3,0%) | Kein Bias — beide Seiten diesel-frei |
+| Dieselfloater eingebettet in `Erlöse Fracht` | Bitzer (4,2%), Sika Import IT (3,8%) | M_over-Tendenz (ef > dlv) — kein Migrationsschaden |
+| Negative Diesel-Credits in `Erlöse Fracht` | HERMA (−0,8%), Hornschuch (−0,7%) | Kleines M2-Artefakt (ef leicht < dlv) |
+
+**Rückwirkender Check Diesel (2026-04-28, alle 12 Scope-Einheiten):**
+
+| Kunde | Σ Erlöse Diesel | diesel% | Headline-Änderung? |
+|---|---|---:|---|
+| GEZE | 10.250 EUR | 2,4 % | Nein |
+| EBM | 31.706 EUR | 6,6 % | Nein (Net Δ +3.514 EUR positiv — kein M2-Bias) |
+| Fischerwerke | 209 EUR | 0,0 % | Nein |
+| HERMA | −20.459 EUR | −0,8 % | Nein (kleine M2-Beitrag, Gesamtbefund unverändert) |
+| CHT | 5.114 EUR | 1,7 % | Nein |
+| Bitzer | 30.604 EUR | 4,2 % | Nein (M_over, kein Migrationsschaden) |
+| Groz-Beckert | n/a | n/a | Nein |
+| HELU-KABEL | 27.640 EUR | 8,7 % | Nein (Net Δ +203 EUR ≈ 0 — balanciert) |
+| Hornschuch | −2.800 EUR | −0,7 % | Nein |
+| Sika 491063 | 38.847 EUR | 3,0 % | Nein (bereits P20.1 Maut-Adj. +4.797 EUR) |
+| Sika SSC | 1.085 EUR | 2,2 % | Nein |
+| Sika Import | 23.957 EUR | 3,8 % | Nein (IT Dieselfloater bereits dokumentiert) |
+
+**Materielle Adjustments:** 0 Kunden. **Headline-Änderungen:** 0 Kunden.
+
+---
+
+#### P20.3 — Weitere Erlös-Komponenten
+
+Für zukünftige Kunden zusätzlich prüfen:
+- `Erlöse Nebengebühr`: ADR-Zuschlag, Schwergutaufschlag, etc.
+- `Erlöse Lademittel`: Paletten-Tausch etc.
+- `Erlöse EUST Zoll`, `Erlöse Transportversicherung`
+
+Entscheidungsregel identisch: > 1 % von ef UND Calculator gibt entsprechende
+`_surcharge != None` → P20.3-Bias prüfen.
+
+---
+
+**Pipeline-Korrektur (gilt für P20.1 Maut-Fälle):**
 ```python
-# Option A: ef_total (AX-seitig erweitern)
-ef_total = ef + Erlöse_Maut  # + weitere separierte Komponenten
+# Option A: ef_total (AX-seitig erweitern — bevorzugt)
+ef_total = ef + erloes_maut  # + weitere betroffene Komponenten
 
 # Option B: dlv_basis (DLV-seitig reduzieren)
 dlv_basis = float(r.basispreis)  # ohne r.maut_surcharge
-
-# Beide Ansätze sind äquivalent. Wahl abhängig von der Pipeline-Struktur.
+# Beide äquivalent; Option A direkter für Audit-Report.
 ```
-
-**Präzedenz:** Sika Deutschland GmbH (KNR 491063), Welle 1.
-Nominelles Net Δ = −25.758 EUR (−1,97 %). Σ Erlöse Maut = 30.555 EUR.
-Adjustiertes Net Δ = **+4.797 EUR (+0,37 %)**. Δ-Adjustment = +31,2 TEUR.
-Rückwirkender Check aller 9 Welle-1+2-Kunden: Nur 491063 betroffen.
 
