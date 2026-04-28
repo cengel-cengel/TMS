@@ -1,6 +1,6 @@
 # Konsolidierte Audit-Lage v1.9.6 — 6 Kunden + Sika-Status
 
-**Stand:** 2026-04-28  
+**Stand:** 2026-04-28 (Update EBM v1.9.6: 2026-04-28)  
 **Methodik-Basis:** v1.9.6 (ZGI-Cluster-Aggregation §2f; AX POST × DLV-Soll)  
 **Periode:** POST-AX (2025-09-27 – 2026-03-31)
 
@@ -11,7 +11,7 @@
 | Kunde | KNR | Calculator (Commit) | Cache-Datei | Pool roh | Beurteilbar | Coverage | M1 | M2* | M_over | Σ ef (EUR) | Net Δ (EUR) | Net Δ % | Headline |
 |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
 | GEZE GmbH | 406035 | geze.py (dd3d558) | geze_step23_results_v196.pkl | 2.917 | 2.759 | 94,6 % | 2.550 | 132 | 77 | 391.904 | +4.138 | +1,07 % | kein Schaden |
-| EBM-Papst | 410844 | ebm.py (7500102) | *(v1.9.4-Report)* | 365 | 296 | 81,1 % | 264 | 13+12 | 7 | 429.808 | +3.208 | +0,75 % | kein Schaden |
+| EBM-Papst | 410844 | ebm.py (7500102) | ebm_step23_results_v196.pkl | 353 | 308 | 87,3 % | 285 | 1 | 22 | 480.133 | +3.514 | +0,74 % | kein Schaden |
 | Fischerwerke | 409480 | fischerwerke.py (61f229e) | fischerwerke_step23_results_v196.pkl | 1.173 | 839 | 71,5 % | 321 | 107 | 411 | 537.574 | +106.811 | +24,80 % | Charter-Artefakt¹ |
 | HERMA GmbH | 423650 | herma.py (c26dbe1) | herma_step23_results_v196.pkl | 3.781 | 3.642 | 96,3 % | 2.842 | 384 | 416 | 2.428.736 | −16.374 | −0,67 % | kein Schaden |
 | CHT Germany | 486073 | cht.py (22f0b83) | cht_step23_results_v196.pkl | 702 | 554 | 78,9 % | 539 | 0 | 15 | 257.594 | −668 | −0,26 % | kein Schaden |
@@ -29,27 +29,33 @@ deuten auf Diesel-Floater-Einschluss in ef-Erlösen hin (offene Prüfung).
 
 ## 2. Methodik-Anmerkungen
 
-### EBM (v1.9.4, kein v1.9.6-Pkl)
+### EBM — v1.9.6 Re-Run (2026-04-28)
 
-EBM wurde in v1.9.4 abgeschlossen (Cluster-Methodik ohne ZGI-Aggregation). Ein
-v1.9.6-Re-Run wäre technisch möglich (Calculator vorhanden, BI-Daten in bi_top20_data.pkl),
-wird aber nicht priorisiert: das Audit-Ergebnis ist eindeutig (M1-dominant, 0 M2-Funde,
-IE 100 % DLV-konform). EBM-Report: `docs/v1_9_4_ebm_cluster_report.md`.
+EBM v1.9.6 Pipeline (`build_ebm_step23_v196.py`) läuft durch, Ergebnis in
+`output/ebm_step23_results_v196.pkl`. ZGI-Aggregations-Bias: **0 EUR bestätigt**
+(0 Sub-Rows im ef>0-Pool, keine Abrechnungsstrecke/ZGI-Spalten in bi_top20_data.pkl).
 
-EBM-Pool-Details (v1.9.4):
+Pool-Details v1.9.6 vs. v1.9.4:
 
-```
-Rohzeilen (POST AX):    456
-E1 (cross-system):     −86
-E3 (stp_eff=0):         −5
-Pool:                  365
-  out-of-scope (GB/DE): −20
-  DLV-Lücke:            −49
-  Beurteilbar:          296
-```
+| Metrik | v1.9.4 | v1.9.6 | Δ |
+|---|---:|---:|---|
+| Rohzeilen | 456 | 456 | = |
+| Pool (ef>0, nach E1/E3) | 365 | 353 | −12 ³ |
+| Scope-out (DE/GB/RS) | 20 | 17 | −3 |
+| DLV-Lücke | 49 | 28 | −21 ⁴ |
+| Beurteilbar | 296 | 308 | +12 |
+| Net Δ | +3.208 EUR (+0,75 %) | +3.514 EUR (+0,74 %) | +306 EUR |
 
-M-Klassen EBM: M1=264, M2*=13 (EE stp1–5 −570 EUR), M_over=7 (+535 EUR),
-Mx-DQ=12 (SK/1380 Calculator-Bug, AX korrekt, kein Handlungsbedarf).
+**³** v1.9.4 startete von allen 456 Rows und filterte E1 (cross-system). v1.9.6 filtert
+ef>0 zuerst (356) und dann E3 (stp_eff=0): 353. Die 86 cross-system Rows haben alle ef=0.
+
+**⁴** v1.9.4 hatte ES/PT als out-of-scope (kein DLV); v1.9.6 hält ES/PT in-scope
+(EBM hat seit 2025-08-19 PT_ES-DLV), ES/PT-Rows gehen in DLV-Lücke wenn PLZ nicht
+im DLV. M_over-Anstieg (+7→+22) liegt daran, dass SK 905 01 Rows (die in v1.9.4
+Mx-DQ waren) jetzt als M_over klassifiziert werden (kein Mx-Kategoriefilter in v1.9.6).
+
+**Audit-Aussage bleibt**: kein Migrationsschaden. IE 100 % M1. Net Δ +0,74 % unter
+Wesentlichkeitsschwelle. EBM-Report v1.9.4: `docs/v1_9_4_ebm_cluster_report.md`.
 
 ### CHT Germany — 4 Länder im Aggregat
 
