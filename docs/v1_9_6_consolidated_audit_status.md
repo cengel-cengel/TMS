@@ -1,0 +1,213 @@
+# Konsolidierte Audit-Lage v1.9.6 — 6 Kunden + Sika-Status
+
+**Stand:** 2026-04-28  
+**Methodik-Basis:** v1.9.6 (ZGI-Cluster-Aggregation §2f; AX POST × DLV-Soll)  
+**Periode:** POST-AX (2025-09-27 – 2026-03-31)
+
+---
+
+## 1. Konsolidierte Tabelle
+
+| Kunde | KNR | Calculator (Commit) | Cache-Datei | Pool roh | Beurteilbar | Coverage | M1 | M2* | M_over | Σ ef (EUR) | Net Δ (EUR) | Net Δ % | Headline |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| GEZE GmbH | 406035 | geze.py (dd3d558) | geze_step23_results_v196.pkl | 2.917 | 2.759 | 94,6 % | 2.550 | 132 | 77 | 391.904 | +4.138 | +1,07 % | kein Schaden |
+| EBM-Papst | 410844 | ebm.py (7500102) | *(v1.9.4-Report)* | 365 | 296 | 81,1 % | 264 | 13+12 | 7 | 429.808 | +3.208 | +0,75 % | kein Schaden |
+| Fischerwerke | 409480 | fischerwerke.py (61f229e) | fischerwerke_step23_results_v196.pkl | 1.173 | 839 | 71,5 % | 321 | 107 | 411 | 537.574 | +106.811 | +24,80 % | Charter-Artefakt¹ |
+| HERMA GmbH | 423650 | herma.py (c26dbe1) | herma_step23_results_v196.pkl | 3.781 | 3.642 | 96,3 % | 2.842 | 384 | 416 | 2.428.736 | −16.374 | −0,67 % | kein Schaden |
+| CHT Germany | 486073 | cht.py (22f0b83) | cht_step23_results_v196.pkl | 702 | 554 | 78,9 % | 539 | 0 | 15 | 257.594 | −668 | −0,26 % | kein Schaden |
+| Bitzer | 406345 | bitzer.py (93dc7c1) | bitzer_step23_results_v196_postfix.pkl | 3.406 | 3.330 | 97,8 % | 2.868 | 206 | 256 | 723.694 | +26.407 | +3,79 % | kein Schaden² |
+
+**¹ Fischerwerke:** Net Δ +106.811 EUR ist ein Methodik-Artefakt. Charter-Sendungen
+(Vollfahrzeug-Preis) werden gegen per-Stellplatz-DLV verglichen → systematischer M_over
+(+118 TEUR). Non-Charter-Pool: ~+135 EUR (~0 %). Keine operativen Beanstandungen.
+
+**² Bitzer (post-fix):** Zwei Calculator-Bugs gefixt (IT Zone4 Perioden-Dispatch P16;
+FR-13400 Zone9-Routing). Vor Fix: Net Δ −26.780 EUR (−3,57 %). Die +3,79 % nach Fix
+deuten auf Diesel-Floater-Einschluss in ef-Erlösen hin (offene Prüfung).
+
+---
+
+## 2. Methodik-Anmerkungen
+
+### EBM (v1.9.4, kein v1.9.6-Pkl)
+
+EBM wurde in v1.9.4 abgeschlossen (Cluster-Methodik ohne ZGI-Aggregation). Ein
+v1.9.6-Re-Run wäre technisch möglich (Calculator vorhanden, BI-Daten in bi_top20_data.pkl),
+wird aber nicht priorisiert: das Audit-Ergebnis ist eindeutig (M1-dominant, 0 M2-Funde,
+IE 100 % DLV-konform). EBM-Report: `docs/v1_9_4_ebm_cluster_report.md`.
+
+EBM-Pool-Details (v1.9.4):
+
+```
+Rohzeilen (POST AX):    456
+E1 (cross-system):     −86
+E3 (stp_eff=0):         −5
+Pool:                  365
+  out-of-scope (GB/DE): −20
+  DLV-Lücke:            −49
+  Beurteilbar:          296
+```
+
+M-Klassen EBM: M1=264, M2*=13 (EE stp1–5 −570 EUR), M_over=7 (+535 EUR),
+Mx-DQ=12 (SK/1380 Calculator-Bug, AX korrekt, kein Handlungsbedarf).
+
+### CHT Germany — 4 Länder im Aggregat
+
+CHT-Pkl enthält alle beurteilbaren CHT-Länder (BE, IT, ES, AT) in einer Datei.
+Land-Breakdown (rdf, 554 Rows):
+
+| Land | n | Σ ef | Σ dlv | Net Δ |
+|---|---:|---:|---:|---:|
+| AT | 41 | 16.983 | 16.562 | +422 |
+| BE | 241 | 42.490 | 42.690 | −201 |
+| ES | 105 | 124.484 | 125.879 | −1.395 |
+| IT | 167 | 73.638 | 73.132 | +506 |
+| **Σ** | **554** | **257.594** | **258.262** | **−668** |
+
+CHT GR (separater Report/Script): nicht in bi_top20_data.pkl; separat in
+`src/build_9c2c_cht_gr_calculator_test.py` mittels RNLevelCalculator — kein
+Step-2+3-Pool.
+
+### HERMA — M2*-Reduktion durch Cluster-Aggregation
+
+v1.9.4 wies −142.996 EUR M2* aus (Weight-Driver-Artefakt). v1.9.6 nach
+ZGI-Aggregation: −67.758 EUR M2*. Verbleibend nach Cluster-Fix: Net Δ −16.374 EUR.
+Nicht auf Migrationsschaden zurückführbar.
+
+---
+
+## 3. Offene Operative Followups
+
+| Followup | Datei | Priorität |
+|---|---|---|
+| Bitzer FR-13400 Aubagne: ERKA-Rückfrage Zone 9 vs. Profoid-DLV | `docs/operative_followups/bitzer_fr_13400_aubagne_tarifwahl.md` | Mittel |
+| Bitzer FR-92000 Hauts-de-Seine: Zonenzuordnung PLZ 92xxx | `docs/operative_followups/bitzer_fr_92000_zone.md` | Niedrig |
+| HERMA GB-Zones: 10 fehlende UK Area-Codes | `docs/operative_followups/herma_gb_zones.md` | Niedrig |
+| EBM SK/1380: Calculator _lookup() first-match-wins (Backlog) | `docs/backlog/calculator_known_issues.md` | Backlog |
+
+---
+
+## 4. Sika-Status
+
+### Voruntersuchung (Etappe 8i, 2026-04-19)
+
+Methodik v1.0 (Familien-Vergleich Dinas PRE × AX POST, nicht v1.9.6).
+Report: `docs/sika_findings_summary.md`.
+
+Wesentliche Befunde:
+- 8 Familien mit Unterfakturierung, davon 2 Muster-A (AX < DLV < Dinas) → sofortiger Prüfbedarf
+- 3 ATM-CH-Gaps (KNR 527406, FR/IT-Routen, 55.520 EUR hist. Volumen, POST-Aktivität bestätigt)
+- Serbien (RS/34104): DLV-Satz +25 % über Dinas-Ist → DLV-Konfigurationsprüfung nötig
+
+### v1.9.6-Status-Audit
+
+```
+Sika Status-Audit — 2026-04-28
+──────────────────────────────────────────────
+
+KNR 491063 (Sika Deutschland GmbH / CH AG):
+  BI-Daten (bi_top20_data.pkl): 1.407 Rows ef>0, Σef = 1.290.687 EUR
+  Dinas-Cache:          dinas_cache_491063.pkl  (942 KB) ✓
+  Calculator:           sika_de.py — Commit 7500102
+                        shipment_date-Dispatch 2025/2026 vorhanden ✓
+  v1.9.6 Step23-Script: FEHLT
+  v1.9.6 Pkl:           FEHLT
+  ZGI-Aggregation:      noch nicht implementiert für Sika
+  Status:               BLOCKIERT — kein v1.9.6 Step23 Pipeline-Script
+
+KNR 511241 (SIKA SUPPLY CENTER AG):
+  BI-Daten (bi_top20_data.pkl): 415 Rows ef>0, Σef = 681.512 EUR
+  Dinas-Cache:          dinas_cache_ssc_511241.pkl  (217 KB) ✓
+  Calculator:           ssc.py → SSCCalculator aus sika_de.py ✓
+  v1.9.6 Step23-Script: FEHLT (kann mit KNR 491063 gemeinsam gebaut werden)
+  v1.9.6 Pkl:           FEHLT
+  Status:               BLOCKIERT — kein v1.9.6 Step23 Pipeline-Script
+
+KNR 527406 (Sika ATM CH / Automotive):
+  BI-Daten (bi_top20_data.pkl): 0 Rows — KNR NICHT in TOP-20-Datei
+  Separate BI-Cache:    bi_cache_sika_527406.pkl  (517 KB) ✓
+                        bi_cache_sika_atm_de.pkl  (664 KB) ✓
+  Dinas-Cache:          dinas_cache_491063.pkl (geteilt mit KNR 491063)
+  Calculator:           sika_atm.py — Commit f005e63
+  v1.9.6 Step23-Script: FEHLT
+  v1.9.6 Pkl:           FEHLT
+  ATM-CH Stp:           NaN in Dinas (gewichtsbasiert, EUR/100kg) — kein
+                        Stellplatz-Vergleich möglich; separates DLV nötig
+  Status:               BLOCKIERT — nicht in bi_top20, separates BI-Loading
+                        nötig + kein v1.9.6 Step23 Script
+
+──────────────────────────────────────────────
+Empfehlung Reihenfolge:
+  Sika-Re-Run VOR Groz-Beckert: NEIN
+  Begruendung:
+    (a) Sika benötigt neues v1.9.6 Pipeline-Script für zwei KNRs gleichzeitig
+        (491063 + 511241) — Bauaufwand ~2 h.
+    (b) KNR 527406 (ATM) ist nicht in bi_top20 → separates BI-Loading;
+        stp=NaN schränkt Vergleichbarkeit ein.
+    (c) Die kritischen Sika-Befunde (Muster A: 2 Familien AX<DLV) sind bereits
+        bekannt und in sika_findings_summary.md dokumentiert. Eine v1.9.6-
+        Neuanalyse bestätigt diese, löst sie aber nicht.
+    → Sika-Re-Run nach Groz-Beckert + HELU + Hornschuch (Welle 2 fertig),
+      dann als eigenständige Etappe.
+──────────────────────────────────────────────
+```
+
+---
+
+## 5. Welle-2-Reihenfolge-Empfehlung
+
+### Aktuelle Welle-2-Kunden (nach Bitzer)
+
+| Kunde | KNR | Σ ef (EUR) | BI-Cache | Dinas-Cache | Calculator (Commit) | Komplexität |
+|---|---|---:|---|---|---|---|
+| Groz-Beckert KG | 527410 / 410912 | 219.657 | bi_cache_groz_beckert.pkl ✓ | dinas_cache_groz_beckert.pkl ✓ | groz_beckert.py (7500102) | Mittel (LDM+Weight dual mode) |
+| HELU-KABEL | 408244 | 326.781 | bi_top20_data.pkl ✓ | dinas_cache_408244.pkl ✓ | helu.py (7500102) | Gering (per-100kg, einfach) |
+| Hornschuch AG | 490085 | 708.478 | bi_top20_data.pkl ✓ | dinas_cache_490085.pkl ✓ | hornschuch.py (7500102) | Mittel (ContiTech-Tarif per-kg) |
+| Sika DE+SSC | 491063+511241 | 1.972.199 | bi_top20_data.pkl ✓ | Dinas-Caches ✓ | sika_de.py (7500102) | Hoch (2 KNRs, KNR-Normalisierung P3) |
+
+### Empfohlene Reihenfolge
+
+```
+Option A (empfohlen):
+  1. Groz-Beckert  →  2. HELU  →  3. Hornschuch  →  4. Sika DE+SSC
+
+Begründung:
+  Groz-Beckert: Kleinster Scope (220 TEUR), alle Caches vorhanden (Pre-Flight
+    done), dual-mode Calculator gut dokumentiert. Schnellster Einstieg.
+
+  HELU: Mittleres Volumen (327 TEUR), einfachster Tarif (per-100kg), kein
+    Stellplatz-Sonderfall, keine bekannten Calculator-Bugs. 1 Durchlauf erwartet.
+
+  Hornschuch: Größeres Volumen (708 TEUR), ContiTech-MegaTrans-Tarif. Calculator
+    ist Etappe-5j-Stand, funktioniert. Keine Upload-DLV-Komplexität. 1–2 Durchläufe.
+
+  Sika DE+SSC: Höchstes Volumen (1,97 MEUR), höchste Komplexität (2 KNRs, KNR-
+    Normalisierung ARA_Sika_DE+CH, separate Stellplatz-Splits). Beste Vorbedingung:
+    alle Welle-2-Methodik-Erfahrungen gesammelt. Keine Fristen bekannt.
+
+Option B (falls Volumen entscheidet):
+  Sika DE+SSC zuerst (1,97 MEUR > alle anderen). Risiko: Pipeline-Bauaufwand
+  verzögert den Start; v1.9.4 Etappe-8i-Befunde bereits bekannt.
+
+Standard-Vorschlag: Option A.
+```
+
+---
+
+## 6. Gesamtbild — Audit-Aussage (6 abgeschlossene Kunden)
+
+| Metrik | Wert |
+|---|---|
+| Kunden abgeschlossen | 6 (GEZE, EBM, Fischerwerke, HERMA, CHT, Bitzer) |
+| Σ ef beurteilbar | ~4.569.308 EUR |
+| Net Δ gesamt (alle 6) | ~+123.522 EUR (+2,7 %) |
+| Kunden mit Migrationsschaden | **0** |
+| Kunden mit operativem Handlungsbedarf | **2** (HERMA M2* −16 TEUR prüfen; Bitzer Diesel-Floater offene Frage) |
+| Calculator-Bugs identifiziert + gefixt | **5** (P10 Fischerwerke, P12+P13+P16 HERMA/Bitzer, H1 Bitzer FR-13400) |
+
+**Gesamtaussage:**  
+In keinem der 6 abgeschlossenen Kunden ist ein systematischer Migrationsschaden
+(AX < DLV über multiple Lanes) nachweisbar. Alle M2-Cluster erklären sich durch
+Calculator-Artefakte (Upload-DLV-Zonen, Charter-Pool, Weight-Driver-Bandeffekt)
+oder randständige Einzelfälle (EE stp1–5 EBM). Die Migration hat in keinem Fall
+zu struktureller Unterfakturierung geführt.
