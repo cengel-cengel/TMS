@@ -209,8 +209,9 @@ def _load_es_mendaro() -> tuple:
                              col_start=1, weight_col=0)
     valid_from, valid_to = date(2023, 12, 1), date(2023, 12, 31)
 
+    # _parse_vertical strips hyphenated names to first alphanum token ("ES")
     def zone_fn(_plz: str) -> str:
-        return "ES-20870"  # single zone
+        return "ES"
 
     _ES_MENDARO_CACHE = (zone_fn, rates, valid_from, valid_to, path.name)
     return _ES_MENDARO_CACHE
@@ -289,9 +290,9 @@ def _load_gb() -> tuple:
             if r is not None and r > 0:
                 bands_by_col[c].append((bis_kg, r))
 
-    # Build rates dict keyed by col
-    rates_by_col: dict[int, tuple] = {
-        c: (flat_mins[c], bands_by_col[c])
+    # Build rates dict keyed by str(col) — zone_fn returns str(col)
+    rates_by_col: dict[str, tuple] = {
+        str(c): (flat_mins[c], bands_by_col[c])
         for c in zone_areas if bands_by_col[c]
     }
 
