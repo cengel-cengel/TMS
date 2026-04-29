@@ -20,6 +20,13 @@ _calcs = {"IT": CHTItalyCalculator(), "BE": CHTBelgiumCalculator(),
 _KNOWN_S8 = {("924029","46890"), ("924029","08310"),
              ("924040","46890"), ("924145","46890")}
 
+# Gate-6 rn_level_adjustment: systemischer RN-weiter Faktor (kein Calculator-Fehler)
+# (aus build_9c2a/2b Audit-Runs identifiziert)
+_GATE6_RN = {"924132", "924075"}
+
+# DLV verfügbar ab 2026-01-01 (2025-DLV fehlt → Soll nicht verifizierbar)
+_DLV_2026_CUTOFF = pd.Timestamp("2026-01-01")
+
 def soll_fn(land, plz, ton, ldm, stp, vers_plz=None):
     calc = _calcs.get(str(land).upper().strip())
     if calc is None:
@@ -47,6 +54,19 @@ post = post[~post.apply(lambda r: (r["_rn"], r["_plz"]) in _KNOWN_S8, axis=1)].c
 # Filter split-positions: ton < 2 kg (sub-fragments of multi-PLZ shipments)
 post["_ton"] = pd.to_numeric(post["Tonnage (eff.)"], errors="coerce").fillna(0)
 post = post[(post["_ton"] == 0) | (post["_ton"] >= 2.0)].copy()
+
+# Filter pre_dlv_2026: nur 2026-DLV verfügbar → 2025-Sendungen nicht beurteilbar
+post["_dat"] = pd.to_datetime(post["Leistungsdatum"], errors="coerce")
+post = post[post["_dat"].isna() | (post["_dat"] >= _DLV_2026_CUTOFF)].copy()
+
+# Filter rn_valid: RN muss numerisch > 5 sein (analog Audit-Standard rn_valid)
+def _rn_valid(rn_str):
+    try: return float(str(rn_str).replace(",", ".")) > 5
+    except Exception: return False
+post = post[post["_rn"].apply(_rn_valid)].copy()
+
+# Filter Gate-6 rn_level_adjustment: systemischer RN-Faktor, kein Billing-Fehler
+post = post[~post["_rn"].isin(_GATE6_RN)].copy()
 
 zgi   = load_zgi_map("CHT.xlsx")
 
