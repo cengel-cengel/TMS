@@ -28,6 +28,7 @@ data/extracted/
 !**/.gitkeep
 
 # Allow audit report outputs
+!output/erka_lieferung/Sendungs_Gegenueberstellung_v1_0.xlsx
 !output/audit_bericht_*.xlsx
 !output/herma_gb_konditions_analyse.xlsx
 !output/top20_audit_*.xlsx
