@@ -10,7 +10,7 @@ OUT = Path("output/erka_lieferung/EBM_Vergleich.xlsx")
 from tms.tariff.calculators.ebm import EBMCalculator
 _calc = EBMCalculator()
 
-def soll_fn(land, plz, ton, ldm, stp):
+def soll_fn(land, plz, ton, ldm, stp, vers_plz=None):
     try:
         n = max(1, int(round(float(stp)))) if stp and str(stp).strip() not in ('','nan') else 1
         r = _calc.calculate(empf_plz=str(plz).strip(), empf_land=str(land).strip(), stellplaetze=n)

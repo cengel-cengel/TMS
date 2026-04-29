@@ -10,12 +10,14 @@ OUT = Path("output/erka_lieferung/Groz_Beckert_Vergleich.xlsx")
 from tms.tariff.calculators.groz_beckert import GrozBeckertCalculator
 _calc = GrozBeckertCalculator()
 
-def soll_fn(land, plz, ton, ldm, stp):
+def soll_fn(land, plz, ton, ldm, stp, vers_plz=None):
     try:
         t = float(ton) if ton else 0.0
         l = float(ldm) if ldm and str(ldm).strip() not in ('','nan') else 0.0
+        origin = str(vers_plz).strip() if vers_plz and str(vers_plz).strip() not in ('','nan') else None
         r = _calc.calculate(empf_plz=str(plz).strip(), empf_land=str(land).strip(),
-                            tonnage_kg=t if t>0 else None, lademeter=l if l>0 else None)
+                            tonnage_kg=t if t>0 else None, lademeter=l if l>0 else None,
+                            origin_plz=origin)
         zone = next((v.replace('dest_zone=','') for v in r.notes if 'dest_zone' in v), "")
         bl = "GC" if 'mode=GC' in r.notes else "LTL"
         return (float(r.basispreis), bl, zone, "EUR/Sendung", 1)

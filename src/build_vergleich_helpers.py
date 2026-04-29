@@ -140,7 +140,8 @@ def ax_row_generic(r, zgi_map: dict, soll_fn, kunde_name: str) -> dict:
     plz    = str(_safe(r, "Empfänger PLZ")).strip()
     ton    = float(_safe(r, "Tonnage (eff.)", 0) or 0)
     ldm    = float(_safe(r, "Lademeter", 0) or 0)
-    stp    = _safe(r, "Stellplätze", "")
+    stp      = _safe(r, "Stellplätze", "")
+    vers_plz = str(_safe(r, "Versender PLZ", "")).strip()
     auftrag = str(_safe(r, "Auftragsnummer")).strip()
     ms  = str(_safe(r, "Mastersendung", ""))
     ua  = str(_safe(r, "Unterauftrag", ""))
@@ -153,7 +154,7 @@ def ax_row_generic(r, zgi_map: dict, soll_fn, kunde_name: str) -> dict:
     vers   = float(_safe(r, "Erlöse Transportversicherung", 0) or 0)
     nk     = float(_safe(r, "Erlöse Nebengebühr", 0) or 0)
     sigma  = fracht + diesel + maut + lm + peak + eust + vers + nk
-    bp, bl, zone, basis, bm = soll_fn(land, plz, ton, ldm, stp)
+    bp, bl, zone, basis, bm = soll_fn(land, plz, ton, ldm, stp, vers_plz)
     soll_eur = bp or 0
     eff = round(sigma / bm * 100, 4) if bm and bm > 0 and basis=="EUR/100kg" else (
           round(sigma / bm, 4) if bm and bm > 0 else "")
@@ -187,7 +188,7 @@ def dinas_row_generic(r, soll_fn, kunde_name: str) -> dict:
     nk_cols = ["ausfuhr","verzollung","zoll_duty","zoll_betrag","sulphur","neben_pausch","redebit","sonstige"]
     sonst = sum(float(r[c]) for c in nk_cols if r.get(c) and not (isinstance(r[c],float) and math.isnan(r[c])))
     sigma = fracht + diesel + maut + sonst
-    bp, bl, zone, basis, bm = soll_fn(land, plz, ton, ldm, stp)
+    bp, bl, zone, basis, bm = soll_fn(land, plz, ton, ldm, stp, None)
     soll_eur = bp or 0
     return {
         "System":"alt","Auftrags-Nr":str(r.get("sendungs_nr","")),

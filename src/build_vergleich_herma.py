@@ -17,7 +17,7 @@ def _herma_band(bw):
         if bw <= lim: return f"bis {lim}kg"
     return "über 3000kg"
 
-def soll_fn(land, plz, ton, ldm, stp):
+def soll_fn(land, plz, ton, ldm, stp, vers_plz=None):
     try:
         t = float(ton) if ton else 0.0
         l = float(ldm) if ldm and str(ldm).strip() not in ('','nan') else 0.0
