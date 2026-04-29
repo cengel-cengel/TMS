@@ -1,6 +1,6 @@
-# Konsolidierte Audit-Lage v1.9.7 — 11 Kunden / 12 Scope-Einheiten
+# Konsolidierte Audit-Lage v1.9.7 — 12 Kunden / 13 Scope-Einheiten
 
-**Stand:** 2026-04-28 (Update Sika Import-Flow v1.9.7: 2026-04-28)  
+**Stand:** 2026-04-29 (Update Sika ATM 527406 v1.9.7: 2026-04-29)  
 **Methodik-Basis:** v1.9.7 (ZGI-Cluster-Aggregation §2f; AX POST × DLV-Soll; Erlöse-Maut-Trennung §15)  
 **Periode:** POST-AX (2025-09-27 – 2026-03-31)
 
@@ -22,6 +22,7 @@
 | **Sika DE** | **491063** | **sika_de.py** | **sika_welle1_step23_results_v197.pkl** | **1.822** | **1.379** | **75,7 %** | **887** | **293** | **199** | **1.278.459** | **−25.758** | **−1,97 %** | **kein Schaden⁵** |
 | **Sika SSC** | **511241** | **ssc.py** | **sika_welle1_step23_results_v197.pkl** | *(geteilt)* | **62** | — | **43** | **0** | **19** | **43.358** | **+2.600** | **+6,38 %** | **kein Schaden⁶** |
 | **Sika Import** | **511241** | **sika_import.py (4d38156)** | **sika_import_step23_results_v197.pkl** | **346** | **346** | **100 %** | **278** | **9** | **59** | **629.422** | **+9.915** | **+1,55 %** | **kein Schaden⁷** |
+| **Sika ATM** | **527406** | **sika_atm.py (f005e63)** | **sika_atm_step23_results_v197.pkl** | **396** | **395** | **99,7 %** | **298** | **92** | **5** | **217.470** | **−7.243** | **−3,22 %** | **kein Schaden⁸** |
 
 **¹ Fischerwerke:** Net Δ +106.811 EUR ist ein Methodik-Artefakt. Charter-Sendungen
 (Vollfahrzeug-Preis) werden gegen per-Stellplatz-DLV verglichen → systematischer M_over
@@ -51,7 +52,7 @@ fractional AX-Rates; 186 Moderate-M2 durch Maut-Separation-Bias.
 **⁶ Sika SSC (M_over-Cluster):** AX rechnet für 19 SSC-Export-Sendungen (30,6 %) über
 DLV-Niveau ab. Positives Net Δ = kein Noerpel-Schaden. OOS-Block de_oos
 (347 Rows, 632 TEUR) außerhalb Export-DLV-Scope; operative Klärung Buchungszugehörigkeit
-empfohlen. KNR 527406 (ATM) nicht in dieser Session (Welle 2).
+empfohlen. KNR 527406 ATM: abgeschlossen (s. ⁸).
 
 **⁷ Sika Import-Flow (Dieselfloater-Artefakt):** 346 Rows sind physische Import-Sendungen
 von IT-28065 (Cerano) und ES-28108 (Alcobendas) nach DE-70499 (Stuttgart). Es gelten
@@ -60,6 +61,16 @@ in ef_total einbezogen. Net Δ P20-adj = +9.915 EUR (+1,55 %). IT M_over (59 Row
 Quartalsdieselfloater variiert AX-ef über/unter LKW-Flatrate; Aggregat innerhalb
 Wesentlichkeitsschwelle. ES: 113/113 M1 (100 %), Net Δ P20 = −557 EUR (−0,21 %).
 Kein Migrationsschaden. Report: `docs/v1_9_7_sika_511241_import_report.md`.
+
+**⁸ Sika ATM (RS pre-existing, kein Migrationsfehler):** 395 beurteilbar (Coverage 99,7 %).
+Net Δ −7.243 EUR (−3,22 %) dominiert durch RS Serbia (32 Rows, −5.357 EUR, −20,52 %):
+separate Laufkarten-Vereinbarung für PLZ 34000 Kragujevac, nicht in Anlage 1 hinterlegt;
+14 M2-Rows weichen systematisch unter DLV-Satz ab (vorbestehend, kein Migrationsfehler).
+Excl. RS: Net Δ −1.886 EUR (−0,95 %) — innerhalb Wesentlichkeitsschwelle. P20: keine
+Adjustment (Maut 21 EUR + Diesel 36 EUR < 0,1 % ef). IT 85025 M_over (2 Rows, +3.611 EUR):
+Abrechnungsgrundlage Stellplatz vs. Gewicht operative Prüfung. ES 28041 (1 Row, +1.270 EUR):
+Spot-Rate Hypothese. PT: 100 % M1, Net Δ = 0 EUR exakt. Calculator-Bugs: keine.
+Report: `docs/v1_9_7_sika_atm_cluster_report.md`.
 
 ---
 
