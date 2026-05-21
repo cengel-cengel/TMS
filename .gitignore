@@ -17,6 +17,9 @@ data/extracted/
 # Large data files anywhere in the repo
 **/*.pdf
 **/*.PDF
+**/*.jpg
+**/*.jpeg
+**/*.png
 **/*.xlsx
 **/*.xls
 **/*.xlsb
