@@ -64,6 +64,8 @@ STEP 2 — EXTRACT per-card positions using the matching field labels:
   at      → header: "KARTEN: <KARTENNUMMER>" + "LENKER: <NAME>"
              total row: "KARTEN TOTAL" → TOTAL EXKL.MWST · MWST BETRAG · INKL.MWST (EUR)
              kennzeichen: LENKER name
+             rechnung_netto/ust/brutto: always null on rechnung pages — AT has no per-page
+             subtotals. The RECHNUNGSSUMME row is an invoice total, not a page total.
 
   ch      → header: "CARD: <KARTENNUMMER>  <CARDHOLDER>"
              total row: per-card → TOTAL EXCL.VAT (AFTER REBATE — not BASE PRICE) · VAT · INCL.VAT
@@ -84,8 +86,13 @@ NEGATIVE AMOUNTS: "2,82-" or "3,36-" means -2.82 / -3.36. Output as negative.
 SKIP THESE ROWS (subtotals — NEVER extract as positions):
   Summe Kraftstoffe · Summe Lieferungen · Summe Gebühren · sonst. Kfz Waren/Die
   SUMME KARTE/KFZ · KARTEN TOTAL · CARD TOTAL · TOTALE CARTA · TOTAAL KAART
-  KOSTENSTELLEN-SUMME · COST CENTRE SUBTOTAL · RIEPILOGO · PRODUKT/BTW OVERZICHT
-  BTW OVERZICHT · Zwischensumme · Subtotal · GESAMT
+  KOSTENSTELLEN-SUMME · KOSTENSTELLEN-SUMME 1 · KOSTENSTELLEN-SUMME 2 · COST CENTRE SUBTOTAL
+  RIEPILOGO · PRODUKT/BTW OVERZICHT · BTW OVERZICHT · Zwischensumme · Subtotal · GESAMT
+
+⚠ AT FORMAT (at): KOSTENSTELLEN-SUMME rows always appear with a number suffix
+  (e.g. "KOSTENSTELLEN-SUMME 1:", "KOSTENSTELLEN-SUMME 2:"). NEVER extract these
+  as positions — not even with blank kennzeichen. They are cost-center subtotals.
+  Only extract a position when a KARTEN: card header is visible on this page.
 
 ⚠ If a card block starts on this page but its total row is NOT visible (block
   continues on next page): set netto=null, ust=null, brutto=null for that card.
