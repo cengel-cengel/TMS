@@ -41,3 +41,4 @@ data/extracted/
 !output/cluster_vergleich_5vs5.xlsx
 !output/*/rechnungsvergleich.xlsx
 !data/Besonderheiten_bei_der_Kundenabrechnung.xlsx
+!output/b2m/excel/*.xlsx
