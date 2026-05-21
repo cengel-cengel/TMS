@@ -1,17 +1,19 @@
 """3-Stufen-Validierung für B2M invoice extraction results.
 
+Stufe 0 (Manifest):  extracted RN count == manifest RN count
 Stufe 1 (Position):  netto + ust = brutto  (±2 Cent)
-                     Note: VAT rate is NOT fixed — B2M uses 0%/7%/19%/20%
+                     Note: VAT rate is NOT fixed — B2M uses 0%/7%/19%/20%/21%/22%
 Stufe 2 (Rechnung):  Σ positionen.netto = rechnung_netto  (±2 Cent for rounding)
                      rechnung_netto + rechnung_ust = rechnung_brutto  (±2 Cent)
-Stufe 3 (Abrechnung): Σ invoice totals = ABRECHNUNGSBRIEF.gesamtbetrag  (±10 Cent)
+Stufe 3 (Abrechnung): Σ invoice brutto = manifest.betrag_eur per RN  (±10 Cent)
+                      Fallback: Σ ZUSAMMENSTELLUNG bruttos = ABRECHNUNGSBRIEF.gesamtbetrag
 Stufe 4 (Gegenprobe): Σ positions per invoice block = ZUSAMMENSTELLUNG  (±10 Cent)
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .schema import PageResult, Position, cents
+from .schema import PageResult, Position, ManifestEntry, cents
 
 _TOL_RECHNUNG = 2    # ±2 cent per page
 _TOL_GESAMT   = 10   # ±10 cent for cross-invoice aggregates
@@ -30,19 +32,19 @@ class ValidationResult:
 
 def _near(a: Optional[int], b: Optional[int], tol: int) -> bool:
     if a is None or b is None:
-        return True  # can't check — skip rather than flag
+        return True
     return abs(a - b) <= tol
 
 
 def validate_position(pos: Position) -> ValidationResult:
     """Stufe1: netto + ust = brutto (±2 Cent).
 
-    B2M invoices use multiple VAT rates (0%/7%/19%/20%) — do NOT check rate.
-    The additive consistency (netto + ust = brutto) is the invariant.
+    Multiple VAT rates used (0%/7%/19%/20%/21%/22%) — do NOT check rate.
+    Negative netto (Nachlass/discount) is valid.
     """
     vr = ValidationResult(ok=True)
     if pos.netto is None or pos.ust is None or pos.brutto is None:
-        return vr  # can't check without all three — skip
+        return vr
     expected_brutto = cents(pos.netto) + cents(pos.ust)
     actual_brutto = cents(pos.brutto)
     if not _near(expected_brutto, actual_brutto, _TOL_RECHNUNG):
@@ -56,7 +58,7 @@ def validate_position(pos: Position) -> ValidationResult:
 
 def validate_rechnung_page(page: PageResult) -> ValidationResult:
     """Clear and re-validate a RECHNUNG page. Always clears flags first."""
-    page.flags = []   # reset — always re-validate with current logic
+    page.flags = []
     vr = ValidationResult(ok=True)
     if page.seiten_typ != "rechnung":
         return vr
@@ -68,9 +70,9 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
             page.flags.extend(pv.flags)
             vr.ok = False
 
-    # Stufe 2a: Σ netto matches page-level total (only if total is present)
+    # Stufe 2a: Σ netto matches page-level total
     if page.rechnung_netto is not None and page.positionen:
-        sum_netto = cents(sum(p.netto for p in page.positionen if p.netto))
+        sum_netto = cents(sum(p.netto for p in page.positionen if p.netto is not None))
         if not _near(sum_netto, cents(page.rechnung_netto), _TOL_RECHNUNG):
             msg = (
                 f"Stufe2a Σnetto mismatch pg{page.seite}: "
@@ -100,21 +102,11 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
 def deduplicate_split_blocks(pages: list[PageResult]) -> int:
     """Remove intermediate-subtotal false extras from split-block Karte entries.
 
-    When a Karte block spans two pages, Vision sometimes reads the
-    "Summe Kraftstoffe" sub-total row on the first page as the Karte total.
-    The true SUMME KARTE/KFZ is on the next page, producing a duplicate entry
-    for the same Kennzeichen on consecutive pages (different, smaller value on
-    the first page).
-
     Rule: if Kennzeichen X appears on page N with value V1 AND on page N+1
-    with value V2, and V1 < V2 (the classic subtotal-vs-total pattern), then
-    null out the page-N entry. Identical values (possible genuine twin billing)
-    are left untouched.
-
-    Returns: number of positions nulled out.
+    with value V2, and V1 < V2 (subtotal-vs-total pattern), null out page-N entry.
+    Identical values (possible genuine twin billing) are left untouched.
     """
     from .schema import cents as _cents
-    # Group by (rechnungsnummer, kennzeichen): [(seite, position_obj)]
     from collections import defaultdict
     groups: dict[tuple, list] = defaultdict(list)
     for page in pages:
@@ -129,16 +121,14 @@ def deduplicate_split_blocks(pages: list[PageResult]) -> int:
         if len(entries) < 2:
             continue
         entries_sorted = sorted(entries, key=lambda x: x[0])
-        # Check consecutive-page duplicates
         for i in range(len(entries_sorted) - 1):
             s1, pos1 = entries_sorted[i]
             s2, pos2 = entries_sorted[i + 1]
             if s2 != s1 + 1:
-                continue  # not consecutive — skip
+                continue
             if pos1.netto is None or pos2.netto is None:
                 continue
             if pos1.netto < pos2.netto:
-                # pos1 is the false intermediate subtotal — null it out
                 pos1.netto = None
                 pos1.ust = None
                 pos1.brutto = None
@@ -146,13 +136,16 @@ def deduplicate_split_blocks(pages: list[PageResult]) -> int:
     return n_nulled
 
 
-def validate_abrechnung(pages: list[PageResult]) -> list[str]:
-    """Stufe 3+4: cross-invoice validation using ZUSAMMENSTELLUNG pages.
+def validate_abrechnung(
+    pages: list[PageResult],
+    manifest: list[ManifestEntry] | None = None,
+) -> list[str]:
+    """Stufe 3+4: cross-invoice validation.
 
-    B2M PDFs contain multiple invoice blocks. Each ZUSAMMENSTELLUNG page
-    covers the invoice block that precedes it (identified by shared RN).
-    Stufe 3: Σ ZUSAMMENSTELLUNG bruttos = ABRECHNUNGSBRIEF.gesamtbetrag.
-    Stufe 4: Σ positions in a block = that block's ZUSAMMENSTELLUNG total.
+    Stufe 3a (manifest): if manifest present, compare each RN's Σbrutto against
+                         manifest.betrag_eur (the ground truth from cover page).
+    Stufe 3b (fallback): last ZUSAMMENSTELLUNG.brutto == ABRECHNUNGSBRIEF.gesamtbetrag.
+    Stufe 4: Σ positions per RN block == that block's ZUSAMMENSTELLUNG netto.
     """
     flags = []
 
@@ -163,22 +156,64 @@ def validate_abrechnung(pages: list[PageResult]) -> list[str]:
     if not rechnungen:
         return flags
 
-    # Stufe 3: last ZUSAMMENSTELLUNG.brutto = Gesamtbetrag
-    # Use ONLY the last ZUSAMMENSTELLUNG — it covers all blocks (grand total).
-    # Summing multiple ZUSAMMENSTELLUNG pages would double-count earlier blocks.
+    # ── Stufe 3a: per-RN manifest check ──────────────────────────────────
+    if manifest:
+        # Group RECHNUNG pages by RN
+        from collections import defaultdict
+        by_rn: dict[str, list[PageResult]] = defaultdict(list)
+        for p in rechnungen:
+            if p.rechnungsnummer:
+                by_rn[p.rechnungsnummer].append(p)
+
+        # Stufe 0: manifest RN count vs extracted RN count
+        manifest_rns = {m.rechnungsnummer for m in manifest}
+        extracted_rns = set(by_rn.keys())
+        missing_rns = manifest_rns - extracted_rns
+        extra_rns   = extracted_rns - manifest_rns
+        if missing_rns:
+            flags.append(f"Stufe0 RN im Manifest nicht extrahiert: {sorted(missing_rns)}")
+        if extra_rns:
+            flags.append(f"Stufe0 RN extrahiert aber nicht im Manifest: {sorted(extra_rns)}")
+
+        # Stufe 3a: per-RN brutto sum vs manifest
+        # For non-EUR invoices (CH=CHF): extracted amounts are in local currency,
+        # so compare against betrag_lw; use betrag_eur for EUR-denominated invoices.
+        for entry in manifest:
+            rn = entry.rechnungsnummer
+            block = by_rn.get(rn, [])
+            if not block:
+                continue
+            sum_brutto = sum(
+                cents(pos.brutto)
+                for p in block for pos in p.positionen
+                if pos.brutto is not None
+            )
+            if entry.waehrung != "EUR" and entry.betrag_lw is not None:
+                target = cents(entry.betrag_lw)
+                currency_label = entry.waehrung
+            else:
+                target = cents(entry.betrag_eur)
+                currency_label = "EUR"
+            if not _near(sum_brutto, target, _TOL_GESAMT):
+                flags.append(
+                    f"Stufe3 {entry.land} rn={rn} Σbrutto≠Manifest: "
+                    f"Σ={sum_brutto/100:.2f} vs {target/100:.2f} {currency_label} "
+                    f"(Δ={abs(sum_brutto - target)} Cent)"
+                )
+
+    # ── Stufe 3b: last ZUSAMMENSTELLUNG == gesamtbetrag (fallback) ───────
     if cover and cover.gesamtbetrag and summaries:
         last_summary = summaries[-1]
         if last_summary.rechnung_brutto and not _near(
             cents(last_summary.rechnung_brutto), cents(cover.gesamtbetrag), _TOL_GESAMT
         ):
             flags.append(
-                f"Stufe3 letzte-Zusammenstellung≠Gesamtbetrag: "
+                f"Stufe3b letzte-Zusammenstellung≠Gesamtbetrag: "
                 f"{last_summary.rechnung_brutto} vs {cover.gesamtbetrag} "
                 f"(Δ={abs(cents(last_summary.rechnung_brutto) - cents(cover.gesamtbetrag))} Cent)"
             )
 
-    # Stufe 4: for each ZUSAMMENSTELLUNG, find preceding RECHNUNG pages (same RN)
-    #          and compare Σ positions against the ZUSAMMENSTELLUNG total
+    # ── Stufe 4: Σ positions per RN == ZUSAMMENSTELLUNG netto ────────────
     for summary in summaries:
         rn = summary.rechnungsnummer
         if not rn:
@@ -190,7 +225,7 @@ def validate_abrechnung(pages: list[PageResult]) -> list[str]:
             cents(pos.netto)
             for p in block_pages
             for pos in p.positionen
-            if pos.netto
+            if pos.netto is not None
         )
         if summary.rechnung_netto and not _near(
             sum_pos_netto, cents(summary.rechnung_netto), _TOL_GESAMT

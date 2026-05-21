@@ -23,6 +23,14 @@ PDFS = [PDF_DIR / f"B2M_{i} 1.pdf" for i in range(1, 6)]
 OUT_DIR = Path("output/b2m/full")
 
 
+def _find_img(seite: int, cache_dir: Path) -> Path | None:
+    for ext in (".jpg", ".png"):
+        p = cache_dir / f"page_{seite:03d}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
 def run_pdf(pdf_path: Path) -> list:
     cache_dir = OUT_DIR / "pages" / pdf_path.stem.replace(" ", "_")
     json_cache = OUT_DIR / f"{pdf_path.stem.replace(' ', '_')}_pages.jsonl"
@@ -60,7 +68,66 @@ def run_pdf(pdf_path: Path) -> list:
     if n_deduped:
         print(f"  Deduplicated: {n_deduped} split-block false extras")
 
-    cross_flags = validate_abrechnung(pages)
+    # ── Third pass: recover null-KZ positions via Σ(individual rows) ──
+    # Only recover if (rn, kz) has NO non-null netto elsewhere in the block.
+    from src.b2m.vision import recover_split_kz
+    from src.b2m.schema import parse_de as _parse_de
+
+    _has_value: set[tuple] = {
+        (p.rechnungsnummer or "", (pos.kennzeichen or "").strip())
+        for p in pages if p.seiten_typ == "rechnung"
+        for pos in p.positionen if pos.netto is not None
+    }
+    _seen_rn_kz: set[tuple] = set()
+    null_kz_entries = []
+    for p in pages:
+        if p.seiten_typ != "rechnung":
+            continue
+        for pos in p.positionen:
+            if pos.netto is not None:
+                continue
+            kz_str = (pos.kennzeichen or "").strip()
+            if not kz_str:
+                continue
+            key = (p.rechnungsnummer or "", kz_str)
+            if key in _has_value or key in _seen_rn_kz:
+                continue
+            _seen_rn_kz.add(key)
+            null_kz_entries.append((p, pos))
+    if null_kz_entries:
+        print(f"  3rd-pass: {len(null_kz_entries)} null-KZ positions")
+        n_recovered = 0
+        for page, pos in null_kz_entries:
+            kz = pos.kennzeichen or "?"
+            img_paths = [img for s in (page.seite, page.seite + 1)
+                         if (img := _find_img(s, cache_dir)) is not None]
+            if not img_paths:
+                continue
+            print(f"    pg{page.seite} {kz} ...", end=" ", flush=True)
+            recovered = recover_split_kz(img_paths, kz)
+            if recovered and recovered.get("netto") is not None:
+                pos.netto   = _parse_de(recovered["netto"])
+                pos.ust     = _parse_de(recovered.get("ust"))
+                pos.brutto  = _parse_de(recovered.get("brutto"))
+                pos.artikel = recovered.get("artikel") or pos.artikel
+                for raw_pos in (page.raw.get("positionen") or []):
+                    if (raw_pos.get("kennzeichen") or "").strip() == kz:
+                        raw_pos["netto"]   = str(pos.netto)
+                        raw_pos["ust"]     = str(pos.ust)
+                        raw_pos["brutto"]  = str(pos.brutto)
+                        raw_pos["artikel"] = pos.artikel
+                        break
+                print(f"✓ netto={pos.netto}")
+                n_recovered += 1
+            else:
+                print("no rows found")
+            validate_rechnung_page(page)
+        if n_recovered:
+            print(f"  Recovered: {n_recovered}/{len(null_kz_entries)}")
+
+    cover = next((p for p in pages if p.seiten_typ == "abrechnungsbrief"), None)
+    manifest = cover.manifest if cover else None
+    cross_flags = validate_abrechnung(pages, manifest=manifest)
     if cross_flags:
         for f in cross_flags:
             print(f"  ✗ {f}")
