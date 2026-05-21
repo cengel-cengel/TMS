@@ -118,6 +118,16 @@ def run_pdf(pdf_path: Path) -> list:
         if n_recovered:
             print(f"  Recovered: {n_recovered}/{len(null_kz_entries)}")
 
+    # ── Re-write JSONL after dedup + 3rd-pass (serializes final Python state) ──
+    with open(json_cache, "w") as jf:
+        for p in pages:
+            jf.write(json.dumps(p.to_dict() | {
+                "_pdf": pdf_path.name,
+                "_seite": p.seite,
+                "_seiten_typ": p.seiten_typ,
+                "_flags": p.flags,
+            }) + "\n")
+
     cover = next((p for p in pages if p.seiten_typ == "abrechnungsbrief"), None)
     manifest = cover.manifest if cover else None
     cross_flags = validate_abrechnung(pages, manifest=manifest)
