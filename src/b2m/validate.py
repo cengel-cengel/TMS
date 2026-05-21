@@ -1,22 +1,20 @@
 """3-Stufen-Validierung für B2M invoice extraction results.
 
-Stufe 1 (Position):  ust ≈ netto × 0.19  (±1 Cent)
+Stufe 1 (Position):  netto + ust = brutto  (±2 Cent)
+                     Note: VAT rate is NOT fixed — B2M uses 0%/7%/19%/20%
 Stufe 2 (Rechnung):  Σ positionen.netto = rechnung_netto  (±2 Cent for rounding)
                      rechnung_netto + rechnung_ust = rechnung_brutto  (±2 Cent)
-Stufe 3 (Abrechnung): Σ rechnung_brutto = gesamtbetrag  (±5 Cent across pages)
-Stufe 4 (Gegenprobe): zusammenstellung.rechnung_* = Σ rechnung pages  (±5 Cent)
+Stufe 3 (Abrechnung): Σ invoice totals = ABRECHNUNGSBRIEF.gesamtbetrag  (±10 Cent)
+Stufe 4 (Gegenprobe): Σ positions per invoice block = ZUSAMMENSTELLUNG  (±10 Cent)
 """
 from __future__ import annotations
-from decimal import Decimal
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .schema import PageResult, Position, cents
 
-_UST_RATE = Decimal("0.19")
-_TOL_POSITION = 1    # ±1 cent
-_TOL_RECHNUNG = 2    # ±2 cent
-_TOL_GESAMT   = 5    # ±5 cent
+_TOL_RECHNUNG = 2    # ±2 cent per page
+_TOL_GESAMT   = 10   # ±10 cent for cross-invoice aggregates
 
 
 @dataclass
@@ -37,21 +35,28 @@ def _near(a: Optional[int], b: Optional[int], tol: int) -> bool:
 
 
 def validate_position(pos: Position) -> ValidationResult:
+    """Stufe1: netto + ust = brutto (±2 Cent).
+
+    B2M invoices use multiple VAT rates (0%/7%/19%/20%) — do NOT check rate.
+    The additive consistency (netto + ust = brutto) is the invariant.
+    """
     vr = ValidationResult(ok=True)
-    if pos.netto is None or pos.ust is None:
-        return vr  # missing data — skip
-    expected_ust = cents(pos.netto * _UST_RATE)
-    actual_ust = cents(pos.ust)
-    if not _near(actual_ust, expected_ust, _TOL_POSITION):
+    if pos.netto is None or pos.ust is None or pos.brutto is None:
+        return vr  # can't check without all three — skip
+    expected_brutto = cents(pos.netto) + cents(pos.ust)
+    actual_brutto = cents(pos.brutto)
+    if not _near(expected_brutto, actual_brutto, _TOL_RECHNUNG):
         vr.fail(
-            f"Stufe1 USt mismatch {pos.kennzeichen}/{pos.artikel}: "
-            f"ist={pos.ust} erwartet≈{pos.netto}×0.19={pos.netto * _UST_RATE:.2f} "
-            f"(Δ={abs(actual_ust - expected_ust)} Cent)"
+            f"Stufe1 netto+ust≠brutto {pos.kennzeichen}/{pos.artikel}: "
+            f"{pos.netto}+{pos.ust}={expected_brutto/100:.2f} vs brutto={pos.brutto} "
+            f"(Δ={abs(expected_brutto - actual_brutto)} Cent)"
         )
     return vr
 
 
 def validate_rechnung_page(page: PageResult) -> ValidationResult:
+    """Clear and re-validate a RECHNUNG page. Always clears flags first."""
+    page.flags = []   # reset — always re-validate with current logic
     vr = ValidationResult(ok=True)
     if page.seiten_typ != "rechnung":
         return vr
@@ -61,9 +66,9 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
         pv = validate_position(pos)
         if not pv.ok:
             page.flags.extend(pv.flags)
-            vr.fail(f"Stufe1 in pg{page.seite}")
+            vr.ok = False
 
-    # Stufe 2a: Σ netto
+    # Stufe 2a: Σ netto matches page-level total (only if total is present)
     if page.rechnung_netto is not None and page.positionen:
         sum_netto = cents(sum(p.netto for p in page.positionen if p.netto))
         if not _near(sum_netto, cents(page.rechnung_netto), _TOL_RECHNUNG):
@@ -73,9 +78,9 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
                 f"(Δ={abs(sum_netto - cents(page.rechnung_netto))} Cent)"
             )
             page.flags.append(msg)
-            vr.fail(msg)
+            vr.ok = False
 
-    # Stufe 2b: netto + ust = brutto
+    # Stufe 2b: netto + ust = brutto at page level
     if all(x is not None for x in [page.rechnung_netto, page.rechnung_ust, page.rechnung_brutto]):
         expected = cents(page.rechnung_netto) + cents(page.rechnung_ust)
         actual = cents(page.rechnung_brutto)
@@ -87,46 +92,64 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
                 f"(Δ={abs(expected - actual)} Cent)"
             )
             page.flags.append(msg)
-            vr.fail(msg)
+            vr.ok = False
 
     return vr
 
 
 def validate_abrechnung(pages: list[PageResult]) -> list[str]:
-    """Stufe 3 + 4: cross-page totals against Abrechnungsbrief and Zusammenstellung."""
+    """Stufe 3+4: cross-invoice validation using ZUSAMMENSTELLUNG pages.
+
+    B2M PDFs contain multiple invoice blocks. Each ZUSAMMENSTELLUNG page
+    covers the invoice block that precedes it (identified by shared RN).
+    Stufe 3: Σ ZUSAMMENSTELLUNG bruttos = ABRECHNUNGSBRIEF.gesamtbetrag.
+    Stufe 4: Σ positions in a block = that block's ZUSAMMENSTELLUNG total.
+    """
     flags = []
 
     cover = next((p for p in pages if p.seiten_typ == "abrechnungsbrief"), None)
-    summary = next((p for p in pages if p.seiten_typ == "zusammenstellung"), None)
+    summaries = [p for p in pages if p.seiten_typ == "zusammenstellung"]
     rechnungen = [p for p in pages if p.seiten_typ == "rechnung"]
 
     if not rechnungen:
         return flags
 
-    sum_brutto = sum(cents(p.rechnung_brutto) for p in rechnungen if p.rechnung_brutto)
-    sum_netto  = sum(cents(p.rechnung_netto)  for p in rechnungen if p.rechnung_netto)
-    sum_ust    = sum(cents(p.rechnung_ust)    for p in rechnungen if p.rechnung_ust)
-
-    # Stufe 3: Σ Rechnungen = Abrechnungsbrief Gesamtbetrag
-    if cover and cover.gesamtbetrag:
-        if not _near(sum_brutto, cents(cover.gesamtbetrag), _TOL_GESAMT):
+    # Stufe 3: last ZUSAMMENSTELLUNG.brutto = Gesamtbetrag
+    # Use ONLY the last ZUSAMMENSTELLUNG — it covers all blocks (grand total).
+    # Summing multiple ZUSAMMENSTELLUNG pages would double-count earlier blocks.
+    if cover and cover.gesamtbetrag and summaries:
+        last_summary = summaries[-1]
+        if last_summary.rechnung_brutto and not _near(
+            cents(last_summary.rechnung_brutto), cents(cover.gesamtbetrag), _TOL_GESAMT
+        ):
             flags.append(
-                f"Stufe3 Σbrutto≠Gesamtbetrag: "
-                f"Σ={sum_brutto/100:.2f} vs {cover.gesamtbetrag} "
-                f"(Δ={abs(sum_brutto - cents(cover.gesamtbetrag))} Cent)"
+                f"Stufe3 letzte-Zusammenstellung≠Gesamtbetrag: "
+                f"{last_summary.rechnung_brutto} vs {cover.gesamtbetrag} "
+                f"(Δ={abs(cents(last_summary.rechnung_brutto) - cents(cover.gesamtbetrag))} Cent)"
             )
 
-    # Stufe 4: Zusammenstellung GESAMT = Σ Rechnungen
-    if summary:
-        if summary.rechnung_netto and not _near(sum_netto, cents(summary.rechnung_netto), _TOL_GESAMT):
+    # Stufe 4: for each ZUSAMMENSTELLUNG, find preceding RECHNUNG pages (same RN)
+    #          and compare Σ positions against the ZUSAMMENSTELLUNG total
+    for summary in summaries:
+        rn = summary.rechnungsnummer
+        if not rn:
+            continue
+        block_pages = [p for p in rechnungen if p.rechnungsnummer == rn]
+        if not block_pages:
+            continue
+        sum_pos_netto = sum(
+            cents(pos.netto)
+            for p in block_pages
+            for pos in p.positionen
+            if pos.netto
+        )
+        if summary.rechnung_netto and not _near(
+            sum_pos_netto, cents(summary.rechnung_netto), _TOL_GESAMT
+        ):
             flags.append(
-                f"Stufe4 Σnetto≠Zusammenstellung: "
-                f"Σ={sum_netto/100:.2f} vs {summary.rechnung_netto}"
-            )
-        if summary.rechnung_brutto and not _near(sum_brutto, cents(summary.rechnung_brutto), _TOL_GESAMT):
-            flags.append(
-                f"Stufe4 Σbrutto≠Zusammenstellung: "
-                f"Σ={sum_brutto/100:.2f} vs {summary.rechnung_brutto}"
+                f"Stufe4 rn={rn} Σpos.netto≠Zusammenstellung: "
+                f"Σ={sum_pos_netto/100:.2f} vs {summary.rechnung_netto} "
+                f"(Δ={abs(sum_pos_netto - cents(summary.rechnung_netto))} Cent)"
             )
 
     return flags

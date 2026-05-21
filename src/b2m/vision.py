@@ -15,10 +15,14 @@ _CLIENT: anthropic.Anthropic | None = None
 def _client() -> anthropic.Anthropic:
     global _CLIENT
     if _CLIENT is None:
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
-        _CLIENT = anthropic.Anthropic(api_key=key)
+        api_key   = os.environ.get("ANTHROPIC_API_KEY", "")
+        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+        if api_key:
+            _CLIENT = anthropic.Anthropic(api_key=api_key)
+        elif auth_token:
+            _CLIENT = anthropic.Anthropic(auth_token=auth_token)
+        else:
+            raise RuntimeError("Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN")
     return _CLIENT
 
 
@@ -67,15 +71,20 @@ RULES:
 """
 
 
+_MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+
 def extract_page(
-    png_path: Path,
+    img_path: Path,
     seite: int,
     total: int,
     pdf_name: str,
     retries: int = 3,
 ) -> PageResult:
     """Send one page image to Claude claude-opus-4-7 and parse the JSON response."""
-    image_b64 = base64.standard_b64encode(png_path.read_bytes()).decode()
+    raw_bytes = img_path.read_bytes()
+    image_b64 = base64.standard_b64encode(raw_bytes).decode()
+    media_type = _MEDIA_TYPES.get(img_path.suffix.lower(), "image/jpeg")
     prompt = _PROMPT_TEMPLATE.format(seite=seite, total=total, filename=pdf_name)
 
     last_err = None
@@ -84,7 +93,6 @@ def extract_page(
             msg = _client().messages.create(
                 model="claude-opus-4-7",
                 max_tokens=2048,
-                temperature=0,
                 system=_SYSTEM,
                 messages=[
                     {
@@ -94,7 +102,7 @@ def extract_page(
                                 "type": "image",
                                 "source": {
                                     "type": "base64",
-                                    "media_type": "image/png",
+                                    "media_type": media_type,
                                     "data": image_b64,
                                 },
                             },
