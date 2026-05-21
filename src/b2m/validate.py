@@ -97,6 +97,55 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
     return vr
 
 
+def deduplicate_split_blocks(pages: list[PageResult]) -> int:
+    """Remove intermediate-subtotal false extras from split-block Karte entries.
+
+    When a Karte block spans two pages, Vision sometimes reads the
+    "Summe Kraftstoffe" sub-total row on the first page as the Karte total.
+    The true SUMME KARTE/KFZ is on the next page, producing a duplicate entry
+    for the same Kennzeichen on consecutive pages (different, smaller value on
+    the first page).
+
+    Rule: if Kennzeichen X appears on page N with value V1 AND on page N+1
+    with value V2, and V1 < V2 (the classic subtotal-vs-total pattern), then
+    null out the page-N entry. Identical values (possible genuine twin billing)
+    are left untouched.
+
+    Returns: number of positions nulled out.
+    """
+    from .schema import cents as _cents
+    # Group by (rechnungsnummer, kennzeichen): [(seite, position_obj)]
+    from collections import defaultdict
+    groups: dict[tuple, list] = defaultdict(list)
+    for page in pages:
+        if page.seiten_typ != "rechnung":
+            continue
+        for pos in page.positionen:
+            key = (page.rechnungsnummer or "", pos.kennzeichen or "")
+            groups[key].append((page.seite, pos))
+
+    n_nulled = 0
+    for (rn, kz), entries in groups.items():
+        if len(entries) < 2:
+            continue
+        entries_sorted = sorted(entries, key=lambda x: x[0])
+        # Check consecutive-page duplicates
+        for i in range(len(entries_sorted) - 1):
+            s1, pos1 = entries_sorted[i]
+            s2, pos2 = entries_sorted[i + 1]
+            if s2 != s1 + 1:
+                continue  # not consecutive — skip
+            if pos1.netto is None or pos2.netto is None:
+                continue
+            if pos1.netto < pos2.netto:
+                # pos1 is the false intermediate subtotal — null it out
+                pos1.netto = None
+                pos1.ust = None
+                pos1.brutto = None
+                n_nulled += 1
+    return n_nulled
+
+
 def validate_abrechnung(pages: list[PageResult]) -> list[str]:
     """Stufe 3+4: cross-invoice validation using ZUSAMMENSTELLUNG pages.
 

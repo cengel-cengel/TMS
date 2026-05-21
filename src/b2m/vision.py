@@ -60,14 +60,31 @@ Extract EXACTLY this JSON structure:
   "gesamtbetrag":    "<Gesamtbetrag from ABRECHNUNGSBRIEF page 1 only, dot-decimal, or null>"
 }}
 
-RULES:
-- abrechnungsbrief  → positionen=[], fill gesamtbetrag, rechnung_* may be null
-- rechnung          → one position per Karte block (use SUMME KARTE/KFZ row values)
-                      rechnungsnummer from top-right header
+CRITICAL RULES — READ CAREFULLY:
+
+PAGE TYPES:
+- abrechnungsbrief  → positionen=[], fill gesamtbetrag only
 - zusammenstellung  → positionen=[], fill rechnung_netto/ust/brutto from GESAMT row
+- rechnung          → extract per-Karte positions as described below
+
+FOR RECHNUNG PAGES — KARTE EXTRACTION:
+Each Karte block on the page looks like:
+  Kundenvermerk: <name>   Kundenvermerk 2: <number>   Karte: <card-number> <KENNZEICHEN>
+  [multiple transaction rows]
+  Summe Kraftstoffe        <sub-total row — DO NOT USE>
+  Summe Lieferungen        <sub-total row — DO NOT USE>
+  SUMME KARTE/KFZ          <THIS is the row to extract>
+
+⚠ ONLY extract from the "SUMME KARTE/KFZ" row — NEVER from "Summe Kraftstoffe"
+  or "Summe Lieferungen" intermediate rows. Those are sub-totals, not Karte totals.
+
+⚠ If a Karte block STARTS on this page but its "SUMME KARTE/KFZ" row is NOT
+  visible (the block continues on the next page): set netto=null, ust=null,
+  brutto=null for that Karte. Do NOT use any sub-total row as a substitute.
+
 - Kennzeichen: exact text after the card number on the 'Karte:' line
-- Artikel: most common article in that Karte block (LKWDiesel / Diesel / Strom / etc.)
-- If a Karte has multiple article types, pick the one with the highest Netto share
+- Artikel: dominant article in the Karte block (LKWDiesel / Diesel / Strom / etc.)
+- rechnungsnummer: from the top-right header "Rechnung - Nr.:"
 """
 
 

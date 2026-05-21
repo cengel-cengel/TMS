@@ -55,6 +55,11 @@ def run_pdf(pdf_path: Path) -> list:
                 "_flags": result.flags,
             }) + "\n")
 
+    from src.b2m.validate import deduplicate_split_blocks
+    n_deduped = deduplicate_split_blocks(pages)
+    if n_deduped:
+        print(f"  Deduplicated: {n_deduped} split-block false extras")
+
     cross_flags = validate_abrechnung(pages)
     if cross_flags:
         for f in cross_flags:

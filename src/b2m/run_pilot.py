@@ -124,6 +124,12 @@ def run() -> list[PageResult]:
 
     pages = [pages_by_seite[s] for s in sorted(pages_by_seite)]
 
+    # ── Deduplicate split-block false extras ──────────────────────
+    from src.b2m.validate import deduplicate_split_blocks
+    n_deduped = deduplicate_split_blocks(pages)
+    if n_deduped:
+        print(f"  Deduplicated {n_deduped} split-block false extras (consecutive-page same-KZ, smaller value nulled)")
+
     # ── Second pass: re-extract flagged RECHNUNG pages ──────────
     flagged = [p for p in pages if p.seiten_typ == "rechnung" and p.flags]
     if flagged:
