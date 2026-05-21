@@ -325,8 +325,8 @@ def build_excel(stem: str) -> Optional[Path]:
         print(f"  SKIP {stem}: keine JSONL-Daten")
         return None
 
-    pdf_label = stem.replace("_1", "").replace("_", " ")  # "B2M 1"
-    excel_name = stem.replace("_1", "") + ".xlsx"         # "B2M_1.xlsx"
+    pdf_label = stem.removesuffix("_1").replace("_", " ")  # "B2M 1"
+    excel_name = stem.removesuffix("_1") + ".xlsx"         # "B2M_1.xlsx"
     out_path = EXCEL_DIR / excel_name
 
     wb = openpyxl.Workbook()
@@ -351,8 +351,8 @@ def run() -> None:
             print(f"  SKIP {stem}: keine JSONL-Daten")
             continue
 
-        pdf_label = stem.replace("_1", "").replace("_", " ")
-        excel_name = stem.replace("_1", "") + ".xlsx"
+        pdf_label = stem.removesuffix("_1").replace("_", " ")
+        excel_name = stem.removesuffix("_1") + ".xlsx"
         out_path = EXCEL_DIR / excel_name
 
         wb = openpyxl.Workbook()
