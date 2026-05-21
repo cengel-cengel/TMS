@@ -102,7 +102,7 @@ def run() -> list[PageResult]:
                 raw = {k: v for k, v in d.items() if not k.startswith("_")}
                 result = PageResult.from_dict(PDF_IN.name, seite, raw)
                 validate_rechnung_page(result)
-                jf.write(json.dumps(raw | {
+                jf.write(json.dumps(result.to_dict() | {
                     "_seite": seite,
                     "_seiten_typ": result.seiten_typ,
                     "_flags": result.flags,
@@ -115,7 +115,7 @@ def run() -> list[PageResult]:
                 continue
             result = _call_vision(img, seite, total)
             pages_by_seite[seite] = result
-            jf.write(json.dumps(result.raw | {
+            jf.write(json.dumps(result.to_dict() | {
                 "_seite": seite,
                 "_seiten_typ": result.seiten_typ,
                 "_flags": result.flags,
@@ -200,13 +200,6 @@ def run() -> list[PageResult]:
                 pos.ust     = _parse_de(recovered.get("ust"))
                 pos.brutto  = _parse_de(recovered.get("brutto"))
                 pos.artikel = recovered.get("artikel") or pos.artikel
-                for raw_pos in (page.raw.get("positionen") or []):
-                    if (raw_pos.get("kennzeichen") or "").strip() == kz:
-                        raw_pos["netto"]   = str(pos.netto)
-                        raw_pos["ust"]     = str(pos.ust)
-                        raw_pos["brutto"]  = str(pos.brutto)
-                        raw_pos["artikel"] = pos.artikel
-                        break
                 print(f"✓ netto={pos.netto}")
                 n_recovered += 1
             else:
@@ -214,10 +207,10 @@ def run() -> list[PageResult]:
             validate_rechnung_page(page)
         print(f"  Recovered: {n_recovered}/{len(null_kz_entries)}")
 
-    # ── Save final JSONL ──────────────────────────────────────────
+    # ── Save final JSONL (serializes Python object state, not p.raw) ─
     with open(JSON_CACHE, "w") as jf:
         for p in pages:
-            jf.write(json.dumps(p.raw | {
+            jf.write(json.dumps(p.to_dict() | {
                 "_seite": p.seite,
                 "_seiten_typ": p.seiten_typ,
                 "_flags": p.flags,

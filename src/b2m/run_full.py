@@ -56,7 +56,7 @@ def run_pdf(pdf_path: Path) -> list:
 
             validate_rechnung_page(result)
             pages.append(result)
-            jf.write(json.dumps(result.raw | {
+            jf.write(json.dumps(result.to_dict() | {
                 "_pdf": pdf_path.name,
                 "_seite": seite,
                 "_seiten_typ": result.seiten_typ,
@@ -110,13 +110,6 @@ def run_pdf(pdf_path: Path) -> list:
                 pos.ust     = _parse_de(recovered.get("ust"))
                 pos.brutto  = _parse_de(recovered.get("brutto"))
                 pos.artikel = recovered.get("artikel") or pos.artikel
-                for raw_pos in (page.raw.get("positionen") or []):
-                    if (raw_pos.get("kennzeichen") or "").strip() == kz:
-                        raw_pos["netto"]   = str(pos.netto)
-                        raw_pos["ust"]     = str(pos.ust)
-                        raw_pos["brutto"]  = str(pos.brutto)
-                        raw_pos["artikel"] = pos.artikel
-                        break
                 print(f"✓ netto={pos.netto}")
                 n_recovered += 1
             else:

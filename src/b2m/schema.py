@@ -122,3 +122,49 @@ class PageResult:
             format=str(d.get("format") or "de-aral").strip(),
             manifest=manifest,
         )
+
+    def to_dict(self) -> dict:
+        """Serialize current Python object state (not raw Vision dict).
+
+        Used for JSONL persistence so dedup nulls and 3rd-pass recoveries
+        are correctly reflected — p.raw stays as the original Vision output.
+        """
+        def _dec(d):
+            return str(d) if d is not None else None
+
+        pos_list = [
+            {
+                "kartennummer": pos.kartennummer,
+                "kennzeichen":  pos.kennzeichen,
+                "warengruppe":  pos.warengruppe,
+                "artikel":      pos.artikel,
+                "netto":        _dec(pos.netto),
+                "ust":          _dec(pos.ust),
+                "brutto":       _dec(pos.brutto),
+            }
+            for pos in self.positionen
+        ]
+        manifest_list = None
+        if self.manifest is not None:
+            manifest_list = [
+                {
+                    "land":              m.land,
+                    "rechnungsnummer":   m.rechnungsnummer,
+                    "datum":             m.datum,
+                    "waehrung":          m.waehrung,
+                    "betrag_lw":         _dec(m.betrag_lw),
+                    "betrag_eur":        _dec(m.betrag_eur),
+                }
+                for m in self.manifest
+            ]
+        return {
+            "seiten_typ":      self.seiten_typ,
+            "format":          self.format,
+            "rechnungsnummer": self.rechnungsnummer,
+            "positionen":      pos_list,
+            "rechnung_netto":  _dec(self.rechnung_netto),
+            "rechnung_ust":    _dec(self.rechnung_ust),
+            "rechnung_brutto": _dec(self.rechnung_brutto),
+            "gesamtbetrag":    _dec(self.gesamtbetrag),
+            "manifest":        manifest_list,
+        }
