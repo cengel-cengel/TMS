@@ -102,11 +102,15 @@ def validate_rechnung_page(page: PageResult) -> ValidationResult:
 def deduplicate_split_blocks(pages: list[PageResult]) -> int:
     """Remove intermediate-subtotal false extras from split-block Karte entries.
 
-    Rule: if Kennzeichen X appears on page N with value V1 AND on page N+1
-    with value V2, and V1 < V2 (subtotal-vs-total pattern), null out page-N entry.
-    Identical values (possible genuine twin billing) are left untouched.
+    Rule 1 (same-page): if Kennzeichen X appears on page N with BOTH a null entry
+    AND a non-null entry, and a later page N' > N also has a non-null entry, the
+    non-null on page N is a sub-total within the split block — null it out.
+    (Example: de-aral card with Diesel sub-total + E-charge split on same page.)
+
+    Rule 2 (consecutive-page): if Kennzeichen X appears on page N with value V1
+    AND on page N+1 with value V2, and V1 < V2 (subtotal-vs-total pattern), null
+    out page-N entry. Identical values (possible genuine twin billing) are untouched.
     """
-    from .schema import cents as _cents
     from collections import defaultdict
     groups: dict[tuple, list] = defaultdict(list)
     for page in pages:
@@ -120,6 +124,29 @@ def deduplicate_split_blocks(pages: list[PageResult]) -> int:
     for (rn, kz), entries in groups.items():
         if len(entries) < 2:
             continue
+        entries_sorted = sorted(entries, key=lambda x: x[0])
+
+        # Rule 1: same-page null + non-null with a later non-null entry
+        page_map: dict[int, list] = defaultdict(list)
+        for seite, pos in entries_sorted:
+            page_map[seite].append((seite, pos))
+        for seite, plist in sorted(page_map.items()):
+            has_null = any(pos.netto is None for _, pos in plist)
+            nonnulls = [pos for _, pos in plist if pos.netto is not None]
+            if has_null and nonnulls:
+                later_has_value = any(
+                    pos.netto is not None
+                    for s, pos in entries_sorted
+                    if s > seite
+                )
+                if later_has_value:
+                    for pos in nonnulls:
+                        pos.netto = None
+                        pos.ust = None
+                        pos.brutto = None
+                        n_nulled += 1
+
+        # Rule 2: consecutive pages, V1 < V2 (re-sort since rule 1 may have nulled values)
         entries_sorted = sorted(entries, key=lambda x: x[0])
         for i in range(len(entries_sorted) - 1):
             s1, pos1 = entries_sorted[i]
