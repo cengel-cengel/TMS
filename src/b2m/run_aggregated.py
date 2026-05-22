@@ -37,6 +37,7 @@ _C_UNKNOWN  = "F2F2F2"   # light grey — K1 ?
 _C_DELTA_OK   = "E2EFDA"
 _C_DELTA_WARN = "FFE699"
 _C_DELTA_BAD  = "FFB3B3"
+_C_DELTA_FAIL = "FF8080"
 
 
 def _fill(hex_color: str) -> PatternFill:
@@ -257,13 +258,49 @@ _BEFUNDE_AT = [
     ("B2M_4", "3603030499", "1880.30", "1880.30", "0.00", "✓ korrekt (nach targeted Recovery)"),
 ]
 
-# Section B: DE residual deltas after all fixes (K1=✗0, remaining gaps are K1=?)
+# Section B: DE residual deltas after all fixes
 _BEFUNDE_K1 = [
-    # (PDF, RN, KZ, Ist-Brutto, Soll-Brutto (Manifest), Δ Cent, Ursache)
-    ("B2M_1", "0027018835", "— (5x split-block recovered)",    "26790.66", "26793.00",    "-234", "Rundung recover_split_kz vs SUMME-Zeile"),
-    ("B2M_2", "0027075475", "RV LE 6002 (K1=? split-block)",  "27064.99", "27100.77",  "-3096", "RV LE 6002 kein kz_summen, Betrag unklar"),
-    ("B2M_3", "0027134312", "— (residual nach allen Fixes)",   "36291.70", "35989.43", "+30227", "Übererfassung, Ursache unklar — Carlos prüft"),
-    ("B2M_4", "0027192675", "— (residual nach allen Fixes)",   "39227.90", "39082.67", "+14523", "Übererfassung, Ursache unklar — Carlos prüft"),
+    # (PDF, RN, Hinweis, Ist-Brutto, Soll-Brutto, Δ Cent, Ursache)
+    ("B2M_1", "0027018835", "5x split-block recovered",         "26790.66", "26793.00",    "-234", "Rundung recover_split_kz vs SUMME-Zeile"),
+    ("B2M_2", "0027075475", "UL-N2423E Mischsteuer (K1=✗ ok)", "27100.25", "27100.77",     "-52", "Sonstiges 0% USt + Kraftstoffe 19% — strukturell, kein Fehler"),
+    ("B2M_3", "0027134312", "9x K1=? ohne SUMME KARTE",         "36291.70", "35989.43", "+30227", "Offene Positionen — manuelle Prüfung erforderlich (siehe Sektion C)"),
+    ("B2M_4", "0027192675", "10x K1=? ohne SUMME KARTE",        "39227.90", "39082.67", "+14523", "Offene Positionen — manuelle Prüfung erforderlich (siehe Sektion C)"),
+]
+
+# Section C: open K1=? items for manual verification
+# (PDF-Datei, RN, Seite, Kennzeichen, Σ Netto Vision)
+_OFFENE_K1 = [
+    # B2M_3 — 0027134312
+    ("B2M 3 1.pdf", "0027134312",  "8", "UL-N 2364",   "468.64"),
+    ("B2M 3 1.pdf", "0027134312", "44", "UL-N 2359",   "410.87"),
+    ("B2M 3 1.pdf", "0027134312", "27", "UL-N 2559",   "301.41"),
+    ("B2M 3 1.pdf", "0027134312", "22", "UL-N 2513",   "266.24"),
+    ("B2M 3 1.pdf", "0027134312", "43", "UL-N 2625",   "201.97"),
+    ("B2M 3 1.pdf", "0027134312", "42", "UL-N 2594",   "156.43"),
+    ("B2M 3 1.pdf", "0027134312", "14", "UL-N 1022",   "114.15"),
+    ("B2M 3 1.pdf", "0027134312", "28", "UL-N 2608",    "92.31"),
+    ("B2M 3 1.pdf", "0027134312", "39", "UL-N 2481 E",  "54.95"),
+    # B2M_4 — 0027192675
+    ("B2M 4 1.pdf", "0027192675", "17", "UL-N 2499E",  "447.17"),
+    ("B2M 4 1.pdf", "0027192675", "47", "BS-OR 3796",  "267.82"),
+    ("B2M 4 1.pdf", "0027192675", "48", "UL-N 2528",   "233.72"),
+    ("B2M 4 1.pdf", "0027192675", "65", "UL N 2432",   "157.27"),
+    ("B2M 4 1.pdf", "0027192675", "49", "UL-N 2458",   "171.70"),
+    ("B2M 4 1.pdf", "0027192675", "29", "UL-N 2336",   "153.71"),
+    ("B2M 4 1.pdf", "0027192675", "62", "BS-OR 1713",  "104.28"),
+    ("B2M 4 1.pdf", "0027192675", "36", "UL-N 2608",    "88.05"),
+    ("B2M 4 1.pdf", "0027192675", "59", "UL-N 2483E",   "34.38"),
+    ("B2M 4 1.pdf", "0027192675", "18", "UL-N 1200 E",   "4.99"),
+]
+
+_BEF_OFFEN_COLS = [
+    ("PDF-Datei",              16),
+    ("Rechnungsnummer",        16),
+    ("Seite",                   8),
+    ("Kennzeichen",            18),
+    ("Σ Netto Vision",         16),
+    ("SUMME KARTE Netto",      18),   # ← manuell eintragen
+    ("Δ Netto",                12),   # ← manuell berechnen
 ]
 
 _BEF_AT_COLS = [
@@ -341,7 +378,46 @@ def _write_befunde(ws) -> None:
             c = ws.cell(row=row, column=col, value=val)
             c.border = _thin()
             c.font = Font(size=10)
-        ws.cell(row=row, column=7).fill = _fill(_C_FAIL)
+        ab = abs(int(delta.lstrip("+")))
+        color = _C_DELTA_OK if ab <= 100 else _C_DELTA_WARN if ab <= 1000 else _C_DELTA_FAIL if ab <= 5000 else _C_FAIL
+        ws.cell(row=row, column=7).fill = _fill(color)
+        row += 1
+
+    # ── Section C: open K1=? items ─────────────────────────────────────
+    row += 1
+    ws.cell(row=row, column=1,
+            value="C) Offene K1=? Positionen — SUMME KARTE/KFZ fehlt, manuelle Verifikation erforderlich"
+            ).font = Font(bold=True, size=10, color="1F4E79")
+
+    row += 1
+    for col, (title, width) in enumerate(_BEF_OFFEN_COLS, 1):
+        c = ws.cell(row=row, column=col, value=title)
+        c.font = _hdr_font()
+        c.fill = _fill(_C_HEADER)
+        c.alignment = Alignment(horizontal="center")
+        c.border = _thin()
+        ws.column_dimensions[get_column_letter(col)].width = max(
+            ws.column_dimensions[get_column_letter(col)].width, width)
+
+    row += 1
+    last_rn = None
+    for pdf_file, rn, seite, kz, netto_vision in _OFFENE_K1:
+        vals = [pdf_file, rn, seite, kz, netto_vision, "", ""]
+        for col, val in enumerate(vals, 1):
+            c = ws.cell(row=row, column=col, value=val)
+            c.border = _thin()
+            c.font = Font(size=10)
+        # yellow bg for manual-entry columns
+        ws.cell(row=row, column=6).fill = _fill("FFF2CC")
+        ws.cell(row=row, column=7).fill = _fill("FFF2CC")
+        ws.cell(row=row, column=5).alignment = Alignment(horizontal="right")
+        # group separator
+        if rn != last_rn:
+            for col in range(1, 6):
+                ws.cell(row=row, column=col).fill = _fill("BDD7EE")
+            ws.cell(row=row, column=6).fill = _fill("FFF2CC")
+            ws.cell(row=row, column=7).fill = _fill("FFF2CC")
+            last_rn = rn
         row += 1
 
 
