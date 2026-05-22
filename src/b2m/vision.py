@@ -86,8 +86,19 @@ NEGATIVE AMOUNTS: "2,82-" or "3,36-" means -2.82 / -3.36. Output as negative.
 SKIP THESE ROWS as positions (intermediate subtotals — NEVER add to positionen[]):
   Summe Kraftstoffe · Summe Lieferungen · Summe Gebühren · sonst. Kfz Waren/Die
   KARTEN TOTAL · CARD TOTAL · TOTALE CARTA · TOTAAL KAART
-  KOSTENSTELLEN-SUMME · KOSTENSTELLEN-SUMME 1 · KOSTENSTELLEN-SUMME 2 · COST CENTRE SUBTOTAL
+  KOSTENSTELLEN-SUMME · KOSTENSTELLEN-SUMME 1 · COST CENTRE SUBTOTAL
   RIEPILOGO · PRODUKT/BTW OVERZICHT · BTW OVERZICHT · Zwischensumme · Subtotal · GESAMT
+
+⚠ AT FORMAT — KOSTENSTELLEN-SUMME 2 extraction rule:
+  For AT format: KOSTENSTELLEN-SUMME 2 rows ARE real positions — extract each one.
+  The AT invoice is structured as cost-center blocks. Each block ends with:
+    KOSTENSTELLEN-SUMME 1: <netto> <ust> <brutto>   ← SKIP (internal sub-subtotal)
+    KOSTENSTELLEN-SUMME 2: <netto> <ust> <brutto>   ← EXTRACT as position
+  The kennzeichen for a KOSTENSTELLEN-SUMME 2 row = the card/KARTEN or LENKER name
+  that headers the enclosing cost-center block.
+  Multiple KOSTENSTELLEN-SUMME 2 rows per page are normal — extract ALL of them.
+  Their brutto values sum to the invoice total (Rechnungsbetrag).
+  NEVER extract KOSTENSTELLEN-SUMME 1 — it is always a sub-subtotal to skip.
 
 ⚠ de-aral SUMME KARTE/KFZ — control field (NOT a position):
   For de-aral format only: when the "SUMME KARTE/KFZ" total row is visible for a card
@@ -97,11 +108,6 @@ SKIP THESE ROWS as positions (intermediate subtotals — NEVER add to positionen
   If "SUMME KARTE/KFZ" is NOT visible (block continues on next page): netto=null and
   do NOT add an entry to kz_summen for that card.
   For all non-de-aral formats: kz_summen = {{}} always.
-
-⚠ AT FORMAT (at): KOSTENSTELLEN-SUMME rows always appear with a number suffix
-  (e.g. "KOSTENSTELLEN-SUMME 1:", "KOSTENSTELLEN-SUMME 2:"). NEVER extract these
-  as positions — not even with blank kennzeichen. They are cost-center subtotals.
-  Only extract a position when a KARTEN: card header is visible on this page.
 
 ⚠ If a card block starts on this page but its total row is NOT visible (block
   continues on next page): set netto=null, ust=null, brutto=null for that card.
