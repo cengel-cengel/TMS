@@ -42,3 +42,4 @@ data/extracted/
 !output/*/rechnungsvergleich.xlsx
 !data/Besonderheiten_bei_der_Kundenabrechnung.xlsx
 !output/b2m/excel/*.xlsx
+!output/b2m/b2m_aggregiert.xlsx
