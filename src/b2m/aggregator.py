@@ -36,6 +36,8 @@ class AggRow:
     kz_gesamt_netto: Optional[Decimal]   # from kz_summen (None pre-re-run)
     kz_gesamt_brutto: Optional[Decimal]
     k1: Optional[bool]                    # True=✓ False=✗ None=?
+    pdf: str = ""                         # source PDF stem (e.g. "B2M_3")
+    seiten: str = ""                      # comma-separated contributing page numbers
 
 
 @dataclass
@@ -91,6 +93,9 @@ def aggregate(
         land    = m.land     if m else ""
         waehrung = m.waehrung if m else "EUR"
 
+        # derive PDF stem from page.pdf_name e.g. "B2M 3 1.pdf" → "B2M_3"
+        pdf_stem = page.pdf_name.replace(" ", "_").replace(".pdf", "").rsplit("_", 1)[0] if page.pdf_name else ""
+
         for pos in page.positionen:
             if pos.netto is None and pos.brutto is None:
                 continue
@@ -107,12 +112,15 @@ def aggregate(
                     "artikel":   art,
                     "land":      land,
                     "waehrung":  waehrung,
+                    "pdf":       pdf_stem,
+                    "seiten":    set(),
                 }
             row = acc[key]
             row["sum_netto"]  += pos.netto  or Decimal(0)
             row["sum_ust"]    += pos.ust    or Decimal(0)
             row["sum_brutto"] += pos.brutto or Decimal(0)
             row["n"]          += 1
+            row["seiten"].add(page.seite)
             if art and not row["artikel"]:
                 row["artikel"] = art
 
@@ -183,6 +191,8 @@ def aggregate(
                 kz_gesamt_netto=kz_g_netto,
                 kz_gesamt_brutto=kz_g_brutto,
                 k1=k1,
+                pdf=row.get("pdf", ""),
+                seiten=", ".join(str(s) for s in sorted(row.get("seiten", set()))),
             ))
 
     # ── Step 5: Kontrolle 2 rows ─────────────────────────────────────

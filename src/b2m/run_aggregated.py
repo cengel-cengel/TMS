@@ -112,6 +112,8 @@ _POS_COLS = [
     ("Rechnungsnummer",   16),
     ("Land",               6),
     ("Währung",            8),
+    ("PDF",               10),
+    ("Seite(n)",          14),
     ("Kennzeichen (KZ)",  18),
     ("Warengruppe/Gruppe", 22),
     ("Artikelbezeichnung", 32),
@@ -145,6 +147,8 @@ def _write_positionen(ws, rows: list[AggRow]) -> None:
             row.rn,
             row.land,
             row.waehrung,
+            row.pdf,
+            row.seiten,
             row.kz,
             row.wg,
             row.artikel,
@@ -165,9 +169,9 @@ def _write_positionen(ws, rows: list[AggRow]) -> None:
             if col == len(_POS_COLS):
                 c.fill = _k_fill(row.k1)
                 c.alignment = Alignment(horizontal="center")
-            elif col in (7, 8, 9, 12, 13):
+            elif col in (9, 10, 11, 14, 15):
                 c.alignment = Alignment(horizontal="right")
-            elif col in (10, 11, 14):
+            elif col in (12, 13, 16):
                 c.alignment = Alignment(horizontal="center")
 
     # RN group separators: light blue background for first row of each new RN
