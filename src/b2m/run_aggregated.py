@@ -83,7 +83,8 @@ def _k_fill(val: Optional[bool]) -> PatternFill:
 # ── Load all pages from JSONLs ─────────────────────────────────────────────
 def _load_all_pages() -> tuple[list[PageResult], Optional[list[ManifestEntry]]]:
     all_pages: list[PageResult] = []
-    manifest: Optional[list[ManifestEntry]] = None
+    all_manifest: list[ManifestEntry] = []
+    seen_rn: set[str] = set()
     for stem in PDF_STEMS:
         jsonl = FULL_DIR / f"{stem}_pages.jsonl"
         if not jsonl.exists():
@@ -98,9 +99,12 @@ def _load_all_pages() -> tuple[list[PageResult], Optional[list[ManifestEntry]]]:
             raw = {k: v for k, v in d.items() if not k.startswith("_")}
             p = PageResult.from_dict(pdf_name, d.get("_seite", 0), raw)
             all_pages.append(p)
-            if manifest is None and p.seiten_typ == "abrechnungsbrief" and p.manifest:
-                manifest = p.manifest
-    return all_pages, manifest
+            if p.seiten_typ == "abrechnungsbrief" and p.manifest:
+                for m in p.manifest:
+                    if m.rechnungsnummer not in seen_rn:
+                        seen_rn.add(m.rechnungsnummer)
+                        all_manifest.append(m)
+    return all_pages, all_manifest or None
 
 
 # ── Sheet 1: Positionen ────────────────────────────────────────────────────
@@ -240,51 +244,107 @@ def _write_kontrolle(ws, rows: list[KontrolleRow]) -> None:
 
 
 # ── Sheet 3: Befunde ──────────────────────────────────────────────────────
-_BEFUNDE = [
-    # (PDF, RN, Land, Ist EUR, Soll EUR, Δ EUR, Befund)
-    ("B2M_1", "3603006105", "AT", "2155.50", "2155.50",    "0.00", "✓ korrekt"),
-    ("B2M_2", "3603014114", "AT", "1734.83", "1734.83",    "0.00", "✓ korrekt"),
-    ("B2M_3", "3603022414", "AT", "2163.17", "1459.74", "+703.43", "✗ echte Abrechnungsdiff."),
-    ("B2M_4", "3603030499", "AT", "2699.91", "1880.30", "+819.61", "✗ echte Abrechnungsdiff."),
+# Section A: AT documented real billing differences
+_BEFUNDE_AT = [
+    # (PDF, RN, Ist EUR, Soll EUR, Δ EUR, Befund)
+    ("B2M_1", "3603006105", "2155.50", "2155.50",    "0.00", "✓ korrekt"),
+    ("B2M_2", "3603014114", "1734.83", "1734.83",    "0.00", "✓ korrekt"),
+    ("B2M_3", "3603022414", "2163.17", "1459.74", "+703.43", "✗ echte Abrechnungsdiff."),
+    ("B2M_4", "3603030499", "1836.97", "1880.30",  "-43.33", "✗ echte Abrechnungsdiff."),
 ]
 
-_BEF_COLS = [
+# Section B: K1=✗ DE cases — Vision over/under-extraction (Carlos entscheidet)
+_BEFUNDE_K1 = [
+    # (PDF, RN, KZ, kz_sigma EUR, kz_gesamt EUR, Δ Cent, Typ)
+    ("B2M_2", "0027075475", "RV LN 7002",          "675.14", "679.19",    "-405", "under — 1 Transaktion fehlt?"),
+    ("B2M_3", "0027134312", "FUHRPARK LADEKARTE",    "9.98",   "4.99",    "+499", "double-count — dedup-Lücke"),
+    ("B2M_3", "0027134312", "LEV W 333E",          "131.38",   "4.99",  "+12639", "over — Vision-Fehler wahrscheinlich"),
+    ("B2M_3", "0027134312", "UL-N 2377E",           "62.69",  "13.18",   "+4951", "over — mehrfach extrahiert"),
+    ("B2M_3", "0027134312", "UL-N 2494E",          "385.03", "326.85",   "+5818", "over — split-block extra"),
+    ("B2M_3", "0027134312", "UL-N 2518E",          "132.50", "124.77",    "+773", "over — 1 extra Transaktion"),
+    ("B2M_3", "0027134312", "UL-N 2561 E",         "162.88",  "63.72",   "+9916", "over — mehrfach extrahiert"),
+    ("B2M_4", "0027192675", "ERSATZKARTE 2",         "80.01",  "64.95",   "+1506", "over — AT-Posten extra"),
+    ("B2M_4", "0027192675", "FUHRPARK LADEKARTE",    "9.98",   "4.99",    "+499", "double-count — dedup-Lücke"),
+    ("B2M_4", "0027192675", "UL-N 2561 E",         "178.78",  "33.61",  "+14517", "over — mehrfach extrahiert"),
+]
+
+_BEF_AT_COLS = [
     ("PDF",           10),
     ("Rechnungsnummer", 16),
-    ("Land",            6),
     ("Ist (EUR)",      12),
     ("Soll (EUR)",     12),
     ("Δ (EUR)",        12),
-    ("Befund",         36),
+    ("Befund",         40),
+]
+
+_BEF_K1_COLS = [
+    ("PDF",           10),
+    ("RN",            14),
+    ("Kennzeichen",   24),
+    ("Σ Pos-Netto",   12),
+    ("KZ-Gesamt",     12),
+    ("Δ Cent",        10),
+    ("Typ / Ursache", 40),
 ]
 
 
 def _write_befunde(ws) -> None:
-    ws.cell(row=1, column=1,
-            value="Dokumentierte Abrechnungsunterschiede — Carlos 2026-05-22"
+    row = 1
+    ws.cell(row=row, column=1,
+            value="B2M Befunde — AT echte Differenzen + DE K1=✗ Diagnose (2026-05-22)"
             ).font = Font(bold=True, size=11)
 
-    note = ("ERSATZKARTE 2 ist in ALLEN B2M-AT-Rechnungen ein echter Einzelposten. "
-            "Die Δ-Werte in B2M_3/4 AT sind echte Abrechnungsdifferenzen, keine Extraktionsfehler.")
-    ws.cell(row=2, column=1, value=note).font = Font(italic=True, size=10)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=7)
+    # ── AT Section ─────────────────────────────────────────────────────
+    row = 3
+    ws.cell(row=row, column=1,
+            value="A) AT-Rechnungen — ERSATZKARTE 2 echter Posten; Δ = echte Abrechnungsdifferenz"
+            ).font = Font(bold=True, size=10, color="1F4E79")
 
-    for col, (title, width) in enumerate(_BEF_COLS, 1):
-        c = ws.cell(row=4, column=col, value=title)
+    row = 4
+    for col, (title, width) in enumerate(_BEF_AT_COLS, 1):
+        c = ws.cell(row=row, column=col, value=title)
         c.font = _hdr_font()
         c.fill = _fill(_C_HEADER)
         c.alignment = Alignment(horizontal="center")
         c.border = _thin()
         ws.column_dimensions[get_column_letter(col)].width = width
 
-    for r_idx, (pdf, rn, land, ist, soll, delta, befund) in enumerate(_BEFUNDE, 5):
-        vals = [pdf, rn, land, ist, soll, delta, befund]
+    row = 5
+    for pdf, rn, ist, soll, delta, befund in _BEFUNDE_AT:
+        vals = [pdf, rn, ist, soll, delta, befund]
         for col, val in enumerate(vals, 1):
-            c = ws.cell(row=r_idx, column=col, value=val)
+            c = ws.cell(row=row, column=col, value=val)
             c.border = _thin()
             c.font = Font(size=10)
-        ok = delta.startswith("0") or delta == "0.00"
-        ws.cell(row=r_idx, column=7).fill = _fill(_C_OK if ok else _C_FAIL)
+        ok = delta.lstrip("+").lstrip("-") == "0.00"
+        ws.cell(row=row, column=6).fill = _fill(_C_OK if ok else _C_FAIL)
+        row += 1
+
+    # ── K1=✗ Section ───────────────────────────────────────────────────
+    row += 1
+    ws.cell(row=row, column=1,
+            value="B) DE-Rechnungen — K1=✗: kz_sigma ≠ SUMME KARTE/KFZ (Carlos entscheidet ob Korrektur)"
+            ).font = Font(bold=True, size=10, color="1F4E79")
+
+    row += 1
+    for col, (title, width) in enumerate(_BEF_K1_COLS, 1):
+        c = ws.cell(row=row, column=col, value=title)
+        c.font = _hdr_font()
+        c.fill = _fill(_C_HEADER)
+        c.alignment = Alignment(horizontal="center")
+        c.border = _thin()
+        ws.column_dimensions[get_column_letter(col)].width = max(
+            ws.column_dimensions[get_column_letter(col)].width, width)
+
+    row += 1
+    for pdf, rn, kz, sigma, gesamt, delta, typ in _BEFUNDE_K1:
+        vals = [pdf, rn, kz, sigma, gesamt, delta, typ]
+        for col, val in enumerate(vals, 1):
+            c = ws.cell(row=row, column=col, value=val)
+            c.border = _thin()
+            c.font = Font(size=10)
+        ws.cell(row=row, column=7).fill = _fill(_C_FAIL)
+        row += 1
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
