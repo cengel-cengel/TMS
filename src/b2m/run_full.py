@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.b2m.render import render_pdf
 from src.b2m.vision import extract_page
-from src.b2m.validate import validate_rechnung_page, validate_abrechnung
+from src.b2m.validate import (validate_rechnung_page, validate_abrechnung,
+                               validate_kontrolle1, validate_kontrolle2)
 
 PDF_DIR = Path("/tmp/b2m")
 PDFS = [PDF_DIR / f"B2M_{i} 1.pdf" for i in range(1, 6)]
@@ -131,9 +132,10 @@ def run_pdf(pdf_path: Path) -> list:
     cover = next((p for p in pages if p.seiten_typ == "abrechnungsbrief"), None)
     manifest = cover.manifest if cover else None
     cross_flags = validate_abrechnung(pages, manifest=manifest)
-    if cross_flags:
-        for f in cross_flags:
-            print(f"  ✗ {f}")
+    k1_flags = validate_kontrolle1(pages)
+    k2_flags = validate_kontrolle2(pages)
+    for f in cross_flags + k1_flags + k2_flags:
+        print(f"  ✗ {f}")
 
     return pages
 

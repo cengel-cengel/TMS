@@ -64,6 +64,28 @@ class Position:
 
 
 @dataclass
+class KzSumme:
+    """SUMME KARTE/KFZ per Kennzeichen — explicit control value (de-aral only).
+
+    Extracted from the 'SUMME KARTE/KFZ' row visible on the page.
+    Absent when the card block continues to the next page (split block).
+    Used for Kontrolle 1: Σ pos.netto per KZ == kz_summen[kz].netto
+    and for kontrollgestützter Rule-2 dedup of equal-value entries.
+    """
+    netto: Optional[Decimal]
+    ust: Optional[Decimal]
+    brutto: Optional[Decimal]
+
+    @staticmethod
+    def from_dict(d: dict) -> "KzSumme":
+        return KzSumme(
+            netto=parse_de(d.get("netto")),
+            ust=parse_de(d.get("ust")),
+            brutto=parse_de(d.get("brutto")),
+        )
+
+
+@dataclass
 class ManifestEntry:
     """One invoice line from the ABRECHNUNGSBRIEF cover-page table."""
     land: str                     # country code: DE / AT / CH / IT / BE
@@ -100,6 +122,7 @@ class PageResult:
     flags: list[str] = field(default_factory=list)
     format: str = "de-aral"             # detected invoice format
     manifest: Optional[list[ManifestEntry]] = None  # populated for abrechnungsbrief
+    kz_summen: dict[str, KzSumme] = field(default_factory=dict)  # de-aral only
 
     @staticmethod
     def from_dict(pdf_name: str, seite: int, d: dict) -> "PageResult":
@@ -108,6 +131,12 @@ class PageResult:
         raw_manifest = d.get("manifest")
         if raw_manifest and isinstance(raw_manifest, list):
             manifest = [ManifestEntry.from_dict(m) for m in raw_manifest]
+        kz_summen: dict[str, KzSumme] = {}
+        raw_kzs = d.get("kz_summen")
+        if raw_kzs and isinstance(raw_kzs, dict):
+            for kz, ks in raw_kzs.items():
+                if isinstance(ks, dict):
+                    kz_summen[kz.strip()] = KzSumme.from_dict(ks)
         return PageResult(
             pdf_name=pdf_name,
             seite=seite,
@@ -121,6 +150,7 @@ class PageResult:
             raw=d,
             format=str(d.get("format") or "de-aral").strip(),
             manifest=manifest,
+            kz_summen=kz_summen,
         )
 
     def to_dict(self) -> dict:
@@ -157,11 +187,16 @@ class PageResult:
                 }
                 for m in self.manifest
             ]
+        kz_summen_dict = {
+            kz: {"netto": _dec(ks.netto), "ust": _dec(ks.ust), "brutto": _dec(ks.brutto)}
+            for kz, ks in self.kz_summen.items()
+        }
         return {
             "seiten_typ":      self.seiten_typ,
             "format":          self.format,
             "rechnungsnummer": self.rechnungsnummer,
             "positionen":      pos_list,
+            "kz_summen":       kz_summen_dict,
             "rechnung_netto":  _dec(self.rechnung_netto),
             "rechnung_ust":    _dec(self.rechnung_ust),
             "rechnung_brutto": _dec(self.rechnung_brutto),

@@ -17,7 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.b2m.render import render_pdf
 from src.b2m.vision import extract_page, recover_split_kz
-from src.b2m.validate import validate_rechnung_page, validate_abrechnung, deduplicate_split_blocks
+from src.b2m.validate import (validate_rechnung_page, validate_abrechnung,
+                               deduplicate_split_blocks, validate_kontrolle1,
+                               validate_kontrolle2)
 from src.b2m.schema import PageResult, ManifestEntry, parse_de as _parse_de
 
 PDF_IN = Path("/tmp/b2m/B2M_1 1.pdf")
@@ -216,8 +218,10 @@ def run() -> list[PageResult]:
                 "_flags": p.flags,
             }) + "\n")
 
-    # ── Cross-page validation (Stufe 0/3/4) ──────────────────────
+    # ── Cross-page validation (Stufe 0/3/4) + Kontrolle 1+2 ─────
     cross_flags = validate_abrechnung(pages, manifest=manifest)
+    cross_flags += validate_kontrolle1(pages)
+    cross_flags += validate_kontrolle2(pages)
 
     # ── Report ────────────────────────────────────────────────────
     n_rn = sum(1 for p in pages if p.seiten_typ == "rechnung")

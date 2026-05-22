@@ -83,11 +83,20 @@ STEP 2 — EXTRACT per-card positions using the matching field labels:
 ══════════════════════════════════════════════════════════════
 NEGATIVE AMOUNTS: "2,82-" or "3,36-" means -2.82 / -3.36. Output as negative.
 
-SKIP THESE ROWS (subtotals — NEVER extract as positions):
+SKIP THESE ROWS as positions (intermediate subtotals — NEVER add to positionen[]):
   Summe Kraftstoffe · Summe Lieferungen · Summe Gebühren · sonst. Kfz Waren/Die
-  SUMME KARTE/KFZ · KARTEN TOTAL · CARD TOTAL · TOTALE CARTA · TOTAAL KAART
+  KARTEN TOTAL · CARD TOTAL · TOTALE CARTA · TOTAAL KAART
   KOSTENSTELLEN-SUMME · KOSTENSTELLEN-SUMME 1 · KOSTENSTELLEN-SUMME 2 · COST CENTRE SUBTOTAL
   RIEPILOGO · PRODUKT/BTW OVERZICHT · BTW OVERZICHT · Zwischensumme · Subtotal · GESAMT
+
+⚠ de-aral SUMME KARTE/KFZ — control field (NOT a position):
+  For de-aral format only: when the "SUMME KARTE/KFZ" total row is visible for a card
+  block on THIS page, capture its values in kz_summen[kennzeichen]:
+    kz_summen["<kennzeichen>"] = {"netto": X, "ust": Y, "brutto": Z}
+  The SUMME KARTE/KFZ row values also populate the card's position netto/ust/brutto.
+  If "SUMME KARTE/KFZ" is NOT visible (block continues on next page): netto=null and
+  do NOT add an entry to kz_summen for that card.
+  For all non-de-aral formats: kz_summen = {} always.
 
 ⚠ AT FORMAT (at): KOSTENSTELLEN-SUMME rows always appear with a number suffix
   (e.g. "KOSTENSTELLEN-SUMME 1:", "KOSTENSTELLEN-SUMME 2:"). NEVER extract these
@@ -125,6 +134,9 @@ Return EXACTLY this JSON (all numeric OUTPUT in dot-decimal):
       "brutto":"<Brutto/INCL.VAT amount, dot-decimal, or null>"
     }}
   ],
+  "kz_summen": {{
+    "<kennzeichen>": {{"netto": "<dot-decimal>", "ust": "<dot-decimal>", "brutto": "<dot-decimal>"}}
+  }},
   "rechnung_netto":  "<page-level Netto total, dot-decimal, or null>",
   "rechnung_ust":    "<page-level USt/VAT total, dot-decimal, or null>",
   "rechnung_brutto": "<page-level Brutto total, dot-decimal, or null>",
