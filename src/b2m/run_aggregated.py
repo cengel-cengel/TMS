@@ -244,28 +244,22 @@ def _write_kontrolle(ws, rows: list[KontrolleRow]) -> None:
 
 
 # ── Sheet 3: Befunde ──────────────────────────────────────────────────────
-# Section A: AT documented real billing differences
+# Section A: AT documented billing results
 _BEFUNDE_AT = [
     # (PDF, RN, Ist EUR, Soll EUR, Δ EUR, Befund)
-    ("B2M_1", "3603006105", "2155.50", "2155.50",    "0.00", "✓ korrekt"),
-    ("B2M_2", "3603014114", "1734.83", "1734.83",    "0.00", "✓ korrekt"),
-    ("B2M_3", "3603022414", "2163.17", "1459.74", "+703.43", "✗ echte Abrechnungsdiff."),
-    ("B2M_4", "3603030499", "1836.97", "1880.30",  "-43.33", "✗ echte Abrechnungsdiff."),
+    ("B2M_1", "3603006105", "2155.50", "2155.50", "0.00", "✓ korrekt"),
+    ("B2M_2", "3603014114", "1734.83", "1734.83", "0.00", "✓ korrekt"),
+    ("B2M_3", "3603022414", "1459.74", "1459.74", "0.00", "✓ korrekt (nach KOSTENSTELLEN-SUMME 2 Fix)"),
+    ("B2M_4", "3603030499", "1880.30", "1880.30", "0.00", "✓ korrekt (nach targeted Recovery)"),
 ]
 
-# Section B: K1=✗ DE cases — Vision over/under-extraction (Carlos entscheidet)
+# Section B: DE residual deltas after all fixes (K1=✗0, remaining gaps are K1=?)
 _BEFUNDE_K1 = [
-    # (PDF, RN, KZ, kz_sigma EUR, kz_gesamt EUR, Δ Cent, Typ)
-    ("B2M_2", "0027075475", "RV LN 7002",          "675.14", "679.19",    "-405", "under — 1 Transaktion fehlt?"),
-    ("B2M_3", "0027134312", "FUHRPARK LADEKARTE",    "9.98",   "4.99",    "+499", "double-count — dedup-Lücke"),
-    ("B2M_3", "0027134312", "LEV W 333E",          "131.38",   "4.99",  "+12639", "over — Vision-Fehler wahrscheinlich"),
-    ("B2M_3", "0027134312", "UL-N 2377E",           "62.69",  "13.18",   "+4951", "over — mehrfach extrahiert"),
-    ("B2M_3", "0027134312", "UL-N 2494E",          "385.03", "326.85",   "+5818", "over — split-block extra"),
-    ("B2M_3", "0027134312", "UL-N 2518E",          "132.50", "124.77",    "+773", "over — 1 extra Transaktion"),
-    ("B2M_3", "0027134312", "UL-N 2561 E",         "162.88",  "63.72",   "+9916", "over — mehrfach extrahiert"),
-    ("B2M_4", "0027192675", "ERSATZKARTE 2",         "80.01",  "64.95",   "+1506", "over — AT-Posten extra"),
-    ("B2M_4", "0027192675", "FUHRPARK LADEKARTE",    "9.98",   "4.99",    "+499", "double-count — dedup-Lücke"),
-    ("B2M_4", "0027192675", "UL-N 2561 E",         "178.78",  "33.61",  "+14517", "over — mehrfach extrahiert"),
+    # (PDF, RN, KZ, Ist-Brutto, Soll-Brutto (Manifest), Δ Cent, Ursache)
+    ("B2M_1", "0027018835", "— (5x split-block recovered)",    "26790.66", "26793.00",    "-234", "Rundung recover_split_kz vs SUMME-Zeile"),
+    ("B2M_2", "0027075475", "RV LE 6002 (K1=? split-block)",  "27064.99", "27100.77",  "-3096", "RV LE 6002 kein kz_summen, Betrag unklar"),
+    ("B2M_3", "0027134312", "— (residual nach allen Fixes)",   "36291.70", "35989.43", "+30227", "Übererfassung, Ursache unklar — Carlos prüft"),
+    ("B2M_4", "0027192675", "— (residual nach allen Fixes)",   "39227.90", "39082.67", "+14523", "Übererfassung, Ursache unklar — Carlos prüft"),
 ]
 
 _BEF_AT_COLS = [
@@ -278,26 +272,26 @@ _BEF_AT_COLS = [
 ]
 
 _BEF_K1_COLS = [
-    ("PDF",           10),
-    ("RN",            14),
-    ("Kennzeichen",   24),
-    ("Σ Pos-Netto",   12),
-    ("KZ-Gesamt",     12),
-    ("Δ Cent",        10),
-    ("Typ / Ursache", 40),
+    ("PDF",             10),
+    ("RN",              14),
+    ("Hinweis",         30),
+    ("Ist-Brutto",      12),
+    ("Soll-Brutto",     12),
+    ("Δ Cent",          10),
+    ("Ursache",         44),
 ]
 
 
 def _write_befunde(ws) -> None:
     row = 1
     ws.cell(row=row, column=1,
-            value="B2M Befunde — AT echte Differenzen + DE K1=✗ Diagnose (2026-05-22)"
+            value="B2M Befunde — AT Abrechnung + verbleibende DE Residualdifferenzen (2026-05-22)"
             ).font = Font(bold=True, size=11)
 
     # ── AT Section ─────────────────────────────────────────────────────
     row = 3
     ws.cell(row=row, column=1,
-            value="A) AT-Rechnungen — ERSATZKARTE 2 echter Posten; Δ = echte Abrechnungsdifferenz"
+            value="A) AT-Rechnungen — alle korrigiert via KOSTENSTELLEN-SUMME 2 / targeted Recovery"
             ).font = Font(bold=True, size=10, color="1F4E79")
 
     row = 4
@@ -320,10 +314,10 @@ def _write_befunde(ws) -> None:
         ws.cell(row=row, column=6).fill = _fill(_C_OK if ok else _C_FAIL)
         row += 1
 
-    # ── K1=✗ Section ───────────────────────────────────────────────────
+    # ── Residual Section ───────────────────────────────────────────────
     row += 1
     ws.cell(row=row, column=1,
-            value="B) DE-Rechnungen — K1=✗: kz_sigma ≠ SUMME KARTE/KFZ (Carlos entscheidet ob Korrektur)"
+            value="B) DE-Rechnungen — verbleibende Δ nach allen Korrekturen (K1=✗=0, K1=? nicht auflösbar)"
             ).font = Font(bold=True, size=10, color="1F4E79")
 
     row += 1

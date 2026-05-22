@@ -116,16 +116,22 @@ def aggregate(
             if art and not row["artikel"]:
                 row["artikel"] = art
 
-    # ── Step 2: kz_summen index (rn, kz) -> KzSumme ─────────────────
-    kz_summen_idx: dict[tuple, KzSumme] = {}
+    # ── Step 2: kz_summen accumulator (rn, kz) -> Σ netto/brutto ────
+    # A card may appear in multiple cost-centre blocks in one invoice,
+    # each ending with its own SUMME KARTE/KFZ row. Accumulate all.
+    kz_sum_n: dict[tuple, Decimal] = defaultdict(Decimal)
+    kz_sum_b: dict[tuple, Decimal] = defaultdict(Decimal)
+    kz_sum_seen: set[tuple] = set()  # (rn, kz) pairs that have any entry
     for page in pages:
         if page.seiten_typ != "rechnung":
             continue
         rn = page.rechnungsnummer or ""
         for kz, ks in page.kz_summen.items():
             key = (rn, kz.strip())
-            if key not in kz_summen_idx and ks.netto is not None:
-                kz_summen_idx[key] = ks
+            if ks.netto is not None:
+                kz_sum_n[key] += ks.netto
+                kz_sum_b[key] += ks.brutto or Decimal(0)
+                kz_sum_seen.add(key)
 
     # ── Step 3: compute Σ netto per (rn, kz) for K1 ─────────────────
     kz_sigma: dict[tuple, Decimal] = defaultdict(Decimal)
@@ -139,15 +145,16 @@ def aggregate(
         for key in sorted(rn_keys, key=lambda k: (k[1], k[2])):
             _, kz, wg = key
             row = acc[key]
-            ks = kz_summen_idx.get((rn, kz))
+            kz_key = (rn, kz)
+            has_ks = kz_key in kz_sum_seen
 
-            kz_g_netto  = _d2(ks.netto)  if ks else None
-            kz_g_brutto = _d2(ks.brutto) if ks else None
+            kz_g_netto  = _d2(kz_sum_n[kz_key])  if has_ks else None
+            kz_g_brutto = _d2(kz_sum_b[kz_key])  if has_ks else None
 
-            # K1: Σ all WG-nettos for this KZ vs kz_summen
-            if ks is not None and ks.netto is not None:
+            # K1: Σ all WG-nettos for this KZ vs Σ kz_summen blocks
+            if has_ks:
                 sigma = kz_sigma[(rn, kz)]
-                k1 = abs(cents(sigma) - cents(ks.netto)) <= 2
+                k1 = abs(cents(sigma) - cents(kz_sum_n[kz_key])) <= 2
             else:
                 k1 = None
 
@@ -185,21 +192,13 @@ def aggregate(
         if s.rechnungsnummer:
             zusammen_idx[s.rechnungsnummer] = s
 
-    # Σ kz_summen per RN (deduplicated)
-    seen_kzs: set[tuple] = set()
+    # Σ kz_summen per RN — reuse the already-accumulated kz_sum_n/b
     rn_kzsum_netto: dict[str, Decimal]  = defaultdict(Decimal)
     rn_kzsum_brutto: dict[str, Decimal] = defaultdict(Decimal)
-    for page in pages:
-        if page.seiten_typ != "rechnung":
-            continue
-        rn = page.rechnungsnummer or ""
-        for kz, ks in page.kz_summen.items():
-            key = (rn, kz.strip())
-            if key in seen_kzs or ks.netto is None:
-                continue
-            seen_kzs.add(key)
-            rn_kzsum_netto[rn]  += ks.netto
-            rn_kzsum_brutto[rn] += ks.brutto or Decimal(0)
+    for (rn, _kz), val in kz_sum_n.items():
+        rn_kzsum_netto[rn]  += val
+    for (rn, _kz), val in kz_sum_b.items():
+        rn_kzsum_brutto[rn] += val
 
     # Σ pos.brutto per RN (for manifest comparison — always available)
     rn_pos_brutto: dict[str, Decimal] = defaultdict(Decimal)
