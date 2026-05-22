@@ -92,11 +92,11 @@ SKIP THESE ROWS as positions (intermediate subtotals — NEVER add to positionen
 ⚠ de-aral SUMME KARTE/KFZ — control field (NOT a position):
   For de-aral format only: when the "SUMME KARTE/KFZ" total row is visible for a card
   block on THIS page, capture its values in kz_summen[kennzeichen]:
-    kz_summen["<kennzeichen>"] = {"netto": X, "ust": Y, "brutto": Z}
+    kz_summen["<kennzeichen>"] = {{"netto": X, "ust": Y, "brutto": Z}}
   The SUMME KARTE/KFZ row values also populate the card's position netto/ust/brutto.
   If "SUMME KARTE/KFZ" is NOT visible (block continues on next page): netto=null and
   do NOT add an entry to kz_summen for that card.
-  For all non-de-aral formats: kz_summen = {} always.
+  For all non-de-aral formats: kz_summen = {{}} always.
 
 ⚠ AT FORMAT (at): KOSTENSTELLEN-SUMME rows always appear with a number suffix
   (e.g. "KOSTENSTELLEN-SUMME 1:", "KOSTENSTELLEN-SUMME 2:"). NEVER extract these
